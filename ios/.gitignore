@@ -1,0 +1,13 @@
+# XcodeGen output — regenerate with `xcodegen generate`
+Celiador.xcodeproj/
+
+# Xcode / macOS cruft
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Dependencies
+Pods/
+.swiftpm/
