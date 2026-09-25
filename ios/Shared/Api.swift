@@ -314,6 +314,41 @@ final class Api {
         _ = try await request(OkEnvelope.self, path: "api/sessions/\(id)", method: "DELETE")
     }
 
+    // MARK: - App data (profile + chat history, via the daemon)
+
+    private struct ProfileEnvelope: Codable { let profile: Profile }
+    private struct ChatsEnvelope: Codable { let chats: [ChatSummary] }
+
+    /// The signed-in user's profile.
+    func getProfile() async throws -> Profile {
+        try await request(ProfileEnvelope.self, path: "api/profile").profile
+    }
+
+    /// Update the display name (and/or other profile fields).
+    @discardableResult
+    func updateProfile(displayName: String) async throws -> Profile {
+        try await request(
+            ProfileEnvelope.self,
+            path: "api/profile",
+            method: "PATCH",
+            body: ["display_name": displayName]
+        ).profile
+    }
+
+    /// Durable past conversations, newest first.
+    func listChats() async throws -> [ChatSummary] {
+        try await request(ChatsEnvelope.self, path: "api/chats").chats
+    }
+
+    /// One chat with its full message history.
+    func getChat(_ id: String) async throws -> ChatDetail {
+        try await request(ChatDetail.self, path: "api/chats/\(id)")
+    }
+
+    func deleteChat(_ id: String) async throws {
+        _ = try await request(OkEnvelope.self, path: "api/chats/\(id)", method: "DELETE")
+    }
+
     // MARK: - Push
 
     /// APNs environment this build targets — the daemon uses it to pick the

@@ -5,6 +5,8 @@ import SwiftUI
 struct SessionsView: View {
     @Environment(AppModel.self) private var model
     @State private var actionError: String?
+    @State private var showAccount = false
+    @State private var showHistory = false
 
     private var needsYou: [Session] { sorted(model.sessions.filter { $0.state == .awaiting || $0.state == .error }) }
     private var working: [Session] { sorted(model.sessions.filter { $0.state == .running }) }
@@ -46,14 +48,16 @@ struct SessionsView: View {
         .navigationTitle("Celiador")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    if let email = model.email { Text(email) }
-                    Button("Sign out", role: .destructive) { model.signOut() }
-                } label: {
-                    Image(systemName: "person.circle")
-                }
+                Button { showAccount = true } label: { Image(systemName: "person.circle") }
+                    .accessibilityLabel("Account")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
+                    .accessibilityLabel("History")
             }
         }
+        .sheet(isPresented: $showAccount) { AccountView() }
+        .sheet(isPresented: $showHistory) { HistoryView() }
     }
 
     @ViewBuilder

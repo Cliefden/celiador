@@ -99,3 +99,58 @@ struct DaemonConfig: Codable {
     let supabaseUrl: String?
     let supabaseAnonKey: String?
 }
+
+// MARK: - App data (served by the daemon: /api/profile, /api/chats)
+
+/// The signed-in user's profile row (public.profiles).
+struct Profile: Codable, Identifiable {
+    let id: String
+    let email: String?
+    let displayName: String?
+    let plan: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, email, plan
+        case displayName = "display_name"
+    }
+}
+
+/// A durable past conversation (public.chats). A chat is a persisted session.
+struct ChatSummary: Codable, Identifiable {
+    let id: String
+    let title: String?
+    let origin: String
+    let status: String
+    let updatedAt: String
+    let lastMessageAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, origin, status
+        case updatedAt = "updated_at"
+        case lastMessageAt = "last_message_at"
+    }
+}
+
+/// One durable message within a chat (public.messages). `content` is jsonb `{text}`.
+struct ChatMessage: Codable, Identifiable {
+    let id: String
+    let role: String
+    let content: Content
+    let seq: Int?
+    let createdAt: String
+
+    struct Content: Codable { let text: String? }
+
+    enum CodingKeys: String, CodingKey {
+        case id, role, content, seq
+        case createdAt = "created_at"
+    }
+
+    var text: String { content.text ?? "" }
+}
+
+/// Response of GET /api/chats/:id.
+struct ChatDetail: Codable {
+    let chat: ChatSummary
+    let messages: [ChatMessage]
+}
