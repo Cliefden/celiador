@@ -26,6 +26,19 @@ final class Api {
         var errorDescription: String? { message }
     }
 
+    /// Pull the most useful message out of a GoTrue / daemon error body. The body
+    /// may mix string and non-string fields (e.g. `{"code":400,"msg":"…"}`), which
+    /// a strict `[String:String]` decode chokes on — hiding the real reason.
+    static func errorMessage(_ data: Data, status: Int, fallback: String) -> String {
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for key in ["error_description", "msg", "message", "error_code", "error"] {
+                if let value = obj[key] as? String, !value.isEmpty { return value }
+            }
+        }
+        let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (raw?.isEmpty == false ? raw! : fallback)
+    }
+
     // MARK: - Bootstrap
 
     func loadConfig() async throws -> DaemonConfig {
@@ -64,11 +77,7 @@ final class Api {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
         if http.statusCode >= 400 {
-            let detail = (try? JSONDecoder().decode([String: String].self, from: data))
-            throw ApiError(
-                message: detail?["error_description"] ?? detail?["msg"] ?? detail?["message"]
-                    ?? "Sign-in failed (\(http.statusCode))."
-            )
+            throw ApiError(message: Self.errorMessage(data, status: http.statusCode, fallback: "Sign-in failed (\(http.statusCode))."))
         }
         let token = try JSONDecoder().decode(TokenResponse.self, from: data)
         let session = AuthSession(
@@ -116,11 +125,7 @@ final class Api {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
         if http.statusCode >= 400 {
-            let detail = try? JSONDecoder().decode([String: String].self, from: data)
-            throw ApiError(
-                message: detail?["error_description"] ?? detail?["msg"] ?? detail?["message"]
-                    ?? "Could not send the magic link (\(http.statusCode))."
-            )
+            throw ApiError(message: Self.errorMessage(data, status: http.statusCode, fallback: "Could not send the magic link (\(http.statusCode))."))
         }
     }
 
@@ -246,8 +251,7 @@ final class Api {
             return try await self.request(type, path: path, method: method, body: body, retrying: true)
         }
         if http.statusCode >= 400 {
-            let detail = try? JSONDecoder().decode([String: String].self, from: data)
-            throw ApiError(message: detail?["error"] ?? "Request failed (\(http.statusCode)).")
+            throw ApiError(message: Self.errorMessage(data, status: http.statusCode, fallback: "Request failed (\(http.statusCode))."))
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
