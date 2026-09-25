@@ -28,8 +28,12 @@ in — no extra write path needed from clients.
   delta/tool/toolResult/reply/state/done, approvals via `waitForApproval`, command
   channel for instruct/cancel/approve/reject). Auth done (`src/auth.ts`).
   **Missing**: profile + chat-history reads.
-- **iOS**: greenfield. The code in `daemon-old/apps/apple` is the OLD companion for
-  the retired product. Rebuild in a new `celiador-ios` repo (see the companion plan).
+- **iOS (`celiador-ios`)**: rebuilt as a watcher and **builds on simulator**. Has
+  auth, session list/open, live transcript view with approve/instruct/cancel, and
+  Live Activity + widget on sessions (`Shared/Api.swift`, `Events.swift`, `Models.swift`,
+  `SessionsView`/`SessionView`). NOT done: profile + chat-history screens, full
+  cross-process live E2E, git commit, and TestFlight/device deploy. (The old
+  `daemon-old/apps/apple` companion is retired.)
 
 ## Plan — macOS editor (`celiador-ai`)
 
@@ -47,31 +51,21 @@ Runner relay is done, so this is small:
 
 Effort: E1 small, E2 medium, E3 tiny. No daemon changes.
 
-## Plan — iOS companion (`celiador-ios`, new repo)
+## Plan — iOS companion (`celiador-ios`)
 
-Watcher-first (remote-control), per the locked companion decision. Port what's
-reusable from `daemon-old/apps/apple/Shared` (`Api.swift` GoTrue+Keychain,
-`Events.swift`, `Models.swift`, `Theme.swift`), drop the old projects/spec code.
+Watcher-first (remote-control). **I0/I1/I4 largely built** (auth, session list/open,
+live transcript + approve/instruct/cancel, Live Activity + widget). Remaining:
 
-- **I0 · Scaffold + auth.** New repo + XcodeGen project. Port `Api.swift`
-  (GoTrue sign-in, Keychain, refresh, retry-on-401) and `/api/config` bootstrap.
-  Base URL `https://celiador.ai`.
-- **I1 · Watcher core (the point of the app).**
-  - List/open sessions: `GET /api/sessions`, `GET /api/sessions/:id`.
-  - Live view: subscribe `GET /api/sessions/:id/events` (SSE) with `Last-Event-ID`
-    replay; render activity/delta/message/tool/diff; surface `approval`/`question`
-    as actionable prompts; reflect `state`.
-  - Control: `POST /api/sessions/:id/message | approvals/:rid | answers/:rid | cancel`.
-- **I2 · Durable history + profile.** `GET /api/chats`, `GET /api/chats/:id` for past
-  conversations; `GET/PATCH /api/profile` for the account screen.
-- **I3 · Push + Live Activity.** Register APNs via `POST /api/push/register` and Live
-  Activity tokens via `POST /api/push/activity`; the daemon already alerts on
-  approval/question/done and drives Live Activities (`sessions/notify.ts`).
-- **I4 · Widgets / Live Activity UI.** Per the companion scope (Widgets + Live
-  Activity); `WidgetShared.swift` is a starting point.
-
-Sequence: I0 → I1 (MVP: watch + steer a live run) → I3 (so it works backgrounded) →
-I2 → I4.
+- **I2 · Durable history + profile (NEXT).** Add screens backed by the new endpoints:
+  `GET /api/chats` (past conversations), `GET /api/chats/:id` (open one), and
+  `GET/PATCH /api/profile` (account). These are the pieces today's daemon work unlocked.
+- **I3 · Push registration wiring.** Confirm the app registers APNs via
+  `POST /api/push/register` and Live Activity tokens via `POST /api/push/activity`;
+  the daemon already alerts on approval/question/done and drives Live Activities
+  (`sessions/notify.ts`).
+- **Harden · Live E2E + ship.** Full cross-process test (editor runs a task → phone
+  watches/steers it live, backgrounded); handle token refresh on `401`; **commit the
+  repo** (currently git-init'd, uncommitted) and push; then TestFlight/device deploy.
 
 ## Shared conventions
 
@@ -86,8 +80,12 @@ I2 → I4.
 
 ## Suggested order of work
 
-1. **iOS I0 + I1** — the companion's whole reason to exist is watching/steering a run;
-   the daemon + editor runner already support it, so this is the highest-value next step.
-2. **iOS I3** — push, so it's useful with the app closed.
-3. **Editor E1** (account) and **iOS I2** (history/profile) — quick wins on the durable layer.
-4. **iOS I4** + **Editor E2** — polish.
+The relay path (editor runner ↔ daemon ↔ iOS watcher) is already built on all three
+sides, so the highest-value next step is proving and shipping it, then filling the
+durable layer:
+
+1. **iOS live E2E + commit** — verify editor-runs → phone-watches/steers end-to-end
+   (backgrounded), confirm push registration, then commit `celiador-ios` and push.
+2. **iOS I2 + Editor E1** — history/profile screens on both, using the new
+   `/api/chats` + `/api/profile` endpoints (the durable layer this pass unlocked).
+3. **Ship** — iOS to TestFlight/device; Editor E2 (past-chats view) as polish.
