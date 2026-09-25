@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
-import { ROOT } from "../config";
-import { PushStores } from "./store";
+import { pushStores } from "./instance";
 import { apnsAvailable, isDeadToken, sendAlert } from "./apns";
 
 /**
@@ -13,7 +12,9 @@ import { apnsAvailable, isDeadToken, sendAlert } from "./apns";
  */
 export function pushRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const stores = new PushStores(ROOT);
+  const stores = pushStores;
+
+  app.use("*", requireUser);
 
   // Register (or refresh) an APNs device token.
   app.post("/register", async (c) => {
