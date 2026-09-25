@@ -5,6 +5,7 @@ import { authMode, type AppEnv } from "./auth";
 import { agentProxy } from "./anthropic";
 import { pushRoutes } from "./push/routes";
 import { sessionRoutes } from "./sessions/routes";
+import { chatRoutes, profileRoutes } from "./data/routes";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
@@ -43,6 +44,10 @@ export function createApp(): Hono<AppEnv> {
 
   // Agent-session relay (editor = runner, phone = watcher).
   app.route("/api/sessions", sessionRoutes());
+
+  // Daemon-mediated app data (profiles + durable chat history) for both clients.
+  app.route("/api/profile", profileRoutes());
+  app.route("/api/chats", chatRoutes());
 
   app.notFound((c) => c.json({ error: "Unknown endpoint" }, 404));
   app.onError((err, c) => c.json({ error: err instanceof Error ? err.message : String(err) }, 500));
