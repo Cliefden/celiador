@@ -7,6 +7,7 @@ import { ROOT } from "../config";
 import { SessionStores } from "./store";
 import { sessionBus } from "./bus";
 import { notifySession } from "./notify";
+import { persistSession } from "./persist";
 import type { SessionCommand, SessionEvent, SessionEventInput } from "./types";
 
 /** How often to send an SSE heartbeat so proxies/clients keep the stream open. */
@@ -45,7 +46,10 @@ export function sessionRoutes(): Hono<AppEnv> {
     if (event) {
       sessionBus.publishEvent(sessionId, event);
       const session = store.get(sessionId);
-      if (session) void notifySession(userId, session, event);
+      if (session) {
+        void notifySession(userId, session, event);
+        void persistSession(userId, session, event); // durable mirror → Supabase (no-op if unconfigured)
+      }
     }
     return event;
   };
