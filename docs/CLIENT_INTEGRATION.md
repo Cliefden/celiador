@@ -20,6 +20,12 @@ As the editor (runner) publishes to `/api/sessions/:id/events`, the daemon fans 
 to watchers AND persists turns into `chats`/`messages`. So chat history fills itself
 in — no extra write path needed from clients.
 
+> **Update 2026-09-25:** profile + chat-history are now WIRED in both clients
+> (editor `celiador.account`/`celiador.pastChats` + `src/api.ts`; iOS Account/History
+> screens + `Api` methods). Editor compiles, iOS builds on simulator. Committed
+> locally, not yet pushed. Remaining: live cross-process E2E + push registration
+> check, then commit/push + ship.
+
 ## Current state
 
 - **Daemon**: all endpoints live; DB wired (`DATABASE_URL`), verified end-to-end.
