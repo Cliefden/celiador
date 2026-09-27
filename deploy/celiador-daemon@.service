@@ -1,0 +1,33 @@
+# Templated systemd unit for the Celiador daemon — one instance per environment.
+# Install on the box:
+#   sudo cp celiador-daemon@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now celiador-daemon@prod
+#   sudo systemctl enable --now celiador-daemon@staging
+#   sudo systemctl enable --now celiador-daemon@dev
+#
+# %i is the environment slug (prod|staging|dev). Each instance reads its own
+# secrets file and runs from its own checkout, so the three never share state.
+
+[Unit]
+Description=Celiador daemon (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stefan
+WorkingDirectory=/home/stefan/envs/%i/daemon
+EnvironmentFile=/home/stefan/envs/%i/daemon.env
+# `npm run start` → tsx src/main.ts (no build step). Adjust node path if fnm/nvm is used.
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=3
+# Harden a little; the daemon only needs its own tree + loopback.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/stefan/envs/%i/daemon
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

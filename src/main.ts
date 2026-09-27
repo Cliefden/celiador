@@ -1,8 +1,11 @@
+// Must stay the FIRST import: loads .env before config.ts & co. read it at import time.
+import "./env";
 import { serve } from "@hono/node-server";
 import { createApp } from "./app";
-import { HOST, PORT, VERSION, loadDotEnv } from "./config";
+import { HOST, PORT, VERSION } from "./config";
+import { assertAuthConfigured } from "./auth";
 
-loadDotEnv();
+assertAuthConfigured();
 
 const app = createApp();
 

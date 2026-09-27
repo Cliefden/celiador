@@ -62,6 +62,13 @@ function providerToken(cfg: ApnsConfig): string {
   return jwt;
 }
 
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/** APNs device / Live Activity push tokens are hex (32 bytes today). */
+export function isValidDeviceToken(token: unknown): token is string {
+  return typeof token === "string" && /^[0-9a-fA-F]{64,200}$/.test(token);
+}
+
 export interface SendResult {
   status: number;
   reason?: string;
@@ -74,15 +81,31 @@ function post(
   headers: Record<string, string>,
   payload: unknown
 ): Promise<SendResult> {
+  // Defense in depth: routes validate tokens, but never let one rewrite :path.
+  if (!isValidDeviceToken(deviceToken)) return Promise.resolve({ status: 0, reason: "BadDeviceToken" });
+  let bearer: string;
+  try {
+    bearer = providerToken(cfg);
+  } catch (err) {
+    // e.g. a malformed APNS_KEY — report, don't crash the process.
+    console.error("[apns] provider token signing failed:", err instanceof Error ? err.message : err);
+    return Promise.resolve({ status: 0 });
+  }
   return new Promise((resolve) => {
     const clientConn = http2.connect(`https://${host}`);
     clientConn.on("error", () => resolve({ status: 0 }));
     const req = clientConn.request({
       ":method": "POST",
       ":path": `/3/device/${deviceToken}`,
-      authorization: `bearer ${providerToken(cfg)}`,
+      authorization: `bearer ${bearer}`,
       "content-type": "application/json",
       ...headers,
+    });
+    // A hung APNs request must not stall every later send.
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.close(http2.constants.NGHTTP2_CANCEL);
+      clientConn.close();
+      resolve({ status: 0 });
     });
     let body = "";
     let status = 0;

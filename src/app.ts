@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { VERSION } from "./config";
 import { authMode, type AppEnv } from "./auth";
 import { agentProxy } from "./anthropic";
 import { pushRoutes } from "./push/routes";
 import { sessionRoutes } from "./sessions/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
+import { accountRoutes } from "./account/routes";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
@@ -18,7 +20,7 @@ export function createApp(): Hono<AppEnv> {
     cors({
       origin: "*",
       allowHeaders: ["Authorization", "Content-Type"],
-      allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+      allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     })
   );
 
@@ -37,7 +39,12 @@ export function createApp(): Hono<AppEnv> {
   );
 
   // Anthropic agent proxy (SSE). Auth handled inside (user JWT or shared token).
-  app.post("/api/agent/messages", agentProxy);
+  // Body capped so one request can't ship an unbounded conversation upstream.
+  app.post(
+    "/api/agent/messages",
+    bodyLimit({ maxSize: 8 * 1024 * 1024, onError: (c) => c.json({ error: "request too large" }, 413) }),
+    agentProxy
+  );
 
   // Push registration + APNs.
   app.route("/api/push", pushRoutes());
@@ -49,8 +56,15 @@ export function createApp(): Hono<AppEnv> {
   app.route("/api/profile", profileRoutes());
   app.route("/api/chats", chatRoutes());
 
+  // Account self-service (in-app account deletion — App Store 5.1.1(v)).
+  app.route("/api/account", accountRoutes());
+
   app.notFound((c) => c.json({ error: "Unknown endpoint" }, 404));
-  app.onError((err, c) => c.json({ error: err instanceof Error ? err.message : String(err) }, 500));
+  // Log the detail server-side; never leak raw (e.g. pg) error text to clients.
+  app.onError((err, c) => {
+    console.error("[http] unhandled:", err instanceof Error ? err.stack ?? err.message : err);
+    return c.json({ error: "Internal server error" }, 500);
+  });
 
   return app;
 }

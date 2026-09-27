@@ -57,9 +57,15 @@ class WriteQueue {
   }
 }
 
+interface Runner {
+  send: CommandFn;
+  /** Close this runner's stream (called when a newer runner replaces it). */
+  close: () => void;
+}
+
 interface Channel {
   watchers: Set<WriteQueue>;
-  runner: CommandFn | null;
+  runner: Runner | null;
   /** Outstanding approval/question requestIds awaiting a watcher decision. */
   pending: Set<string>;
 }
@@ -99,20 +105,40 @@ class SessionBus {
     };
   }
 
-  /** Fan an event out to all watchers; tracks pending approvals/questions. */
+  /**
+   * Fan an event out to all watchers; tracks pending approvals/questions. Doesn't
+   * create a channel when nobody is listening (avoids leaking empty channels).
+   */
   publishEvent(sessionId: string, event: SessionEvent): void {
-    const ch = this.channel(sessionId);
+    const tracked = event.kind === "approval" || event.kind === "question";
+    const ch = tracked ? this.channel(sessionId) : this.channels.get(sessionId);
+    if (!ch) return;
     if (event.kind === "approval" || event.kind === "question") ch.pending.add(event.requestId);
+    // Leaving "awaiting" means any outstanding decision was resolved (possibly on
+    // the desktop, which never calls resolvePending) or abandoned.
+    if (event.kind === "state" && event.state !== "awaiting") ch.pending.clear();
     for (const q of ch.watchers) q.push(event);
+    this.gc(sessionId);
   }
 
-  /** Attach the (single) runner command sink; a new one replaces any prior. */
-  attachRunner(sessionId: string, send: CommandFn): () => void {
+  /**
+   * Attach the (single) runner command sink. A new runner replaces — and closes —
+   * any prior one, so a stale stream from before a network blip can't linger.
+   * The returned detach reports whether this runner was still the current one
+   * (false once replaced), so the caller only reports a disconnect for the
+   * runner that actually owns the session.
+   */
+  attachRunner(sessionId: string, send: CommandFn, close: () => void): () => boolean {
     const ch = this.channel(sessionId);
-    ch.runner = send;
+    const previous = ch.runner;
+    const runner: Runner = { send, close };
+    ch.runner = runner;
+    if (previous) previous.close();
     return () => {
-      if (ch.runner === send) ch.runner = null;
+      const current = ch.runner === runner;
+      if (current) ch.runner = null;
       this.gc(sessionId);
+      return current;
     };
   }
 
@@ -124,7 +150,7 @@ class SessionBus {
   sendCommand(sessionId: string, command: SessionCommand): boolean {
     const runner = this.channels.get(sessionId)?.runner;
     if (!runner) return false;
-    runner(command);
+    runner.send(command);
     return true;
   }
 

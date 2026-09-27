@@ -1,0 +1,50 @@
+# Caddy reference for the 3-environment split on the box.
+# Each subdomain fronts its own daemon port + its own GoTrue, and serves its
+# own static web root. Prod is the existing vhost; staging/dev are new.
+# Requires DNS A records for staging.celiador.ai and dev.celiador.ai.
+# Back up the live file first: cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-before-envs
+
+# ---------- PROD ----------
+celiador.ai {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:4671
+	}
+	handle /auth/v1/* {
+		reverse_proxy 127.0.0.1:9998   # prod GoTrue
+	}
+	handle {
+		root * /home/stefan/envs/prod/web
+		file_server
+		try_files {path} /index.html
+	}
+}
+
+# ---------- TEST / STAGING ----------
+staging.celiador.ai {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:4672
+	}
+	handle /auth/v1/* {
+		reverse_proxy 127.0.0.1:9997   # staging GoTrue
+	}
+	handle {
+		root * /home/stefan/envs/staging/web
+		file_server
+		try_files {path} /index.html
+	}
+}
+
+# ---------- DEV ----------
+dev.celiador.ai {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:4673
+	}
+	handle /auth/v1/* {
+		reverse_proxy 127.0.0.1:9996   # dev GoTrue
+	}
+	handle {
+		root * /home/stefan/envs/dev/web
+		file_server
+		try_files {path} /index.html
+	}
+}

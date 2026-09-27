@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
 import { pushStores } from "./instance";
-import { apnsAvailable, isDeadToken, sendAlert } from "./apns";
+import { apnsAvailable, isDeadToken, isValidDeviceToken, sendAlert } from "./apns";
 
 /**
  * Push registration + a self-test. All routes require an authenticated user;
@@ -19,26 +19,27 @@ export function pushRoutes(): Hono<AppEnv> {
   // Register (or refresh) an APNs device token.
   app.post("/register", async (c) => {
     const { token, env } = await c.req.json().catch(() => ({}));
-    if (!token?.trim()) return c.json({ error: "Token is required." }, 400);
-    stores.for(c.get("user").userId).addDevice(token.trim(), env === "production" ? "production" : "sandbox");
+    const t = typeof token === "string" ? token.trim() : "";
+    if (!isValidDeviceToken(t)) return c.json({ error: "A valid APNs token is required." }, 400);
+    stores.for(c.get("user").userId).addDevice(t, env === "production" ? "production" : "sandbox");
     return c.json({ ok: true });
   });
 
   app.delete("/register", async (c) => {
     const { token } = await c.req.json().catch(() => ({}));
-    if (token?.trim()) stores.for(c.get("user").userId).removeDevice(token.trim());
+    if (typeof token === "string" && token.trim()) stores.for(c.get("user").userId).removeDevice(token.trim());
     return c.json({ ok: true });
   });
 
   // Register a Live Activity push token, scoped to an activity id.
   app.post("/activity", async (c) => {
     const { activityId, token, env } = await c.req.json().catch(() => ({}));
-    if (!activityId?.trim() || !token?.trim()) {
-      return c.json({ error: "activityId and token are required." }, 400);
+    const id = typeof activityId === "string" ? activityId.trim() : "";
+    const t = typeof token === "string" ? token.trim() : "";
+    if (!id || id.length > 64 || !isValidDeviceToken(t)) {
+      return c.json({ error: "activityId and a valid token are required." }, 400);
     }
-    stores
-      .for(c.get("user").userId)
-      .addActivity(activityId.trim(), token.trim(), env === "production" ? "production" : "sandbox");
+    stores.for(c.get("user").userId).addActivity(id, t, env === "production" ? "production" : "sandbox");
     return c.json({ ok: true });
   });
 
