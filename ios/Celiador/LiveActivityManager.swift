@@ -11,10 +11,35 @@ final class LiveActivityManager {
 
     private var activities: [String: Activity<ChatActivityAttributes>] = [:]
     private var tokenTasks: [String: Task<Void, Never>] = [:]
+    private var adopted = false
+
+    /// Re-adopt activities that survived a relaunch (the system keeps them alive,
+    /// but our in-memory map starts empty) so they're updated/ended instead of
+    /// duplicated or orphaned. Duplicates for the same session are ended.
+    private func adoptExisting() {
+        guard !adopted else { return }
+        adopted = true
+        for activity in Activity<ChatActivityAttributes>.activities {
+            let id = activity.attributes.sessionId
+            if activities[id] == nil {
+                activities[id] = activity
+                observeToken(activity, sessionId: id)
+            } else {
+                Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            }
+        }
+    }
+
+    /// End every Live Activity (sign-out / account deletion).
+    func endAll() {
+        adoptExisting()
+        for (id, activity) in activities { end(id, activity: activity) }
+    }
 
     /// Bring Live Activities in line with the current session list: start ones
     /// that just began running, refresh them, end ones that settled.
     func reconcile(sessions: [Session], activity: [String: String]) {
+        adoptExisting()
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let running = sessions.filter { $0.state == .running }
         let runningIds = Set(running.map(\.id))

@@ -14,6 +14,12 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     /// The last token handed to the daemon, so we can deregister on sign-out.
     private(set) var currentToken: String?
 
+    /// Install as the notification delegate. Must happen during app launch
+    /// (didFinishLaunching) so a tap that cold-launches the app isn't lost.
+    func installDelegate() {
+        UNUserNotificationCenter.current().delegate = self
+    }
+
     /// Ask permission (once) and register with APNs. Safe to call on every launch.
     func requestAuthorization() {
         UNUserNotificationCenter.current().delegate = self
@@ -30,11 +36,23 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         Task { try? await Api.shared.registerPush(token: token, env: Api.shared.pushEnv) }
     }
 
-    /// Best-effort deregister so a signed-out device stops receiving alerts.
-    func deregister() {
-        guard let token = currentToken else { return }
-        currentToken = nil
-        Task { try? await Api.shared.unregisterPush(token: token) }
+    /// Hand over (and forget) the registered token so sign-out can unregister it
+    /// with the outgoing session's credentials before they're cleared.
+    func takeToken() -> String? {
+        defer { currentToken = nil }
+        return currentToken
+    }
+
+    /// A push tapped before the model existed (cold launch) — opened once it does.
+    private var pendingSessionId: String?
+
+    /// Called once the signed-in model exists: install it and replay a pending tap.
+    func attach(model: AppModel) {
+        self.model = model
+        if let id = pendingSessionId {
+            pendingSessionId = nil
+            model.open(sessionId: id)
+        }
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -54,7 +72,11 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     ) async {
         let info = response.notification.request.content.userInfo
         if let id = (info["sessionId"] ?? info["activityId"]) as? String {
-            model?.open(sessionId: id)
+            if let model, case .signedIn = model.phase {
+                model.open(sessionId: id)
+            } else {
+                pendingSessionId = id
+            }
         }
     }
 }

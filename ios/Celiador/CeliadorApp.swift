@@ -33,6 +33,16 @@ struct CeliadorApp: App {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Set the notification delegate before launch finishes so a push tap
+        // that cold-launched the app is delivered (and replayed after sign-in).
+        MainActor.assumeIsolated { PushManager.shared.installDelegate() }
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
         Task { @MainActor in PushManager.shared.didRegister(deviceToken: deviceToken) }

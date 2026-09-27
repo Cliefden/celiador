@@ -10,6 +10,8 @@ struct AccountView: View {
     @State private var name = ""
     @State private var error: String?
     @State private var saving = false
+    @State private var confirmingDelete = false
+    @State private var deleting = false
 
     var body: some View {
         NavigationStack {
@@ -44,6 +46,25 @@ struct AccountView: View {
                     }
                 }
                 .listRowBackground(Theme.panel)
+
+                Section {
+                    Button(role: .destructive) {
+                        confirmingDelete = true
+                    } label: {
+                        if deleting {
+                            HStack { ProgressView(); Text("Deleting account…") }
+                        } else {
+                            Text("Delete account")
+                        }
+                    }
+                    .disabled(deleting)
+                    if let error, profile != nil {
+                        Text(error).font(.footnote).foregroundStyle(Theme.red)
+                    }
+                } footer: {
+                    Text("Permanently deletes your Celiador account, profile, chat history and push registrations. This can't be undone.")
+                }
+                .listRowBackground(Theme.panel)
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
@@ -64,6 +85,16 @@ struct AccountView: View {
                 }
             }
             .task { await load() }
+            .confirmationDialog(
+                "Delete your Celiador account?",
+                isPresented: $confirmingDelete,
+                titleVisibility: .visible
+            ) {
+                Button("Delete account", role: .destructive, action: deleteAccount)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Your account, profile and chat history are permanently deleted. This can't be undone.")
+            }
         }
     }
 
@@ -74,6 +105,21 @@ struct AccountView: View {
             name = p.displayName ?? ""
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    private func deleteAccount() {
+        deleting = true
+        error = nil
+        Task {
+            defer { deleting = false }
+            do {
+                try await Api.shared.deleteAccount()
+                model.signOut(serverAlreadyDeleted: true)
+                dismiss()
+            } catch {
+                self.error = "Couldn't delete your account: \(error.localizedDescription)"
+            }
         }
     }
 

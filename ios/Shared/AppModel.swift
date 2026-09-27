@@ -58,15 +58,23 @@ final class AppModel {
         email = Api.shared.session?.email
         phase = .signedIn
         #if os(iOS)
-        PushManager.shared.model = self
         PushManager.shared.requestAuthorization()
+        PushManager.shared.attach(model: self)
         #endif
         startPolling()
     }
 
-    func signOut() {
+    /// Sign out locally. The push token is unregistered with the OUTGOING session's
+    /// credentials (captured before they're cleared), and every on-device trace of
+    /// the account — Live Activities and the widget snapshot — is removed.
+    /// `serverAlreadyDeleted`: the account is gone server-side (tokens purged too).
+    func signOut(serverAlreadyDeleted: Bool = false) {
         #if os(iOS)
-        PushManager.shared.deregister()
+        let pushToken = PushManager.shared.takeToken()
+        if !serverAlreadyDeleted, let pushToken, let outgoing = Api.shared.session {
+            Task { await Api.shared.unregisterPush(token: pushToken, signingOut: outgoing) }
+        }
+        LiveActivityManager.shared.endAll()
         #endif
         Api.shared.signOut()
         pollTask?.cancel()
@@ -74,6 +82,8 @@ final class AppModel {
         activity = [:]
         path = []
         phase = .signedOut
+        SharedStore.writeSnapshot(.empty)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     /// The slim daemon has no global event feed, so the session *list* is polled;

@@ -38,15 +38,23 @@ private final class SessionTranscript {
     private weak var model: AppModel?
     private var stream: SessionEventStream?
     private var streamingId: Int?
+    private var statusTask: Task<Void, Never>?
 
     func start(sessionId: String, model: AppModel) {
         guard stream == nil else { return }
         self.sessionId = sessionId
         self.model = model
-        Task {
-            if let s = try? await Api.shared.getSession(sessionId) {
-                state = s.state
-                runnerConnected = s.runnerConnected
+        // runnerConnected isn't carried by the event stream, so keep polling it:
+        // the composer unlocks when the editor attaches after the view opened.
+        statusTask = Task { [weak self] in
+            var first = true
+            while !Task.isCancelled {
+                if let s = try? await Api.shared.getSession(sessionId) {
+                    if first { self?.state = s.state }
+                    self?.runnerConnected = s.runnerConnected
+                    first = false
+                }
+                try? await Task.sleep(for: .seconds(10))
             }
         }
         let s = SessionEventStream(sessionId: sessionId, since: 0) { [weak self] event in
@@ -59,6 +67,8 @@ private final class SessionTranscript {
     func stop() {
         stream?.stop()
         stream = nil
+        statusTask?.cancel()
+        statusTask = nil
     }
 
     private func ingest(_ e: SessionEvent) {

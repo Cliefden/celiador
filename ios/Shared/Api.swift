@@ -23,6 +23,8 @@ final class Api {
 
     struct ApiError: Error, LocalizedError {
         let message: String
+        /// HTTP status when the server answered (nil for local/transport errors).
+        var status: Int? = nil
         var errorDescription: String? { message }
     }
 
@@ -59,7 +61,8 @@ final class Api {
         struct TokenUser: Codable { let email: String? }
     }
 
-    private func authRequest(path: String, query: String? = nil, body: [String: String]) async throws -> AuthSession {
+    /// Raw GoTrue POST. Returns the JSON body (throws with the HTTP status on 4xx/5xx).
+    private func gotruePost(path: String, query: String? = nil, body: [String: String]) async throws -> Data {
         let config = try await loadConfig()
         guard let anon = config.supabaseAnonKey else { throw ApiError(message: "Server has no auth configured.") }
         let authBase = URL(string: config.supabaseUrl ?? baseURL.absoluteString)!
@@ -77,14 +80,26 @@ final class Api {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
         if http.statusCode >= 400 {
-            throw ApiError(message: Self.errorMessage(data, status: http.statusCode, fallback: "Sign-in failed (\(http.statusCode))."))
+            throw ApiError(
+                message: Self.errorMessage(data, status: http.statusCode, fallback: "Sign-in failed (\(http.statusCode))."),
+                status: http.statusCode
+            )
         }
-        let token = try JSONDecoder().decode(TokenResponse.self, from: data)
+        return data
+    }
+
+    private func authRequest(path: String, query: String? = nil, body: [String: String]) async throws -> AuthSession {
+        let data = try await gotruePost(path: path, query: query, body: body)
+        return storeSession(try JSONDecoder().decode(TokenResponse.self, from: data), fallbackEmail: body["email"])
+    }
+
+    @discardableResult
+    private func storeSession(_ token: TokenResponse, fallbackEmail: String?) -> AuthSession {
         let session = AuthSession(
             accessToken: token.access_token,
             refreshToken: token.refresh_token,
             expiresAt: Date().addingTimeInterval(TimeInterval(token.expires_in - 60)),
-            email: token.user.email ?? body["email"] ?? ""
+            email: token.user.email ?? fallbackEmail ?? ""
         )
         self.session = session
         Keychain.save(session)
@@ -95,8 +110,33 @@ final class Api {
         _ = try await authRequest(path: "token", query: "grant_type=password", body: ["email": email, "password": password])
     }
 
-    func signUp(email: String, password: String) async throws {
-        _ = try await authRequest(path: "signup", body: ["email": email, "password": password])
+    /// Create an account. Returns true when signed in right away, false when GoTrue
+    /// requires email confirmation first (then the response carries no session).
+    func signUp(email: String, password: String) async throws -> Bool {
+        let data = try await gotruePost(path: "signup", body: ["email": email, "password": password])
+        guard let token = try? JSONDecoder().decode(TokenResponse.self, from: data) else { return false }
+        storeSession(token, fallbackEmail: email)
+        return true
+    }
+
+    // MARK: - Pending sign-in (deep-link CSRF guard)
+
+    /// A callback deep link is only accepted while a magic-link / GitHub sign-in
+    /// started on this device is pending — otherwise any web page could open
+    /// `celiador://auth-callback#access_token=…` and silently swap the account.
+    /// Persisted (UserDefaults) because the magic link may be opened after the
+    /// app was suspended or killed.
+    private static let pendingSignInKey = "pendingSignInAt"
+    private static let pendingSignInWindow: TimeInterval = 30 * 60
+
+    private func markSignInPending() {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.pendingSignInKey)
+    }
+
+    private func consumePendingSignIn() -> Bool {
+        let started = UserDefaults.standard.double(forKey: Self.pendingSignInKey)
+        UserDefaults.standard.removeObject(forKey: Self.pendingSignInKey)
+        return started > 0 && Date().timeIntervalSince1970 - started < Self.pendingSignInWindow
     }
 
     // MARK: - Magic link & GitHub OAuth (deep-link callback)
@@ -122,6 +162,7 @@ final class Api {
         request.setValue(anon, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(OtpBody(email: email, create_user: true))
+        markSignInPending()
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
         if http.statusCode >= 400 {
@@ -143,6 +184,7 @@ final class Api {
             URLQueryItem(name: "redirect_to", value: Self.authRedirect),
         ]
         guard let url = components.url else { throw ApiError(message: "Could not build the sign-in URL.") }
+        markSignInPending()
         return url
     }
 
@@ -155,6 +197,7 @@ final class Api {
         let items = parser.queryItems ?? []
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         guard let access = value("access_token"), let refresh = value("refresh_token") else { return false }
+        guard consumePendingSignIn() else { return false } // not started here → ignore
         let expiresAt: Date
         if let at = value("expires_at").flatMap(Double.init) {
             expiresAt = Date(timeIntervalSince1970: at - 60)
@@ -188,26 +231,41 @@ final class Api {
         return email
     }
 
+    /// In-flight refresh, shared so concurrent 401s don't rotate the refresh token twice
+    /// (GoTrue revokes a reused refresh token, which would sign the user out).
+    private var refreshTask: Task<AuthSession, Error>?
+
     @discardableResult
     private func refreshSession() async throws -> AuthSession {
+        if let refreshTask { return try await refreshTask.value }
         guard let current = session ?? Keychain.load() else { throw ApiError(message: "Not signed in.") }
-        return try await authRequest(
-            path: "token",
-            query: "grant_type=refresh_token",
-            body: ["refresh_token": current.refreshToken]
-        )
+        let task = Task {
+            try await self.authRequest(
+                path: "token",
+                query: "grant_type=refresh_token",
+                body: ["refresh_token": current.refreshToken]
+            )
+        }
+        refreshTask = task
+        defer { refreshTask = nil }
+        return try await task.value
     }
 
     /// Restore from Keychain; refresh if stale. Returns the signed-in email, or nil.
+    /// Only a definitive auth rejection (GoTrue 4xx, e.g. a revoked refresh token)
+    /// clears the stored session — a network failure (offline cold start) keeps it,
+    /// and the next request refreshes once connectivity is back.
     func restoreSession() async -> String? {
         guard let stored = Keychain.load() else { return nil }
         session = stored
         if stored.expiresAt > Date() { return stored.email }
         do {
             return try await refreshSession().email
-        } catch {
+        } catch let error as ApiError where (400..<500).contains(error.status ?? 0) {
             signOut()
             return nil
+        } catch {
+            return stored.email
         }
     }
 
@@ -251,7 +309,10 @@ final class Api {
             return try await self.request(type, path: path, method: method, body: body, retrying: true)
         }
         if http.statusCode >= 400 {
-            throw ApiError(message: Self.errorMessage(data, status: http.statusCode, fallback: "Request failed (\(http.statusCode))."))
+            throw ApiError(
+                message: Self.errorMessage(data, status: http.statusCode, fallback: "Request failed (\(http.statusCode))."),
+                status: http.statusCode
+            )
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -383,6 +444,36 @@ final class Api {
             method: "DELETE",
             body: ["token": token]
         )
+    }
+
+    /// Unregister a device token on behalf of a session that is being signed out.
+    /// Uses the captured (outgoing) session explicitly — the live `session` is
+    /// already cleared by then — refreshing a stale access token without storing it.
+    func unregisterPush(token: String, signingOut outgoing: AuthSession) async {
+        var bearer = outgoing.accessToken
+        if outgoing.expiresAt <= Date() {
+            guard let data = try? await gotruePost(
+                path: "token",
+                query: "grant_type=refresh_token",
+                body: ["refresh_token": outgoing.refreshToken]
+            ), let fresh = try? JSONDecoder().decode(TokenResponse.self, from: data) else { return }
+            bearer = fresh.access_token
+        }
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/push/register"))
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(["token": token])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    // MARK: - Account
+
+    /// Permanently delete the signed-in account on the server (GoTrue user, profile,
+    /// chat history, relay sessions, push tokens), then clear the local session.
+    func deleteAccount() async throws {
+        _ = try await request(OkEnvelope.self, path: "api/account", method: "DELETE")
+        signOut()
     }
 
     /// Hand the daemon a Live Activity push token so it can drive lock-screen /

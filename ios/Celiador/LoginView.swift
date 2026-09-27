@@ -1,8 +1,9 @@
 import SwiftUI
+import AuthenticationServices
 
 struct LoginView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.openURL) private var openURL
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
     @State private var email = ""
     @State private var password = ""
     @State private var isSignUp = false
@@ -92,7 +93,13 @@ struct LoginView: View {
         Task {
             do {
                 if isSignUp {
-                    try await Api.shared.signUp(email: email, password: password)
+                    guard try await Api.shared.signUp(email: email, password: password) else {
+                        // Email confirmation is on: the account exists but has no session yet.
+                        info = "Account created. Confirm it via the email we sent to \(email), then sign in."
+                        isSignUp = false
+                        busy = false
+                        return
+                    }
                 } else {
                     try await Api.shared.signIn(email: email, password: password)
                 }
@@ -127,7 +134,20 @@ struct LoginView: View {
         info = nil
         Task {
             do {
-                openURL(try await Api.shared.githubAuthorizeURL())
+                // In-app auth sheet (not a Safari hand-off): the callback comes
+                // straight back here instead of through the URL-scheme handler.
+                let url = try await Api.shared.githubAuthorizeURL()
+                let callback = try await webAuthenticationSession.authenticate(
+                    using: url,
+                    callbackURLScheme: "celiador"
+                )
+                if Api.shared.handleAuthCallback(callback) {
+                    model.didSignIn()
+                } else {
+                    self.error = "GitHub sign-in didn't complete."
+                }
+            } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
+                // User closed the sheet — not an error.
             } catch {
                 self.error = error.localizedDescription
             }
