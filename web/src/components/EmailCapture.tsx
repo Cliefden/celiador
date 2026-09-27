@@ -3,8 +3,12 @@
 import { useState } from "react";
 import { CheckIcon } from "./icons";
 
-// NOTE: This form is not wired to a backend yet. On submit it just shows a
-// success state. Point `submit` at your list provider (Supabase, Loops, etc.).
+// There is no waitlist backend yet, so this form must not pretend to store the
+// address. It hands off to the visitor's mail app (a pre-filled message to
+// hello@celiador.ai) and says so honestly. When a list provider exists
+// (Supabase, Loops, …), POST to it in `submit` and only then show "on the list".
+const WAITLIST_ADDRESS = "hello@celiador.ai";
+
 export function EmailCapture({ compact = false }: { compact?: boolean }) {
   const [email, setEmail] = useState("");
   const [done, setDone] = useState(false);
@@ -17,7 +21,9 @@ export function EmailCapture({ compact = false }: { compact?: boolean }) {
       return;
     }
     setError("");
-    // TODO: replace with a real request to your waitlist backend.
+    const subject = encodeURIComponent("Celiador early access");
+    const body = encodeURIComponent(`Please add ${email} to the Celiador early-access list.`);
+    window.location.href = `mailto:${WAITLIST_ADDRESS}?subject=${subject}&body=${body}`;
     setDone(true);
   }
 
@@ -29,8 +35,15 @@ export function EmailCapture({ compact = false }: { compact?: boolean }) {
           (compact ? "" : "mx-auto max-w-md")
         }
       >
-        <CheckIcon className="h-5 w-5 text-brand" />
-        You&apos;re on the list. We&apos;ll email you the moment the Mac build is ready.
+        <CheckIcon className="h-5 w-5 shrink-0 text-brand" />
+        <span>
+          Almost there — send the email that just opened to join the list. If nothing opened,
+          write to{" "}
+          <a href={`mailto:${WAITLIST_ADDRESS}`} className="underline hover:text-brand">
+            {WAITLIST_ADDRESS}
+          </a>
+          .
+        </span>
       </div>
     );
   }
@@ -59,7 +72,9 @@ export function EmailCapture({ compact = false }: { compact?: boolean }) {
         </button>
       </div>
       {error && <p className="mt-2 text-xs text-[#ff6b6b]">{error}</p>}
-      <p className="mt-2 text-xs text-fog-dim">No spam. One email when the preview opens.</p>
+      <p className="mt-2 text-xs text-fog-dim">
+        Opens your mail app with a pre-filled request. No spam — one email when the preview opens.
+      </p>
     </form>
   );
 }
