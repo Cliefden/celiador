@@ -188,8 +188,49 @@ async function testFailureLeavesDataIntact() {
   console.log("  ✓ Pass\n");
 }
 
+async function testRunnerStreamClosesOnDeletion() {
+  console.log("Test 5: Runner stream closes on deletion, no files recreated");
+  
+  const mockDeleteAuthUser = async () => {};
+  const userId = "user-runner-stream";
+  
+  const store = testSessionStores.for(userId);
+  const session = store.create({ title: "Running task", origin: "editor", runner: "editor" });
+  
+  // Set session to running state
+  store.setState(session.id, "running");
+  
+  // Simulate attaching a runner with the bus
+  const { sessionBus } = await import("./sessions/bus");
+  let streamClosed = false;
+  const mockSend = () => {};
+  const mockClose = () => { streamClosed = true; };
+  const detach = sessionBus.attachRunner(session.id, mockSend, mockClose);
+  
+  // Verify runner is attached
+  if (!sessionBus.hasRunner(session.id)) throw new Error("Runner not attached");
+  
+  // Delete the account
+  await mockDeleteAccount(userId, testSessionStores, testPushStores, mockDeleteAuthUser);
+  
+  // Verify stream was closed
+  if (!streamClosed) throw new Error("Runner stream not closed on deletion!");
+  
+  // Verify no files exist
+  const metaFile = path.join(TEST_ROOT, "data", "sessions", "meta", `${userId}.json`);
+  const logFile = path.join(TEST_ROOT, "data", "sessions", "log", `${userId}.json`);
+  
+  if (fs.existsSync(metaFile)) throw new Error("Meta file still exists!");
+  if (fs.existsSync(logFile)) throw new Error("Log file still exists!");
+  
+  // Cleanup
+  detach();
+  
+  console.log("  ✓ Pass\n");
+}
+
 async function testDeletedUserTokenRejection() {
-  console.log("Test 5: Deleted user token is rejected");
+  console.log("Test 6: Deleted user token is rejected");
   
   // Set token mode for this test
   const oldToken = process.env.CELIADOR_TOKEN;
@@ -242,7 +283,7 @@ async function testDeletedUserTokenRejection() {
 }
 
 async function testAuthModes() {
-  console.log("Test 6: Auth modes");
+  console.log("Test 7: Auth modes");
   
   const app = createApp();
   
@@ -270,7 +311,7 @@ async function testAuthModes() {
 }
 
 async function testEndpointResponse() {
-  console.log("Test 7: Endpoint returns correct status codes");
+  console.log("Test 8: Endpoint returns correct status codes");
   
   const app = createApp();
   
@@ -313,6 +354,7 @@ async function runTests() {
     await testDiskFilesDeletedWhenNotCached();
     await testNoRewriteAfterDeletion();
     await testFailureLeavesDataIntact();
+    await testRunnerStreamClosesOnDeletion();
     await testDeletedUserTokenRejection();
     await testAuthModes();
     await testEndpointResponse();

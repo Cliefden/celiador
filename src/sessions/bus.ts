@@ -60,6 +60,7 @@ class WriteQueue {
 interface Channel {
   watchers: Set<WriteQueue>;
   runner: CommandFn | null;
+  runnerClose: (() => void) | null;
   /** Outstanding approval/question requestIds awaiting a watcher decision. */
   pending: Set<string>;
 }
@@ -70,7 +71,7 @@ class SessionBus {
   private channel(sessionId: string): Channel {
     let ch = this.channels.get(sessionId);
     if (!ch) {
-      ch = { watchers: new Set(), runner: null, pending: new Set() };
+      ch = { watchers: new Set(), runner: null, runnerClose: null, pending: new Set() };
       this.channels.set(sessionId, ch);
     }
     return ch;
@@ -78,7 +79,7 @@ class SessionBus {
 
   private gc(sessionId: string): void {
     const ch = this.channels.get(sessionId);
-    if (ch && ch.watchers.size === 0 && !ch.runner && ch.pending.size === 0) {
+    if (ch && ch.watchers.size === 0 && !ch.runner && ch.runnerClose === null && ch.pending.size === 0) {
       this.channels.delete(sessionId);
     }
   }
@@ -107,11 +108,15 @@ class SessionBus {
   }
 
   /** Attach the (single) runner command sink; a new one replaces any prior. */
-  attachRunner(sessionId: string, send: CommandFn): () => void {
+  attachRunner(sessionId: string, send: CommandFn, close: () => void): () => void {
     const ch = this.channel(sessionId);
     ch.runner = send;
+    ch.runnerClose = close;
     return () => {
-      if (ch.runner === send) ch.runner = null;
+      if (ch.runner === send) {
+        ch.runner = null;
+        ch.runnerClose = null;
+      }
       this.gc(sessionId);
     };
   }
@@ -143,11 +148,17 @@ class SessionBus {
   closeSession(sessionId: string): void {
     const ch = this.channels.get(sessionId);
     if (!ch) return;
+    // Close all watcher streams
     for (const q of ch.watchers) {
       q.fail();
     }
     ch.watchers.clear();
+    // Close runner stream
+    if (ch.runnerClose) {
+      ch.runnerClose();
+    }
     ch.runner = null;
+    ch.runnerClose = null;
     ch.pending.clear();
     this.channels.delete(sessionId);
   }

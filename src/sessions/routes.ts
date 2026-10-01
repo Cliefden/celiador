@@ -179,7 +179,7 @@ export function sessionRoutes(): Hono<AppEnv> {
         void serial(() => stream.writeSSE({ data: JSON.stringify(command) })).catch(() => close());
       };
 
-      const detach = sessionBus.attachRunner(session.id, send);
+      const detach = sessionBus.attachRunner(session.id, send, close);
       store.setRunnerConnected(session.id, true);
 
       const heartbeat = setInterval(() => {
@@ -191,12 +191,22 @@ export function sessionRoutes(): Hono<AppEnv> {
       await closed;
       clearInterval(heartbeat);
       detach();
-      store.setRunnerConnected(session.id, false);
-      // If the runner vanished mid-run, unstick any watchers.
-      const current = store.get(session.id);
-      if (current && (current.state === "running" || current.state === "awaiting")) {
-        publish(userId, session.id, { kind: "error", message: "The editor disconnected." });
-        publish(userId, session.id, { kind: "state", state: "error" });
+      
+      // Cleanup: don't touch the store if the user was deleted
+      try {
+        const currentStore = stores.for(userId);
+        currentStore.setRunnerConnected(session.id, false);
+        // If the runner vanished mid-run, unstick any watchers.
+        const current = currentStore.get(session.id);
+        if (current && (current.state === "running" || current.state === "awaiting")) {
+          publish(userId, session.id, { kind: "error", message: "The editor disconnected." });
+          publish(userId, session.id, { kind: "state", state: "error" });
+        }
+      } catch (err) {
+        // User was deleted - stores.for() throws "user deleted", which is expected
+        if (!String(err).includes("user deleted")) {
+          console.error("[sessions] commands cleanup error:", err);
+        }
       }
     });
   });

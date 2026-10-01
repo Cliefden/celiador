@@ -32,6 +32,7 @@ export class SessionStore {
   private logs = new Map<string, SessionEvent[]>();
   private metaTimer: NodeJS.Timeout | null = null;
   private logTimer: NodeJS.Timeout | null = null;
+  private disposed = false;
 
   constructor(private userId: string, private metaFile: string, private logFile: string) {
     this.sessions = readJson<MetaFile>(metaFile)?.sessions ?? [];
@@ -49,6 +50,7 @@ export class SessionStore {
   }
 
   create(input: { title?: string; origin: SessionOrigin; runner: SessionRunner }): Session {
+    if (this.disposed) throw new Error("store disposed");
     const now = new Date().toISOString();
     const session: Session = {
       id: crypto.randomUUID(),
@@ -70,6 +72,7 @@ export class SessionStore {
   }
 
   delete(id: string): boolean {
+    if (this.disposed) return false;
     const before = this.sessions.length;
     this.sessions = this.sessions.filter((s) => s.id !== id);
     this.logs.delete(id);
@@ -81,6 +84,7 @@ export class SessionStore {
 
   /** Append a runner event; assigns seq/at, updates session state, returns the stored event. */
   append(id: string, input: SessionEventInput): SessionEvent | undefined {
+    if (this.disposed) return undefined;
     const session = this.get(id);
     if (!session) return undefined;
     const seq = ++session.lastSeq;
@@ -116,6 +120,7 @@ export class SessionStore {
   }
 
   setRunnerConnected(id: string, connected: boolean): void {
+    if (this.disposed) return;
     const session = this.get(id);
     if (!session || session.runnerConnected === connected) return;
     session.runnerConnected = connected;
@@ -125,6 +130,7 @@ export class SessionStore {
 
   /** Force-set state without an event (used when a runner drops mid-run). */
   setState(id: string, state: SessionState): void {
+    if (this.disposed) return;
     const session = this.get(id);
     if (!session || session.state === state) return;
     session.state = state;
@@ -152,16 +158,17 @@ export class SessionStore {
   }
 
   private scheduleMetaSave(): void {
-    if (this.metaTimer) return;
+    if (this.disposed || this.metaTimer) return;
     this.metaTimer = setTimeout(() => this.saveMetaNow(), SAVE_DEBOUNCE_MS);
   }
 
   private scheduleLogSave(): void {
-    if (this.logTimer) return;
+    if (this.disposed || this.logTimer) return;
     this.logTimer = setTimeout(() => this.saveLogNow(), SAVE_DEBOUNCE_MS);
   }
 
   private saveMetaNow(): void {
+    if (this.disposed) return;
     if (this.metaTimer) {
       clearTimeout(this.metaTimer);
       this.metaTimer = null;
@@ -170,6 +177,7 @@ export class SessionStore {
   }
 
   private saveLogNow(): void {
+    if (this.disposed) return;
     if (this.logTimer) {
       clearTimeout(this.logTimer);
       this.logTimer = null;
@@ -177,8 +185,9 @@ export class SessionStore {
     writeJson<LogFile>(this.logFile, { logs: Object.fromEntries(this.logs) });
   }
 
-  /** Cancel pending timers without saving. Used during account deletion. */
+  /** Cancel pending timers and mark disposed. All future writes become no-ops. */
   dispose(): void {
+    this.disposed = true;
     if (this.metaTimer) {
       clearTimeout(this.metaTimer);
       this.metaTimer = null;
