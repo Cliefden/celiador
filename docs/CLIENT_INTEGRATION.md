@@ -1,8 +1,8 @@
 # Client integration plan — macOS editor & iOS companion → daemon
 
 How the two clients talk to the daemon (`https://celiador.ai/api/*`). Everything is
-Bearer-authenticated with a Supabase JWT (see AUTH.md); the daemon holds the LLM
-key and the DB connection — clients never hold either.
+Bearer-authenticated with a Supabase JWT; the daemon holds the LLM key and the DB
+connection — clients never hold either.
 
 ## The daemon API surface (all live in prod)
 
@@ -29,11 +29,13 @@ in — no extra write path needed from clients.
 ## Current state
 
 - **Daemon**: all endpoints live; DB wired (`DATABASE_URL`), verified end-to-end.
-- **macOS editor (`celiador-ai`)**: runner-side relay **DONE** — `src/relay.ts`
-  (`SessionRelay`) is wired into the agent loop in `src/extension.ts` (mirrors
-  delta/tool/toolResult/reply/state/done, approvals via `waitForApproval`, command
-  channel for instruct/cancel/approve/reject). Auth done (`src/auth.ts`).
-  **Missing**: profile + chat-history reads.
+- **macOS editor (`celiador-ai`)**: runner-side relay implementation (`src/relay.ts`,
+  `SessionRelay`) is in progress on a separate PR in `Cliefden/celiador-editor` and
+  not yet merged to the editor's main branch. When complete, it will wire into the
+  agent loop in `src/extension.ts` to mirror delta/tool/toolResult/reply/state/done,
+  handle approvals via `waitForApproval`, and provide a command channel for
+  instruct/cancel/approve/reject. Auth done (`src/auth.ts`).
+  **Missing**: session relay completion, profile + chat-history reads.
 - **iOS (`celiador-ios`)**: rebuilt as a watcher and **builds on simulator**. Has
   auth, session list/open, live transcript view with approve/instruct/cancel, and
   Live Activity + widget on sessions (`Shared/Api.swift`, `Events.swift`, `Models.swift`,

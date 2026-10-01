@@ -48,6 +48,20 @@ curl -s localhost:4661/api/config
 | DELETE | `/api/push/register` | user | Remove a device token |
 | POST | `/api/push/activity` | user | Register a Live Activity token (`activityId`) |
 | POST | `/api/push/test` | user | Send a test alert to the caller's devices |
+| POST | `/api/sessions` | user | Create an agent session (relay) |
+| GET | `/api/sessions/:id/events` | user | SSE stream of session events |
+| GET | `/api/sessions/:id/commands` | user | SSE stream of runner commands |
+| POST | `/api/sessions/:id/events` | user | Runner publishes events |
+| POST | `/api/sessions/:id/message` | user | Watcher sends instruct message |
+| POST | `/api/sessions/:id/approvals/:rid` | user | Watcher approves tool use |
+| POST | `/api/sessions/:id/answers/:rid` | user | Watcher answers question |
+| POST | `/api/sessions/:id/cancel` | user | Watcher cancels session |
+| GET | `/api/profile` | user | Get user profile |
+| PATCH | `/api/profile` | user | Update profile (name, avatar, settings) |
+| GET | `/api/chats` | user | List user's chat history |
+| GET | `/api/chats/:id` | user | Get chat with messages |
+| PATCH | `/api/chats/:id` | user | Rename a chat |
+| DELETE | `/api/chats/:id` | user | Delete a chat |
 
 ## Layout
 
@@ -79,6 +93,4 @@ rsync -az --exclude .git --exclude node_modules <local>/daemon/ stefan@cliefden.
 ssh stefan@cliefden.com 'cd ~/daemon && npm ci && sudo systemctl restart <unit>'
 ```
 
-The current cutover plan keeps the old daemon serving `celiador.ai/api/*` until
-this one is deployed and verified, then Caddy/systemd point at it. **Not yet
-deployed** — see the ecosystem notes.
+**Deployed** and live at `https://celiador.ai/api/*` (see `/api/health` for version).
