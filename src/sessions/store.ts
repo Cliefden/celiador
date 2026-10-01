@@ -205,4 +205,40 @@ export class SessionStores {
     }
     return store;
   }
+
+  /**
+   * Evict a user's store from the cache, cancel any pending saves, and delete
+   * their session files. Returns the session IDs that were active so the caller
+   * can close any open streams. MUST be called before deleting the user's files
+   * to prevent pending debounced saves from recreating them.
+   */
+  evict(userId: string): string[] {
+    const store = this.stores.get(userId);
+    if (!store) return [];
+    
+    const sessionIds = store.list().map(s => s.id);
+    
+    // Cancel pending timers by forcing immediate saves, then clearing
+    (store as any).saveMetaNow();
+    (store as any).saveLogNow();
+    
+    // Remove from cache
+    this.stores.delete(userId);
+    
+    // Delete files
+    const metaFile = path.join(this.root, "data", "sessions", "meta", `${userId}.json`);
+    const logFile = path.join(this.root, "data", "sessions", "log", `${userId}.json`);
+    try {
+      if (fs.existsSync(metaFile)) fs.unlinkSync(metaFile);
+    } catch (err) {
+      console.error(`[SessionStores] failed to delete meta for ${userId}:`, err);
+    }
+    try {
+      if (fs.existsSync(logFile)) fs.unlinkSync(logFile);
+    } catch (err) {
+      console.error(`[SessionStores] failed to delete log for ${userId}:`, err);
+    }
+    
+    return sessionIds;
+  }
 }

@@ -101,4 +101,19 @@ export class PushStores {
     }
     return store;
   }
+
+  /**
+   * Evict a user's push store from the cache and delete their push file.
+   * MUST be called before deleting the user to prevent mutations from
+   * recreating the file.
+   */
+  evict(userId: string): void {
+    this.stores.delete(userId);
+    const file = path.join(this.root, "data", "push", `${userId}.json`);
+    try {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch (err) {
+      console.error(`[PushStores] failed to delete push file for ${userId}:`, err);
+    }
+  }
 }

@@ -3,8 +3,7 @@ import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
-import { ROOT } from "../config";
-import { SessionStores } from "./store";
+import { sessionStores } from "./instance";
 import { sessionBus } from "./bus";
 import { notifySession } from "./notify";
 import { persistSession } from "./persist";
@@ -35,7 +34,7 @@ const RUNNER_EVENT_KINDS = new Set([
  */
 export function sessionRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const stores = new SessionStores(ROOT);
+  const stores = sessionStores;
 
   app.use("*", requireUser);
 

@@ -135,6 +135,32 @@ class SessionBus {
     ch.pending.delete(requestId);
     return true;
   }
+
+  /**
+   * Close all streams and clear all state for a session. Used during account
+   * deletion to force-close any open runner/watcher connections.
+   */
+  closeSession(sessionId: string): void {
+    const ch = this.channels.get(sessionId);
+    if (!ch) return;
+    for (const q of ch.watchers) {
+      q.fail();
+    }
+    ch.watchers.clear();
+    ch.runner = null;
+    ch.pending.clear();
+    this.channels.delete(sessionId);
+  }
+
+  /**
+   * Close all sessions for a given list of session IDs. Used during account
+   * deletion to clean up all of a user's active sessions.
+   */
+  closeSessions(sessionIds: string[]): void {
+    for (const id of sessionIds) {
+      this.closeSession(id);
+    }
+  }
 }
 
 /** Process-wide singleton. */
