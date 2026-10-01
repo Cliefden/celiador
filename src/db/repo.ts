@@ -130,3 +130,43 @@ export async function deleteChat(userId: string, chatId: string): Promise<boolea
   );
   return (rowCount ?? 0) > 0;
 }
+
+// ── Account deletion ─────────────────────────────────────────────────────────
+
+/**
+ * Delete all database data for a user (profile, chats, messages).
+ * The ON DELETE CASCADE from auth.users ensures chats/messages are cleaned up,
+ * but this explicitly deletes from the profile which triggers the cascade.
+ * Returns true if the profile existed and was deleted.
+ */
+export async function deleteUserData(userId: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const { rowCount } = await pool.query(
+    `delete from public.profiles where id = $1`,
+    [userId]
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+/**
+ * Delete a user from auth.users. This requires elevated privileges.
+ * The daemon must connect with a role that has DELETE on auth.users.
+ * Returns true if successful, throws on error.
+ */
+export async function deleteAuthUser(userId: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) throw new Error("database not configured");
+  try {
+    const { rowCount } = await pool.query(
+      `delete from auth.users where id = $1`,
+      [userId]
+    );
+    return (rowCount ?? 0) > 0;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("permission denied")) {
+      throw new Error("database role lacks permission to delete auth users");
+    }
+    throw err;
+  }
+}

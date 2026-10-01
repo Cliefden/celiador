@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { VERSION } from "./config";
-import { authMode, type AppEnv } from "./auth";
+import { authMode, requireUser, type AppEnv } from "./auth";
 import { agentProxy } from "./anthropic";
 import { pushRoutes } from "./push/routes";
 import { sessionRoutes } from "./sessions/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
+import { deleteAccount } from "./account";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
@@ -48,6 +49,25 @@ export function createApp(): Hono<AppEnv> {
   // Daemon-mediated app data (profiles + durable chat history) for both clients.
   app.route("/api/profile", profileRoutes());
   app.route("/api/chats", chatRoutes());
+
+  // Account deletion (Apple App Store requirement)
+  app.delete("/api/account", requireUser, async (c) => {
+    const userId = c.get("user").userId;
+    try {
+      await deleteAccount(userId);
+      return c.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("database not configured")) {
+        return c.json({ error: "database not configured" }, 503);
+      }
+      if (message.includes("permission denied") || message.includes("lacks permission")) {
+        return c.json({ error: "server misconfigured: cannot delete auth users" }, 500);
+      }
+      console.error("[account] deletion failed:", err);
+      return c.json({ error: "account deletion failed" }, 500);
+    }
+  });
 
   app.notFound((c) => c.json({ error: "Unknown endpoint" }, 404));
   app.onError((err, c) => c.json({ error: err instanceof Error ? err.message : String(err) }, 500));
