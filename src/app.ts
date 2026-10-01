@@ -7,6 +7,8 @@ import { pushRoutes } from "./push/routes";
 import { sessionRoutes } from "./sessions/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
 import { deleteAccount } from "./account";
+import { sessionStores } from "./sessions/instance";
+import { pushStores } from "./push/instance";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
