@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRunner, SessionState } from "./types";
+import { deletedUsers } from "../deleted-users";
 
 /** Max events retained per session (older ones fall out of the ring). */
 const RING = 2000;
@@ -175,6 +176,18 @@ export class SessionStore {
     }
     writeJson<LogFile>(this.logFile, { logs: Object.fromEntries(this.logs) });
   }
+
+  /** Cancel pending timers without saving. Used during account deletion. */
+  dispose(): void {
+    if (this.metaTimer) {
+      clearTimeout(this.metaTimer);
+      this.metaTimer = null;
+    }
+    if (this.logTimer) {
+      clearTimeout(this.logTimer);
+      this.logTimer = null;
+    }
+  }
 }
 
 function readJson<T>(file: string): T | null {
@@ -197,6 +210,10 @@ export class SessionStores {
   constructor(private root: string) {}
 
   for(userId: string): SessionStore {
+    // Never create stores for deleted users
+    if (deletedUsers.isDeleted(userId)) {
+      throw new Error("user deleted");
+    }
     let store = this.stores.get(userId);
     if (!store) {
       const base = path.join(this.root, "data", "sessions");
@@ -208,24 +225,22 @@ export class SessionStores {
 
   /**
    * Evict a user's store from the cache, cancel any pending saves, and delete
-   * their session files. Returns the session IDs that were active so the caller
-   * can close any open streams. MUST be called before deleting the user's files
-   * to prevent pending debounced saves from recreating them.
+   * their session files. Returns the session IDs that were active (from cache
+   * if present, otherwise empty). Always deletes files on disk regardless of
+   * whether the user is cached.
    */
   evict(userId: string): string[] {
     const store = this.stores.get(userId);
-    if (!store) return [];
+    let sessionIds: string[] = [];
     
-    const sessionIds = store.list().map(s => s.id);
+    if (store) {
+      // Get session IDs from cache and cancel pending saves
+      sessionIds = store.list().map(s => s.id);
+      store.dispose();
+      this.stores.delete(userId);
+    }
     
-    // Cancel pending timers by forcing immediate saves, then clearing
-    (store as any).saveMetaNow();
-    (store as any).saveLogNow();
-    
-    // Remove from cache
-    this.stores.delete(userId);
-    
-    // Delete files
+    // Always delete files, even if the store wasn't in cache
     const metaFile = path.join(this.root, "data", "sessions", "meta", `${userId}.json`);
     const logFile = path.join(this.root, "data", "sessions", "log", `${userId}.json`);
     try {

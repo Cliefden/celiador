@@ -2,6 +2,7 @@ import { deleteAuthUser as dbDeleteAuthUser } from "./db/repo";
 import { sessionStores } from "./sessions/instance";
 import { pushStores } from "./push/instance";
 import { sessionBus } from "./sessions/bus";
+import { deletedUsers } from "./deleted-users";
 
 /**
  * Account deletion: permanently delete a user and all their data.
@@ -28,11 +29,14 @@ export async function deleteAccount(
   // If this fails (e.g. missing GRANT), we throw and leave everything untouched.
   await deleteAuthUser(userId);
   
-  // Step 2: Evict from caches and close streams. This prevents any pending debounced
+  // Step 2: Add to deleted users blocklist so JWT can't be reused even if still valid.
+  deletedUsers.add(userId);
+  
+  // Step 3: Evict from caches and close streams. This prevents any pending debounced
   // saves from recreating files and stops all live SSE connections.
   const sessionIds = sessionStores.evict(userId);
   sessionBus.closeSessions(sessionIds);
   pushStores.evict(userId);
   
-  // Step 3 is handled by the evict methods above (they delete files after cache eviction).
+  // Step 4 is handled by the evict methods above (they delete files after cache eviction).
 }
