@@ -47,7 +47,9 @@ curl -s localhost:4661/api/config
 |---|---|---|---|
 | GET | `/api/health` | none | Liveness + version |
 | GET | `/api/config` | none | `authMode` + Supabase client config |
-| POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Claude proxy (SSE) |
+| POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Locked Claude proxy, daemon-owned 3-tool set (SSE) |
+| POST | `/api/anthropic/v1/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | First-party gateway: forwards caller's own system + tools; daemon keeps key/model/caps/quota (SSE) |
+| GET | `/api/anthropic/v1/models` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Model list (proxied) |
 | POST | `/api/push/register` | user | Register an APNs device token |
 | DELETE | `/api/push/register` | user | Remove a device token |
 | POST | `/api/push/activity` | user | Register a Live Activity token (`activityId`) |

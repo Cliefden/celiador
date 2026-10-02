@@ -76,3 +76,57 @@ export function validateMessages(messages: unknown): string | null {
   }
   return null;
 }
+
+/**
+ * First-party "gateway" mode caps (see gateway.ts). Unlike the locked proxy, the
+ * gateway forwards the CALLER's own system prompt + tool schemas (the Claude Agent
+ * SDK's ~40-tool set), so the only guards here are structural: bound the shape so
+ * one request can't ship an unbounded payload upstream on the daemon's paid key.
+ * The tools never execute on the daemon — they run in the caller's workspace /
+ * runner sandbox — so arbitrary tool *schemas* are inert data, not an exec risk.
+ */
+export const GATEWAY_MAX_TOOLS = Number(process.env.CELIADOR_GATEWAY_MAX_TOOLS || 100);
+export const GATEWAY_MAX_TOOLS_BYTES = Number(process.env.CELIADOR_GATEWAY_MAX_TOOLS_BYTES || 512 * 1024);
+export const GATEWAY_MAX_SYSTEM_BYTES = Number(process.env.CELIADOR_GATEWAY_MAX_SYSTEM_BYTES || 256 * 1024);
+
+function utf8Bytes(v: unknown): number {
+  return Buffer.byteLength(typeof v === "string" ? v : JSON.stringify(v), "utf8");
+}
+
+/**
+ * Validate a passthrough (gateway) request body: an Anthropic /v1/messages shape.
+ * Checks structure and size only — NOT a tool allowlist (that's the whole point of
+ * gateway mode). Returns an error string, or null when acceptable.
+ */
+export function validateGatewayRequest(body: {
+  messages?: unknown;
+  system?: unknown;
+  tools?: unknown;
+}): string | null {
+  const { messages, system, tools } = body;
+  if (!Array.isArray(messages) || messages.length === 0) return "messages must be a non-empty array";
+  if (messages.length > MAX_MESSAGES) return `too many messages (max ${MAX_MESSAGES})`;
+  for (const m of messages) {
+    if (!m || typeof m !== "object") return "bad message";
+    const { role, content } = m as { role?: unknown; content?: unknown };
+    if (role !== "user" && role !== "assistant") return "bad message role";
+    if (typeof content !== "string" && !Array.isArray(content)) return "bad message content";
+    // Block types are intentionally NOT allowlisted here — the SDK legitimately
+    // sends server_tool_use, web_search_tool_result, image, document, etc.
+  }
+  if (system !== undefined) {
+    if (typeof system !== "string" && !Array.isArray(system)) return "bad system prompt";
+    if (utf8Bytes(system) > GATEWAY_MAX_SYSTEM_BYTES) return "system prompt too large";
+  }
+  if (tools !== undefined) {
+    if (!Array.isArray(tools)) return "tools must be an array";
+    if (tools.length > GATEWAY_MAX_TOOLS) return `too many tools (max ${GATEWAY_MAX_TOOLS})`;
+    if (utf8Bytes(tools) > GATEWAY_MAX_TOOLS_BYTES) return "tools payload too large";
+    for (const t of tools) {
+      if (!t || typeof t !== "object") return "bad tool definition";
+      const { name } = t as { name?: unknown };
+      if (typeof name !== "string" || !name) return "tool missing name";
+    }
+  }
+  return null;
+}

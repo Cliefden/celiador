@@ -2,24 +2,15 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { AGENT_MODEL, AGENT_MAX_TOKENS } from "./config";
-import { authenticateToken, bearerFrom, safeEqual } from "./auth";
 import { SYSTEM_PROMPT, TOOLS, validateMessages } from "./agent/policy";
 import { agentQuota } from "./agent/quota";
-import { dbEnabled } from "./db/pool";
-import { getProfile } from "./db/repo";
+import { authorizeAgent } from "./agent/authorize";
 
 let client: Anthropic | null = null;
 function getClient(): Anthropic {
   // Reads ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) from the environment.
   if (!client) client = new Anthropic();
   return client;
-}
-
-/** Plans allowed to use the proxy (CELIADOR_AGENT_PLANS, comma-separated). Unset = any plan. */
-function allowedPlans(): Set<string> | null {
-  const raw = process.env.CELIADOR_AGENT_PLANS?.trim();
-  if (!raw) return null;
-  return new Set(raw.split(",").map((p) => p.trim()).filter(Boolean));
 }
 
 /**
@@ -36,22 +27,6 @@ function allowedPlans(): Set<string> | null {
  * stream is relayed to the client as Server-Sent Events.
  */
 export async function agentProxy(c: Context) {
-  const bearer = bearerFrom(c);
-  const user = authenticateToken(bearer);
-  const sharedOk = safeEqual(bearer, process.env.CELIADOR_AGENT_TOKEN);
-  if (!user && !sharedOk) return c.json({ error: "unauthorized" }, 401);
-  const quotaKey = user?.userId ?? "shared-agent-token";
-
-  // Optional plan gate (only meaningful for real users; the shared token is ops-only).
-  const plans = allowedPlans();
-  if (plans && user && !sharedOk) {
-    if (!dbEnabled()) return c.json({ error: "plan check unavailable" }, 503);
-    const profile = await getProfile(user.userId).catch(() => null);
-    if (!profile || !plans.has(profile.plan)) {
-      return c.json({ error: "Your plan doesn't include the Celiador agent." }, 403);
-    }
-  }
-
   let body: { messages?: unknown; max_tokens?: unknown };
   try {
     body = await c.req.json();
@@ -61,11 +36,12 @@ export async function agentProxy(c: Context) {
   const invalid = validateMessages(body.messages);
   if (invalid) return c.json({ error: invalid }, 400);
 
-  const slot = agentQuota.acquire(quotaKey);
-  if ("error" in slot) {
-    c.header("Retry-After", String(slot.retryAfter));
-    return c.json({ error: slot.error }, 429);
+  const auth = await authorizeAgent(c);
+  if (!auth.ok) {
+    if (auth.retryAfter !== undefined) c.header("Retry-After", String(auth.retryAfter));
+    return c.json({ error: auth.error }, auth.status);
   }
+  const { quotaKey, release } = auth;
 
   const request = {
     model: AGENT_MODEL,
@@ -101,7 +77,7 @@ export async function agentProxy(c: Context) {
       }
     } finally {
       agentQuota.record(quotaKey, inputTokens, outputTokens);
-      slot.release();
+      release();
     }
   });
 }

@@ -4,6 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { VERSION } from "./config";
 import { authMode, type AppEnv } from "./auth";
 import { agentProxy } from "./anthropic";
+import { anthropicGateway, anthropicModels } from "./gateway";
 import { pushRoutes } from "./push/routes";
 import { sessionRoutes } from "./sessions/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
@@ -45,6 +46,17 @@ export function createApp(): Hono<AppEnv> {
     bodyLimit({ maxSize: 8 * 1024 * 1024, onError: (c) => c.json({ error: "request too large" }, 413) }),
     agentProxy
   );
+
+  // First-party Anthropic-compatible gateway (SSE). Forwards the caller's own
+  // system prompt + tool schemas (the Claude Agent SDK's full toolset) while the
+  // daemon keeps key custody, model choice, token caps, auth and quota. A larger
+  // body cap than the locked proxy: SDK turns carry big tool_result payloads.
+  app.post(
+    "/api/anthropic/v1/messages",
+    bodyLimit({ maxSize: 32 * 1024 * 1024, onError: (c) => c.json({ error: "request too large" }, 413) }),
+    anthropicGateway
+  );
+  app.get("/api/anthropic/v1/models", anthropicModels);
 
   // Push registration + APNs.
   app.route("/api/push", pushRoutes());
