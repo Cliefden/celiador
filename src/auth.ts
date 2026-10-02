@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Context, MiddlewareHandler } from "hono";
+import { deletedUsers } from "./deleted-users";
 
 /**
  * Three auth modes, decided by environment (unchanged from the old daemon so
@@ -83,6 +84,10 @@ export function authenticateToken(token: string | null): AuthResult | null {
 export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   const user = authenticateToken(bearerFrom(c));
   if (!user) return c.json({ error: "unauthorized" }, 401);
+  // Block deleted users even if their JWT is still valid
+  if (deletedUsers.isDeleted(user.userId)) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
   c.set("user", user);
   await next();
 };

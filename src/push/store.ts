@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { deletedUsers } from "../deleted-users";
 
 /** An APNs device token for one of a user's devices. */
 export interface DeviceToken {
@@ -94,11 +95,30 @@ export class PushStores {
   constructor(private root: string) {}
 
   for(userId: string): PushStore {
+    // Never create stores for deleted users
+    if (deletedUsers.isDeleted(userId)) {
+      throw new Error("user deleted");
+    }
     let store = this.stores.get(userId);
     if (!store) {
       store = new PushStore(path.join(this.root, "data", "push", `${userId}.json`));
       this.stores.set(userId, store);
     }
     return store;
+  }
+
+  /**
+   * Evict a user's push store from the cache and delete their push file.
+   * MUST be called before deleting the user to prevent mutations from
+   * recreating the file.
+   */
+  evict(userId: string): void {
+    this.stores.delete(userId);
+    const file = path.join(this.root, "data", "push", `${userId}.json`);
+    try {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch (err) {
+      console.error(`[PushStores] failed to delete push file for ${userId}:`, err);
+    }
   }
 }
