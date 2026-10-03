@@ -47,7 +47,9 @@ function validRunnerEvent(raw: unknown): raw is SessionEventInput {
     case "toolResult":
       return str(e.callId, 200) && typeof e.ok === "boolean";
     case "approval":
-      return str(e.requestId, 200) && e.approvalKind === "write_file" && str(e.path, 4096) && optStr(e.preview);
+      // approvalKind is the tool kind/name (write_file, edit, create, bash, fetch, …).
+      // path/title/preview are optional context (bash has no path, say).
+      return str(e.requestId, 200) && str(e.approvalKind, 200) && optStr(e.title, 400) && optStr(e.path, 4096) && optStr(e.preview);
     case "question":
       return (
         str(e.requestId, 200) &&

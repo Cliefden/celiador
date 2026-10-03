@@ -56,7 +56,7 @@ export type SessionEvent =
   | { seq: number; at: string; kind: "message"; role: "user" | "assistant"; text: string }
   | { seq: number; at: string; kind: "tool"; callId: string; name: string; input: unknown }
   | { seq: number; at: string; kind: "toolResult"; callId: string; ok: boolean }
-  | { seq: number; at: string; kind: "approval"; requestId: string; approvalKind: "write_file"; path: string; preview?: string }
+  | { seq: number; at: string; kind: "approval"; requestId: string; approvalKind: string; title?: string; path?: string; preview?: string }
   | { seq: number; at: string; kind: "question"; requestId: string; prompt: string; choices?: string[] }
   | { seq: number; at: string; kind: "diff"; path: string; patch: string }
   | { seq: number; at: string; kind: "state"; state: SessionState }
