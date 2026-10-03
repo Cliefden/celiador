@@ -341,6 +341,27 @@ final class Api {
         ).session
     }
 
+    /// Start a server-side (cloud) run: the daemon clones `repoURL` and runs the agent
+    /// itself — no desktop needed. Returns the created session to watch.
+    @discardableResult
+    func startServerRun(repoURL: String, branch: String?, prompt: String) async throws -> Session {
+        struct Body: Encodable {
+            let origin = "phone"
+            let runner = "server"
+            let title: String
+            let prompt: String
+            let repo: Repo
+            struct Repo: Encodable { let url: String; let branch: String? }
+        }
+        let title = String(prompt.prefix(80))
+        return try await request(
+            SessionEnvelope.self,
+            path: "api/sessions",
+            method: "POST",
+            body: Body(title: title, prompt: prompt, repo: .init(url: repoURL, branch: branch))
+        ).session
+    }
+
     /// Send a follow-up instruction to the runner (409 if no runner is attached).
     func sendMessage(_ id: String, text: String) async throws {
         _ = try await request(

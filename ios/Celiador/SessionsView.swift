@@ -7,6 +7,7 @@ struct SessionsView: View {
     @State private var actionError: String?
     @State private var showAccount = false
     @State private var showHistory = false
+    @State private var showNewRun = false
 
     private var needsYou: [Session] { sorted(model.sessions.filter { $0.state == .awaiting || $0.state == .error }) }
     private var working: [Session] { sorted(model.sessions.filter { $0.state == .running }) }
@@ -34,7 +35,7 @@ struct SessionsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("No sessions yet.")
                         .foregroundStyle(Theme.ink)
-                    Text("Start a task in the Celiador editor — it'll appear here so you can watch it work and approve changes from your phone.")
+                    Text("Start a task in the Celiador editor, or tap + to run one in the cloud. It'll appear here so you can watch it work and approve changes from your phone.")
                         .font(.footnote)
                         .foregroundStyle(Theme.dim)
                 }
@@ -52,12 +53,17 @@ struct SessionsView: View {
                     .accessibilityLabel("Account")
             }
             ToolbarItem(placement: .topBarTrailing) {
+                Button { showNewRun = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New Cloud Run")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
                     .accessibilityLabel("History")
             }
         }
         .sheet(isPresented: $showAccount) { AccountView() }
         .sheet(isPresented: $showHistory) { HistoryView() }
+        .sheet(isPresented: $showNewRun) { NewRunView() }
     }
 
     @ViewBuilder
@@ -147,5 +153,82 @@ struct SessionRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// Start a server-side (cloud) run from the phone — the daemon clones a repo and runs
+/// the agent itself, no desktop needed. On success it navigates straight into the run.
+private struct NewRunView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var repoURL = ""
+    @State private var branch = ""
+    @State private var prompt = ""
+    @State private var starting = false
+    @State private var error: String?
+
+    private var canStart: Bool {
+        !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (repoURL.hasPrefix("http://") || repoURL.hasPrefix("https://"))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Repository") {
+                    TextField("https://github.com/owner/repo.git", text: $repoURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    TextField("Branch (optional)", text: $branch)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+                Section("Task") {
+                    TextField("What should the agent do?", text: $prompt, axis: .vertical)
+                        .lineLimit(3...8)
+                }
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(Theme.red)
+                }
+                Section {
+                    Text("Runs on Celiador's servers — no desktop needed. You'll watch it here and get a diff back.")
+                        .font(.footnote).foregroundStyle(Theme.dim)
+                }
+            }
+            .navigationTitle("New Cloud Run")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if starting {
+                        ProgressView()
+                    } else {
+                        Button("Start") { Task { await start() } }
+                            .disabled(!canStart)
+                    }
+                }
+            }
+        }
+    }
+
+    private func start() async {
+        starting = true
+        error = nil
+        do {
+            let session = try await Api.shared.startServerRun(
+                repoURL: repoURL.trimmingCharacters(in: .whitespaces),
+                branch: branch.trimmingCharacters(in: .whitespaces).isEmpty ? nil : branch.trimmingCharacters(in: .whitespaces),
+                prompt: prompt
+            )
+            await model.refresh()
+            dismiss()
+            model.open(sessionId: session.id)
+        } catch {
+            self.error = (error as NSError).localizedDescription
+        }
+        starting = false
     }
 }
