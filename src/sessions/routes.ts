@@ -5,8 +5,8 @@ import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
 import { sessionStores } from "./instance";
 import { sessionBus } from "./bus";
-import { notifySession } from "./notify";
-import { persistSession } from "./persist";
+import { publishSessionEvent } from "./publish";
+import { startServerRun } from "../runner/manager";
 import type { SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
 
 /** How often to send an SSE heartbeat so proxies/clients keep the stream open. */
@@ -80,32 +80,39 @@ export function sessionRoutes(): Hono<AppEnv> {
 
   app.use("*", requireUser);
 
-  /** Append, fan out to watchers, and push to APNs — all best-effort. */
-  const publish = (userId: string, sessionId: string, input: SessionEventInput): SessionEvent | undefined => {
-    const store = stores.for(userId);
-    const event = store.append(sessionId, input);
-    if (event) {
-      sessionBus.publishEvent(sessionId, event);
-      const session = store.get(sessionId);
-      if (session) {
-        notifySession(userId, session, event).catch((err) =>
-          console.error("[notify] push failed:", err instanceof Error ? err.message : err)
-        );
-        persistSession(userId, session, event); // durable mirror → Supabase (no-op if unconfigured; serialized, never throws)
-      }
-    }
-    return event;
-  };
+  /** Append, fan out to watchers, and push to APNs — all best-effort (shared with the server runner). */
+  const publish = (userId: string, sessionId: string, input: SessionEventInput): SessionEvent | undefined =>
+    publishSessionEvent(userId, sessionId, input);
 
   // ---- Watcher: session CRUD ------------------------------------------------
 
   app.post("/", async (c) => {
-    const { title, origin, runner } = await c.req.json().catch(() => ({}));
-    const session = stores.for(c.get("user").userId).create({
-      title,
+    const { title, origin, runner, repo, prompt } = await c.req.json().catch(() => ({}));
+    const userId = c.get("user").userId;
+    const isServer = runner === "server";
+
+    // A server run executes on the daemon (no desktop needed) — it must name a repo
+    // and a prompt. Validate before creating the session so a bad request doesn't
+    // leave an orphaned, never-started session lying around.
+    const repoUrl = isServer ? (repo?.url as unknown) : undefined;
+    if (isServer && (typeof repoUrl !== "string" || !/^https?:\/\//.test(repoUrl) || !str(prompt))) {
+      return c.json({ error: "a server run needs repo.url (http/https) and a prompt" }, 400);
+    }
+
+    const session = stores.for(userId).create({
+      title: title ?? (isServer ? prompt : undefined),
       origin: origin === "phone" ? "phone" : "editor",
-      runner: runner === "server" ? "server" : "editor",
+      runner: isServer ? "server" : "editor",
     });
+
+    if (isServer) {
+      startServerRun({
+        userId,
+        sessionId: session.id,
+        repo: { url: repoUrl as string, branch: typeof repo?.branch === "string" ? repo.branch : undefined },
+        prompt: prompt as string,
+      }).catch((err) => console.error("[runner] start failed:", err instanceof Error ? err.message : err));
+    }
     return c.json({ session });
   });
 
