@@ -55,3 +55,17 @@ export async function computeDiffs(dir: string): Promise<IFileDiff[]> {
 export async function removeWorkspace(userId: string, runId: string): Promise<void> {
   await fs.promises.rm(path.join(runsRoot(), userId, runId), { recursive: true, force: true }).catch(() => undefined);
 }
+
+/**
+ * Remove every run workspace. Safe to call at daemon boot: a fresh process has no
+ * in-flight runs, so anything under data/runs is an orphan left by a previous crash
+ * (normal completion cleans up in `executeServerRun`'s finally). Best-effort.
+ */
+export async function reapOrphanRuns(): Promise<void> {
+  await fs.promises.rm(runsRoot(), { recursive: true, force: true }).catch(() => undefined);
+}
+
+/** Remove all of a user's run workspaces (account deletion). Best-effort. */
+export async function purgeUserRuns(userId: string): Promise<void> {
+  await fs.promises.rm(path.join(runsRoot(), userId), { recursive: true, force: true }).catch(() => undefined);
+}

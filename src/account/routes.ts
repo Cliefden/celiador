@@ -5,6 +5,7 @@ import { authMode, requireUser } from "../auth";
 import { getPool } from "../db/pool";
 import { pushStores } from "../push/instance";
 import { sessionStores } from "../sessions/instance";
+import { purgeUserRuns } from "../runner/workspace";
 
 /**
  * Account self-service. `DELETE /api/account` permanently deletes the caller's
@@ -40,6 +41,7 @@ export function accountRoutes(): Hono<AppEnv> {
     }
     sessionStores.purge(userId);
     pushStores.purge(userId);
+    await purgeUserRuns(userId); // server-run workspaces (best-effort)
     return c.json({ ok: true });
   });
 

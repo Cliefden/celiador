@@ -4,8 +4,13 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app";
 import { HOST, PORT, VERSION } from "./config";
 import { assertAuthConfigured } from "./auth";
+import { reapOrphanRuns } from "./runner/workspace";
 
 assertAuthConfigured();
+
+// Clear any server-run workspaces left behind by a previous crash (a fresh process
+// has no in-flight runs, so anything under data/runs is an orphan).
+void reapOrphanRuns();
 
 const app = createApp();
 
