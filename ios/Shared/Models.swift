@@ -47,6 +47,7 @@ struct SessionEvent: Codable, Identifiable, Equatable {
     let callId: String?
     let name: String?
     let input: [String: String]?
+    let ok: Bool?
     let approvalKind: String?
     let title: String?
     let path: String?
@@ -62,7 +63,7 @@ struct SessionEvent: Codable, Identifiable, Equatable {
     var id: Int { seq }
 
     enum CodingKeys: String, CodingKey {
-        case seq, at, kind, text, role, callId, name, input, approvalKind, title
+        case seq, at, kind, text, role, callId, name, input, ok, approvalKind, title
         case path, preview, requestId, prompt, choices, patch, state, message, from
     }
 
@@ -76,6 +77,7 @@ struct SessionEvent: Codable, Identifiable, Equatable {
         callId = try? c.decodeIfPresent(String.self, forKey: .callId)
         name = try? c.decodeIfPresent(String.self, forKey: .name)
         input = (try? c.decodeIfPresent([String: String].self, forKey: .input)) ?? nil
+        ok = try? c.decodeIfPresent(Bool.self, forKey: .ok)
         approvalKind = try? c.decodeIfPresent(String.self, forKey: .approvalKind)
         title = try? c.decodeIfPresent(String.self, forKey: .title)
         path = try? c.decodeIfPresent(String.self, forKey: .path)

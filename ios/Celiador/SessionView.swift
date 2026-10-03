@@ -42,6 +42,8 @@ private final class SessionTranscript {
     private var stream: SessionEventStream?
     private var streamingId: Int?
     private var statusTask: Task<Void, Never>?
+    /// tool callId → transcript item id, so a toolResult can mark its tool line done.
+    private var toolItemByCallId: [String: Int] = [:]
 
     func start(sessionId: String, model: AppModel) {
         guard stream == nil else { return }
@@ -89,7 +91,15 @@ private final class SessionTranscript {
             }
         case "tool":
             items.append(.init(id: e.seq, role: .tool, text: "→ " + e.toolSummary))
+            if let cid = e.callId { toolItemByCallId[cid] = e.seq }
             streamingId = nil
+        case "toolResult":
+            // Mark the matching tool line done (✓ ok / ✗ failed).
+            if let cid = e.callId, let itemId = toolItemByCallId[cid],
+               let idx = items.firstIndex(where: { $0.id == itemId }) {
+                let mark = (e.ok ?? false) ? "  ✓" : "  ✗"
+                if !items[idx].text.hasSuffix(mark) { items[idx].text += mark }
+            }
         case "activity":
             liveLine = e.text ?? ""
             model?.noteActivity(sessionId: sessionId, text: liveLine)
