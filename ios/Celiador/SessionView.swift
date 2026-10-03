@@ -11,7 +11,10 @@ private struct TranscriptItem: Identifiable {
 
 private struct PendingApproval: Equatable {
     let requestId: String
-    let path: String
+    /// Tool kind/name the agent wants to run (write_file, edit, bash, fetch, …).
+    let kind: String
+    /// Human-readable description of what will happen.
+    let label: String
     let preview: String?
 }
 
@@ -91,10 +94,13 @@ private final class SessionTranscript {
             liveLine = e.text ?? ""
             model?.noteActivity(sessionId: sessionId, text: liveLine)
         case "approval":
+            let kind = e.approvalKind ?? "tool"
+            // Prefer the server's human-readable title; fall back to path (write/edit) or kind.
+            let label = e.title ?? e.path.map { "Write \($0)" } ?? "Run \(kind)"
             if let rid = e.requestId {
-                pendingApproval = PendingApproval(requestId: rid, path: e.path ?? "", preview: e.preview)
+                pendingApproval = PendingApproval(requestId: rid, kind: kind, label: label, preview: e.preview)
             }
-            items.append(.init(id: e.seq, role: .note, text: "Wants to write \(e.path ?? "a file")"))
+            items.append(.init(id: e.seq, role: .note, text: "Needs approval — \(label)"))
             streamingId = nil
         case "question":
             if let rid = e.requestId {
@@ -264,10 +270,10 @@ struct SessionView: View {
 
     private func approvalCard(_ approval: PendingApproval) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("APPROVE WRITE")
+            Text(approval.kind.replacingOccurrences(of: "_", with: " ").uppercased())
                 .font(.caption2.weight(.bold)).kerning(1)
                 .foregroundStyle(Theme.attention)
-            Text(approval.path)
+            Text(approval.label)
                 .font(.caption.monospaced())
                 .foregroundStyle(Theme.ink)
             if let preview = approval.preview, !preview.isEmpty {
