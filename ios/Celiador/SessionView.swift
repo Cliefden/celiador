@@ -9,6 +9,13 @@ private struct TranscriptItem: Identifiable {
     var text: String
 }
 
+/// One changed file produced during the run (for the Changes / git-review view).
+struct DiffFile: Identifiable, Equatable {
+    let id: Int
+    let path: String
+    let patch: String
+}
+
 private struct PendingApproval: Equatable {
     let requestId: String
     /// Tool kind/name the agent wants to run (write_file, edit, bash, fetch, …).
@@ -36,6 +43,8 @@ private final class SessionTranscript {
     var pendingApproval: PendingApproval?
     var pendingQuestion: PendingQuestion?
     var truncated = false
+    /// Every changed file the run has produced, for the Changes (git-review) view.
+    var diffs: [DiffFile] = []
 
     private var sessionId = ""
     private weak var model: AppModel?
@@ -120,6 +129,7 @@ private final class SessionTranscript {
         case "diff":
             let body = [e.path, e.patch].compactMap { $0 }.joined(separator: "\n")
             items.append(.init(id: e.seq, role: .diff, text: body))
+            diffs.append(DiffFile(id: e.seq, path: e.path ?? "(file)", patch: e.patch ?? ""))
             streamingId = nil
         case "error":
             items.append(.init(id: e.seq, role: .error, text: e.message ?? "Something went wrong."))
@@ -170,6 +180,7 @@ struct SessionView: View {
     @State private var transcript = SessionTranscript()
     @State private var composer = ""
     @State private var answerText = ""
+    @State private var showChanges = false
 
     private var title: String {
         model.sessions.first { $0.id == sessionId }?.title ?? "Session"
@@ -221,6 +232,14 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                if !transcript.diffs.isEmpty {
+                    Button { showChanges = true } label: {
+                        Label("\(transcript.diffs.count)", systemImage: "arrow.triangle.branch")
+                    }
+                    .accessibilityLabel("Changes")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 if transcript.state == .running {
                     Button(role: .destructive) { transcript.cancel() } label: {
                         Label("Stop", systemImage: "stop.circle")
@@ -228,6 +247,7 @@ struct SessionView: View {
                 }
             }
         }
+        .sheet(isPresented: $showChanges) { ChangesView(title: title, diffs: transcript.diffs) }
         .onAppear { transcript.start(sessionId: sessionId, model: model) }
         .onDisappear { transcript.stop() }
     }
