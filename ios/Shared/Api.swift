@@ -274,6 +274,13 @@ final class Api {
         Keychain.delete()
     }
 
+    /// Install a session handed over from the paired iPhone (WatchConnectivity). Lets
+    /// the watch app call the daemon without its own sign-in.
+    func importSession(_ s: AuthSession) {
+        session = s
+        Keychain.save(s)
+    }
+
     /// A non-expired access token, refreshing if needed — for callers that
     /// attach it manually (the SSE stream) instead of going through `request`.
     func validAccessToken() async throws -> String {

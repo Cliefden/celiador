@@ -24,6 +24,9 @@ final class WatchModel {
     var signedIn = true
 
     func boot() async {
+        // Receive the session handed over from the paired iPhone, then re-check.
+        WatchSync.shared.onSessionImported = { [weak self] in Task { await self?.refresh() } }
+        WatchSync.shared.start()
         _ = await Api.shared.restoreSession()
         await refresh()
     }

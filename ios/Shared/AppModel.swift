@@ -29,6 +29,9 @@ final class AppModel {
     private var pollTask: Task<Void, Never>?
 
     func boot() async {
+        #if os(iOS)
+        WatchSync.shared.start() // hand the session to a paired watch
+        #endif
         do {
             _ = try await Api.shared.loadConfig()
         } catch {
@@ -56,6 +59,9 @@ final class AppModel {
 
     func didSignIn() {
         email = Api.shared.session?.email
+        #if os(iOS)
+        WatchSync.shared.pushSession() // sync the new session to a paired watch
+        #endif
         phase = .signedIn
         #if os(iOS)
         PushManager.shared.requestAuthorization()

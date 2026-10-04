@@ -69,6 +69,7 @@ targets:
       - path: Shared/Models.swift
       - path: Shared/Events.swift
       - path: Shared/Theme.swift
+      - path: Shared/WatchSync.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.celiador.companion.watchkitapp
