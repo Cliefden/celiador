@@ -1,0 +1,40 @@
+name: CI
+
+# Validate the daemon on every push and pull request: typecheck + the offline
+# smoke test (gateway + session relay + server runner, no network / no real key).
+on:
+  push:
+  pull_request:
+
+# One in-flight run per ref; a push and its PR share a group so we don't run twice.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck + smoke
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lower bound from package.json `engines` plus the version used in dev.
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # The server-runner smoke clones a local repo over file:// — recent git
+      # refuses that by default, so opt in explicitly for the CI runner.
+      - name: Allow local-path git clones
+        run: git config --global protocol.file.allow always
+
+      - run: npm run smoke
