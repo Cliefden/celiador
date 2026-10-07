@@ -12,77 +12,86 @@ struct LoginView: View {
     @State private var info: String?
 
     var body: some View {
-        VStack(spacing: 14) {
-            Spacer()
-            Text("Celiador")
-                .font(.system(size: 40, design: .serif).italic())
-                .foregroundStyle(Theme.celadonBright)
-            Text(isSignUp ? "Create your studio account." : "Sign in to your studio.")
-                .foregroundStyle(Theme.dim)
-                .padding(.bottom, 12)
+        ZStack {
+            CeliadorBackground()
+            ScrollView {
+                VStack(spacing: 14) {
+                    Spacer(minLength: 48)
+                    VStack(spacing: 8) {
+                        Wordmark(size: 46)
+                        Text(isSignUp ? "Create your studio account" : "Watch and steer your agents")
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.dim)
+                    }
+                    .padding(.bottom, 20)
 
-            TextField("Email", text: $email)
-                .textContentType(.emailAddress)
-                .keyboardType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .fieldStyle()
-            SecureField("Password", text: $password)
-                .textContentType(isSignUp ? .newPassword : .password)
-                .fieldStyle()
-                .onSubmit(submit)
+                    TextField("Email", text: $email)
+                        .textContentType(.emailAddress)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .fieldStyle()
+                    SecureField("Password", text: $password)
+                        .textContentType(isSignUp ? .newPassword : .password)
+                        .fieldStyle()
+                        .onSubmit(submit)
 
-            Button(action: submit) {
-                Text(busy ? "…" : isSignUp ? "Create account" : "Sign in")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
+                    Button(action: { Haptics.tap(); submit() }) {
+                        HStack(spacing: 8) {
+                            if busy { ProgressView().tint(Color(red: 0.04, green: 0.09, blue: 0.07)) }
+                            Text(busy ? "Signing in…" : isSignUp ? "Create account" : "Sign in")
+                        }
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(busy || email.isEmpty || password.isEmpty)
+                    .opacity(busy || email.isEmpty || password.isEmpty ? 0.6 : 1)
+                    .padding(.top, 2)
+
+                    Button(isSignUp ? "Have an account? Sign in" : "New here? Create an account") {
+                        Haptics.select()
+                        withAnimation(Theme.snappy) { isSignUp.toggle() }
+                        error = nil
+                    }
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Theme.celadonBright)
+                    .disabled(busy)
+                    .padding(.vertical, 2)
+
+                    HStack(spacing: 10) {
+                        Rectangle().fill(Theme.border).frame(height: 1)
+                        Text("or").font(.caption).foregroundStyle(Theme.faint)
+                        Rectangle().fill(Theme.border).frame(height: 1)
+                    }
                     .padding(.vertical, 6)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(busy || email.isEmpty || password.isEmpty)
 
-            Button(isSignUp ? "Have an account? Sign in" : "New here? Create an account") {
-                isSignUp.toggle()
-                error = nil
-            }
-            .font(.footnote)
-            .foregroundStyle(Theme.celadonBright)
-            .disabled(busy)
+                    Button(action: { Haptics.tap(); sendMagicLink() }) {
+                        Label("Email me a magic link", systemImage: "envelope")
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(busy || email.isEmpty)
 
-            HStack(spacing: 10) {
-                Rectangle().fill(Theme.border).frame(height: 1)
-                Text("or").font(.footnote).foregroundStyle(Theme.dim)
-                Rectangle().fill(Theme.border).frame(height: 1)
-            }
-            .padding(.vertical, 4)
+                    Button(action: { Haptics.tap(); continueWithGitHub() }) {
+                        Label("Continue with GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(busy)
 
-            Button(action: sendMagicLink) {
-                Text("Email me a magic link")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(Theme.red).multilineTextAlignment(.center)
+                            .transition(.opacity)
+                    }
+                    if let info {
+                        Text(info).font(.footnote).foregroundStyle(Theme.celadonBright).multilineTextAlignment(.center)
+                            .transition(.opacity)
+                    }
+                    Spacer(minLength: 32)
+                }
+                .padding(.horizontal, 28)
+                .animation(Theme.snappy, value: error)
+                .animation(Theme.snappy, value: info)
             }
-            .buttonStyle(.bordered)
-            .disabled(busy || email.isEmpty)
-
-            Button(action: continueWithGitHub) {
-                Label("Continue with GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            }
-            .buttonStyle(.bordered)
-            .disabled(busy)
-
-            if let error {
-                Text(error).font(.footnote).foregroundStyle(Theme.red).multilineTextAlignment(.center)
-            }
-            if let info {
-                Text(info).font(.footnote).foregroundStyle(Theme.celadonBright).multilineTextAlignment(.center)
-            }
-            Spacer()
-            Spacer()
+            .scrollDismissesKeyboard(.interactively)
         }
-        .padding(28)
-        .background(Theme.bg)
     }
 
     private func submit() {

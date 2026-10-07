@@ -1,0 +1,7 @@
+#include "Base.xcconfig"
+
+// STAGING — the always-on prod-like QA environment.
+BUNDLE_ID_SUFFIX = .staging
+APP_NAME = Celiador Staging
+URL_SCHEME = celiador-staging
+CELIADOR_DAEMON_URL = https:/$()/staging.celiador.ai

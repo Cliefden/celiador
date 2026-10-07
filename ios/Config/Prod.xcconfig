@@ -1,0 +1,9 @@
+#include "Base.xcconfig"
+
+// PROD — ships to the App Store. Inherits the Base defaults (empty suffix,
+// "Celiador", celiador scheme, https://celiador.ai) but is explicit here so the
+// three channels read symmetrically.
+BUNDLE_ID_SUFFIX =
+APP_NAME = Celiador
+URL_SCHEME = celiador
+CELIADOR_DAEMON_URL = https:/$()/celiador.ai

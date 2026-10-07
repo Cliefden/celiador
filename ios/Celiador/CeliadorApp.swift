@@ -64,35 +64,123 @@ struct ContentView: View {
         Group {
             switch model.phase {
             case .booting:
-                VStack(spacing: 16) {
-                    Text("Celiador")
-                        .font(.system(size: 34, design: .serif).italic())
-                        .foregroundStyle(Theme.celadonBright)
-                    ProgressView()
-                }
+                BootView()
             case .unreachable(let message):
-                VStack(spacing: 12) {
-                    Text("Celiador")
-                        .font(.system(size: 34, design: .serif).italic())
-                        .foregroundStyle(Theme.celadonBright)
-                    Text(message).foregroundStyle(Theme.dim).multilineTextAlignment(.center)
-                    Button("Retry") { Task { await model.boot() } }
-                        .buttonStyle(.bordered)
-                }
-                .padding(32)
+                UnreachableView(message: message) { Task { await model.boot() } }
             case .signedOut:
                 LoginView()
             case .signedIn:
-                NavigationStack(path: $model.path) {
-                    SessionsView()
-                        .navigationDestination(for: String.self) { id in
-                            SessionView(sessionId: id)
-                        }
-                }
+                signedInRoot
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.bg)
+        .background(CeliadorBackground())
+        .animation(Theme.gentle, value: phaseKey)
         .task { await model.boot() }
+    }
+
+    @ViewBuilder
+    private var signedInRoot: some View {
+        #if DEBUG
+        switch DemoData.mode {
+        case "session":
+            NavigationStack { SessionView(sessionId: "s1") }
+        case "changes":
+            ChangesView(title: "Refactor auth middleware", diffs: DemoData.diffs)
+        case "history":
+            NavigationStack { HistoryView() }
+        case "account":
+            AccountView()
+        case "explorer":
+            NavigationStack { ExplorerView() }
+        case "code":
+            NavigationStack { CodeFileView(sessionId: "s1", path: "src/auth/middleware.ts") }
+        default:
+            TabShell()
+        }
+        #else
+        TabShell()
+        #endif
+    }
+
+    // A stable key so phase changes cross-fade.
+    private var phaseKey: Int {
+        switch model.phase {
+        case .booting: return 0
+        case .unreachable: return 1
+        case .signedOut: return 2
+        case .signedIn: return 3
+        }
+    }
+}
+
+/// The signed-in IDE shell: Agents (cockpit) · Explorer (files) · Activity (history).
+struct TabShell: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        TabView(selection: $model.selectedTab) {
+            NavigationStack(path: $model.agentsPath) {
+                SessionsView()
+                    .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
+            }
+            .tabItem { Label("Agents", systemImage: "square.stack.3d.up.fill") }
+            .badge(model.needsYouCount)
+            .tag(AppModel.Tab.agents)
+
+            NavigationStack { ExplorerView() }
+                .tabItem { Label("Explorer", systemImage: "folder.fill") }
+                .tag(AppModel.Tab.explorer)
+
+            NavigationStack { HistoryView() }
+                .tabItem { Label("Activity", systemImage: "clock.fill") }
+                .tag(AppModel.Tab.activity)
+        }
+        .tint(Theme.celadonBright)
+    }
+}
+
+/// Branded launch state: the wordmark eases in over the signature glow.
+private struct BootView: View {
+    @State private var appear = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Wordmark(size: 42)
+                .scaleEffect(appear ? 1 : 0.92)
+                .opacity(appear ? 1 : 0)
+            ProgressView()
+                .tint(Theme.celadon)
+                .opacity(appear ? 1 : 0)
+        }
+        .onAppear { withAnimation(Theme.spring) { appear = true } }
+    }
+}
+
+private struct UnreachableView: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Wordmark(size: 38)
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(Theme.attention)
+                .padding(.top, 4)
+            Text("Can't reach Celiador")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Theme.ink)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(Theme.dim)
+                .multilineTextAlignment(.center)
+            Button("Try again") { Haptics.tap(); retry() }
+                .buttonStyle(PrimaryButtonStyle())
+                .frame(maxWidth: 220)
+                .padding(.top, 8)
+        }
+        .padding(32)
     }
 }

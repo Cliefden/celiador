@@ -13,48 +13,81 @@ struct AccountView: View {
     @State private var confirmingDelete = false
     @State private var deleting = false
 
+    private var initials: String {
+        let source = (profile?.displayName?.isEmpty == false ? profile?.displayName : profile?.email) ?? "?"
+        let parts = source.split(whereSeparator: { $0 == " " || $0 == "@" || $0 == "." })
+        let letters = parts.prefix(2).compactMap { $0.first }
+        return letters.isEmpty ? "?" : String(letters).uppercased()
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     if let profile {
-                        LabeledContent("Email", value: profile.email ?? "—")
-                        LabeledContent("Plan", value: profile.plan.capitalized)
+                        VStack(spacing: 10) {
+                            ZStack {
+                                Circle().fill(Theme.accentGradient).frame(width: 64, height: 64)
+                                    .shadow(color: Theme.celadon.opacity(0.4), radius: 10, y: 4)
+                                Text(initials)
+                                    .font(.title2.weight(.bold))
+                                    .foregroundStyle(Color(red: 0.04, green: 0.09, blue: 0.07))
+                            }
+                            Text(profile.displayName?.isEmpty == false ? profile.displayName! : (profile.email ?? "Your account"))
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                            if let email = profile.email {
+                                Text(email).font(.caption).foregroundStyle(Theme.dim)
+                            }
+                            StatusPill(text: "\(profile.plan) plan", color: Theme.celadonBright, icon: "sparkles")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .listRowBackground(Color.clear)
+                    } else if let error {
+                        Text(error).font(.footnote).foregroundStyle(Theme.red)
+                            .listRowBackground(Theme.panel)
+                    } else {
+                        HStack { Spacer(); ProgressView(); Spacer() }
+                            .listRowBackground(Color.clear)
+                    }
+                }
+
+                if profile != nil {
+                    Section {
                         HStack {
-                            Text("Name").foregroundStyle(Theme.ink)
+                            Text("Display name").foregroundStyle(Theme.ink)
                             Spacer()
-                            TextField("Display name", text: $name)
+                            TextField("Your name", text: $name)
                                 .multilineTextAlignment(.trailing)
                                 .foregroundStyle(Theme.dim)
                                 .submitLabel(.done)
                                 .onSubmit(save)
                         }
-                    } else if let error {
-                        Text(error).font(.footnote).foregroundStyle(Theme.red)
-                    } else {
-                        ProgressView()
+                    } header: {
+                        Text("Profile")
                     }
-                } header: {
-                    Text("Account")
+                    .listRowBackground(Theme.panel)
                 }
-                .listRowBackground(Theme.panel)
 
                 Section {
-                    Button("Sign out", role: .destructive) {
-                        model.signOut()
-                        dismiss()
+                    Button {
+                        Haptics.warning(); model.signOut(); dismiss()
+                    } label: {
+                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                            .foregroundStyle(Theme.ink)
                     }
                 }
                 .listRowBackground(Theme.panel)
 
                 Section {
                     Button(role: .destructive) {
-                        confirmingDelete = true
+                        Haptics.warning(); confirmingDelete = true
                     } label: {
                         if deleting {
                             HStack { ProgressView(); Text("Deleting account…") }
                         } else {
-                            Text("Delete account")
+                            Label("Delete account", systemImage: "trash")
                         }
                     }
                     .disabled(deleting)
@@ -68,7 +101,7 @@ struct AccountView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Theme.bg)
+            .background(CeliadorBackground())
             .navigationTitle("Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -99,6 +132,9 @@ struct AccountView: View {
     }
 
     private func load() async {
+        #if DEBUG
+        if DemoData.isActive { profile = DemoData.profile; name = DemoData.profile.displayName ?? ""; return }
+        #endif
         do {
             let p = try await Api.shared.getProfile()
             profile = p

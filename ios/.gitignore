@@ -14,4 +14,11 @@ Pods/
 
 # Secrets
 *.p8
+*.p12
 .env
+
+# Downloaded signing assets (provisioning profiles) — recreate with asc
+signing/
+
+# Build artifacts (archives, IPAs, export logs)
+.asc/artifacts/

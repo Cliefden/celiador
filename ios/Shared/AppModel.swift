@@ -12,10 +12,16 @@ final class AppModel {
         case signedIn
     }
 
+    /// The IDE shell's bottom tabs.
+    enum Tab: Hashable { case agents, explorer, activity }
+
     var phase: Phase = .booting
     var email: String?
     var sessions: [Session] = []
-    var path: [String] = [] // navigation: session ids
+    var selectedTab: Tab = .agents
+    var agentsPath: [String] = [] // Agents-tab navigation: session ids
+    /// The session whose workspace the Explorer tab is browsing (defaults to newest active).
+    var focusedSessionId: String?
 
     /// Latest live agent line per session, fed by the open session's event stream.
     /// Shown as an active session's subtitle; pruned when the session goes inactive.
@@ -29,6 +35,18 @@ final class AppModel {
     private var pollTask: Task<Void, Never>?
 
     func boot() async {
+        #if DEBUG
+        // UI showcase hook: seed a signed-in state offline. "empty" → no sessions;
+        // any other non-empty value → mock sessions (the specific screen is routed by ContentView).
+        if let demo = ProcessInfo.processInfo.environment["CELIADOR_UI_DEMO"], !demo.isEmpty {
+            if demo == "empty" { email = "demo@celiador.ai"; phase = .signedIn }
+            else { seedDemo() }
+            return
+        }
+        #endif
+        #if os(iOS)
+        WatchSync.shared.start() // hand the session to a paired watch
+        #endif
         do {
             _ = try await Api.shared.loadConfig()
         } catch {
@@ -54,8 +72,35 @@ final class AppModel {
         phase = .signedOut
     }
 
+    #if DEBUG
+    /// Populate a realistic session list for UI screenshots (no backend).
+    private func seedDemo() {
+        func iso(_ ago: TimeInterval) -> String {
+            ISO8601DateFormatter().string(from: Date().addingTimeInterval(-ago))
+        }
+        sessions = [
+            Session(id: "s1", title: "Refactor auth middleware", origin: "editor", runner: "editor", state: .awaiting, runnerConnected: true, lastSeq: 42, createdAt: iso(1800), updatedAt: iso(70)),
+            Session(id: "s2", title: "Fix flaky checkout test", origin: "editor", runner: "editor", state: .error, runnerConnected: false, lastSeq: 18, createdAt: iso(5400), updatedAt: iso(300)),
+            Session(id: "s3", title: "Add dark-mode toggle to settings", origin: "phone", runner: "server", state: .running, runnerConnected: true, lastSeq: 7, createdAt: iso(300), updatedAt: iso(9)),
+            Session(id: "s4", title: "Migrate API client to async/await", origin: "editor", runner: "editor", state: .running, runnerConnected: true, lastSeq: 55, createdAt: iso(720), updatedAt: iso(26)),
+            Session(id: "s5", title: "Update README and changelog", origin: "editor", runner: "editor", state: .done, runnerConnected: false, lastSeq: 90, createdAt: iso(90000), updatedAt: iso(7200)),
+            Session(id: "s6", title: "Investigate memory leak in widget", origin: "phone", runner: "server", state: .done, runnerConnected: false, lastSeq: 33, createdAt: iso(200000), updatedAt: iso(93000)),
+        ]
+        activity = [
+            "s3": "Editing SettingsView.swift — wiring the toggle binding",
+            "s4": "Running tests — 24 passed, 2 remaining",
+        ]
+        focusedSessionId = "s1"
+        email = "demo@celiador.ai"
+        phase = .signedIn
+    }
+    #endif
+
     func didSignIn() {
         email = Api.shared.session?.email
+        #if os(iOS)
+        WatchSync.shared.pushSession() // sync the new session to a paired watch
+        #endif
         phase = .signedIn
         #if os(iOS)
         PushManager.shared.requestAuthorization()
@@ -80,7 +125,8 @@ final class AppModel {
         pollTask?.cancel()
         sessions = []
         activity = [:]
-        path = []
+        agentsPath = []
+        focusedSessionId = nil
         phase = .signedOut
         SharedStore.writeSnapshot(.empty)
         WidgetCenter.shared.reloadAllTimelines()
@@ -101,7 +147,8 @@ final class AppModel {
     /// Navigate to a session (from a push tap or a widget deep link).
     func open(sessionId: String) {
         guard case .signedIn = phase else { return }
-        path = [sessionId]
+        selectedTab = .agents
+        agentsPath = [sessionId]
     }
 
     /// Fold a live line from the open session's stream into the list + widget.
@@ -118,14 +165,18 @@ final class AppModel {
             sessions = latest
             let active = Set(latest.filter { $0.state.isActive }.map(\.id))
             activity = activity.filter { active.contains($0.key) }
+            // Keep the Explorer's focused session valid; default to the newest active run.
+            if focusedSessionId == nil || !latest.contains(where: { $0.id == focusedSessionId }) {
+                focusedSessionId = latest.first(where: { $0.state.isActive })?.id ?? latest.first?.id
+            }
             publishSnapshot()
             #if os(iOS)
             LiveActivityManager.shared.reconcile(sessions: sessions, activity: activity)
             #endif
             #if DEBUG
             if ProcessInfo.processInfo.environment["CELIADOR_AUTOOPEN"] != nil,
-               path.isEmpty, let first = latest.first {
-                path = [first.id]
+               agentsPath.isEmpty, let first = latest.first {
+                agentsPath = [first.id]
             }
             #endif
         }
