@@ -109,7 +109,10 @@ export function validateGatewayRequest(body: {
   for (const m of messages) {
     if (!m || typeof m !== "object") return "bad message";
     const { role, content } = m as { role?: unknown; content?: unknown };
-    if (role !== "user" && role !== "assistant") return "bad message role";
+    // The Claude Agent SDK also sends `system`-role turns (e.g. reminders, compaction);
+    // the caller's system prompt is already forwarded in gateway mode, so allowing them
+    // widens nothing — upstream validates the conversation itself.
+    if (role !== "user" && role !== "assistant" && role !== "system") return `bad message role: ${String(role).slice(0, 32)}`;
     if (typeof content !== "string" && !Array.isArray(content)) return "bad message content";
     // Block types are intentionally NOT allowlisted here — the SDK legitimately
     // sends server_tool_use, web_search_tool_result, image, document, etc.
