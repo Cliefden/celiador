@@ -1,0 +1,8 @@
+#include "Base.xcconfig"
+
+// DEV — points at a local daemon (simulator). Overriddable at runtime with the
+// CELIADOR_URL env var in the Xcode scheme.
+BUNDLE_ID_SUFFIX = .dev
+APP_NAME = Celiador Dev
+URL_SCHEME = celiador-dev
+CELIADOR_DAEMON_URL = http:/$()/localhost:4661
