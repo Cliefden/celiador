@@ -104,7 +104,10 @@ async function main(): Promise<void> {
 	const kinds = runEvents.map((e) => e.kind);
 	ok("run sequence state→…→done", kinds[0] === "state" && kinds.includes("diff") && kinds[kinds.length - 1] === "done", kinds.join(">"));
 	ok("no run error", !runEvents.some((e) => e.kind === "error"), String(runEvents.find((e) => e.kind === "error")?.message ?? ""));
-	ok("workspace cleaned up", !fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-1")));
+	// The run workspace is intentionally RETAINED after the run (so a watcher can
+	// browse its files via GET /:id/files); it's reclaimed on session delete /
+	// account deletion / boot sweep, not in executeServerRun's finally.
+	ok("workspace retained after run", fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-1")));
 
 	console.log(`\n${pass} passed, ${fail} failed`);
 }
