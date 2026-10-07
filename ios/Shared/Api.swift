@@ -7,9 +7,20 @@ import Security
 final class Api {
     static let shared = Api()
 
-    let baseURL = URL(
-        string: ProcessInfo.processInfo.environment["CELIADOR_URL"] ?? "https://celiador.ai"
-    )!
+    /// Daemon base URL for this build. Resolution order:
+    ///   1. `CELIADOR_URL` env var (dev override, e.g. an Xcode scheme in the simulator)
+    ///   2. `CELIADOR_DAEMON_URL` from Info.plist (set per build channel via the xcconfig)
+    ///   3. prod fallback
+    /// So the Dev/Staging/Release configs point the app at the matching daemon
+    /// environment without a code change. See celiador-ios/Config/*.xcconfig.
+    let baseURL: URL = {
+        let fromEnv = ProcessInfo.processInfo.environment["CELIADOR_URL"]
+        let fromPlist = Bundle.main.object(forInfoDictionaryKey: "CELIADOR_DAEMON_URL") as? String
+        let raw = [fromEnv, fromPlist]
+            .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty } ?? "https://celiador.ai"
+        return URL(string: raw)!
+    }()
 
     private var config: DaemonConfig?
     private(set) var session: AuthSession?
@@ -297,10 +308,19 @@ final class Api {
         _ type: T.Type,
         path: String,
         method: String = "GET",
+        query: [URLQueryItem]? = nil,
         body: Encodable? = nil,
         retrying: Bool = false
     ) async throws -> T {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        let url: URL
+        if let query, !query.isEmpty,
+           var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) {
+            comps.queryItems = query
+            url = comps.url ?? baseURL.appendingPathComponent(path)
+        } else {
+            url = baseURL.appendingPathComponent(path)
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         if let token = session?.accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -313,7 +333,7 @@ final class Api {
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
         if http.statusCode == 401, !retrying {
             _ = try await refreshSession()
-            return try await self.request(type, path: path, method: method, body: body, retrying: true)
+            return try await self.request(type, path: path, method: method, query: query, body: body, retrying: true)
         }
         if http.statusCode >= 400 {
             throw ApiError(
@@ -405,6 +425,38 @@ final class Api {
 
     func deleteSession(_ id: String) async throws {
         _ = try await request(OkEnvelope.self, path: "api/sessions/\(id)", method: "DELETE")
+    }
+
+    // MARK: - Workspace files (the session's repo, via the daemon)
+
+    private struct FilesEnvelope: Codable { let entries: [FileEntry] }
+
+    /// List a directory in the session's workspace (`path` relative to the repo root).
+    func listFiles(sessionId: String, path: String = "") async throws -> [FileEntry] {
+        try await request(
+            FilesEnvelope.self,
+            path: "api/sessions/\(sessionId)/files",
+            query: path.isEmpty ? nil : [URLQueryItem(name: "path", value: path)]
+        ).entries
+    }
+
+    /// Read a UTF-8 file from the session's workspace.
+    func readFile(sessionId: String, path: String) async throws -> FileContent {
+        try await request(
+            FileContent.self,
+            path: "api/sessions/\(sessionId)/file",
+            query: [URLQueryItem(name: "path", value: path)]
+        )
+    }
+
+    /// Write a file in the session's workspace.
+    func writeFile(sessionId: String, path: String, content: String) async throws {
+        _ = try await request(
+            OkEnvelope.self,
+            path: "api/sessions/\(sessionId)/file",
+            method: "PUT",
+            body: ["path": path, "content": content]
+        )
     }
 
     // MARK: - App data (profile + chat history, via the daemon)
