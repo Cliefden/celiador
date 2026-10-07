@@ -171,6 +171,28 @@ private final class SessionTranscript {
     func cancel() {
         Task { try? await Api.shared.cancelSession(sessionId) }
     }
+
+    #if DEBUG
+    /// Seed a realistic transcript + pending approval for UI screenshots (no stream).
+    func seedDemo() {
+        state = .awaiting
+        runnerConnected = true
+        items = [
+            .init(id: 1, role: .user, text: "Refactor the auth middleware to pull the bearer token and 401 on a missing one."),
+            .init(id: 2, role: .assistant, text: "On it. I'll parse the Authorization header, strip the \"Bearer \" prefix, and return 401 when it's missing — before verifying the Supabase JWT."),
+            .init(id: 3, role: .tool, text: "→ read_file(src/auth/middleware.ts)  ✓"),
+            .init(id: 4, role: .tool, text: "→ edit(src/auth/middleware.ts)"),
+            .init(id: 5, role: .note, text: "Needs approval — Write src/auth/middleware.ts"),
+        ]
+        diffs = DemoData.diffs
+        pendingApproval = PendingApproval(
+            requestId: "r1",
+            kind: "write_file",
+            label: "Write src/auth/middleware.ts",
+            preview: "+  const token = req.headers.authorization?.replace(\"Bearer \", \"\")\n+  if (!token) return res.status(401).json({ error: \"missing token\" })"
+        )
+    }
+    #endif
 }
 
 struct SessionView: View {
@@ -181,6 +203,7 @@ struct SessionView: View {
     @State private var composer = ""
     @State private var answerText = ""
     @State private var showChanges = false
+    @State private var toast: String?
 
     private var title: String {
         model.sessions.first { $0.id == sessionId }?.title ?? "Session"
@@ -200,19 +223,21 @@ struct SessionView: View {
                         ForEach(transcript.items) { item in
                             row(item).id(item.id)
                         }
-                        if transcript.state == .running, !transcript.liveLine.isEmpty {
+                        if transcript.state == .running {
                             HStack(spacing: 8) {
-                                ProgressView().controlSize(.mini)
-                                Text(transcript.liveLine)
+                                TypingDots()
+                                Text(transcript.liveLine.isEmpty ? "Working…" : transcript.liveLine)
                                     .font(.caption)
                                     .foregroundStyle(Theme.dim)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
+                            .padding(.top, 2)
                             .id(-1)
                         }
                     }
                     .padding(16)
+                    .animation(Theme.spring, value: transcript.items.count)
                 }
                 .onChange(of: transcript.items.count) {
                     withAnimation { proxy.scrollTo(transcript.items.last?.id ?? -1, anchor: .bottom) }
@@ -227,7 +252,8 @@ struct SessionView: View {
             }
             composerBar
         }
-        .background(Theme.bg)
+        .background(CeliadorBackground())
+        .toast($toast)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -241,14 +267,19 @@ struct SessionView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 if transcript.state == .running {
-                    Button(role: .destructive) { transcript.cancel() } label: {
+                    Button(role: .destructive) { Haptics.warning(); transcript.cancel(); toast = "Stopping…" } label: {
                         Label("Stop", systemImage: "stop.circle")
                     }
                 }
             }
         }
         .sheet(isPresented: $showChanges) { ChangesView(title: title, diffs: transcript.diffs) }
-        .onAppear { transcript.start(sessionId: sessionId, model: model) }
+        .onAppear {
+            #if DEBUG
+            if DemoData.isActive { transcript.seedDemo(); return }
+            #endif
+            transcript.start(sessionId: sessionId, model: model)
+        }
         .onDisappear { transcript.stop() }
     }
 
@@ -261,48 +292,64 @@ struct SessionView: View {
             Text(item.text)
                 .font(.callout)
                 .foregroundStyle(Theme.ink)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(Theme.panel)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(
+                    LinearGradient(colors: [Theme.celadon.opacity(0.28), Theme.celadon.opacity(0.18)],
+                                   startPoint: .top, endPoint: .bottom),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                )
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.celadon.opacity(0.35), lineWidth: 1))
                 .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.leading, 40)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
         case .assistant:
             Text(item.text)
                 .font(.callout)
                 .foregroundStyle(Theme.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 24)
         case .tool:
-            Text(item.text)
-                .font(.caption.monospaced())
-                .foregroundStyle(Theme.celadonBright)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                Image(systemName: "wrench.and.screwdriver.fill").font(.system(size: 9))
+                Text(item.text.replacingOccurrences(of: "→ ", with: ""))
+                    .font(.caption.monospaced())
+            }
+            .foregroundStyle(Theme.celadonBright)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Theme.celadon.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .note:
-            Text(item.text)
-                .font(.caption)
+            Label(item.text, systemImage: "hand.raised.fill")
+                .font(.caption.weight(.medium))
                 .foregroundStyle(Theme.attention)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .diff:
             Text(item.text)
                 .font(.caption2.monospaced())
                 .foregroundStyle(Theme.dim)
-                .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.panel)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .elevatedCard(cornerRadius: 10, padding: 10)
         case .error:
-            Text(item.text)
+            Label(item.text, systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote)
                 .foregroundStyle(Theme.red)
+                .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.red.opacity(0.3), lineWidth: 1))
         }
     }
 
     // MARK: - Steering surfaces
 
     private func approvalCard(_ approval: PendingApproval) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(approval.kind.replacingOccurrences(of: "_", with: " ").uppercased())
-                .font(.caption2.weight(.bold)).kerning(1)
-                .foregroundStyle(Theme.attention)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                StatusPill(text: approval.kind.replacingOccurrences(of: "_", with: " "),
+                           color: Theme.attention, icon: "hand.raised.fill")
+                Text("needs your approval")
+                    .font(.caption).foregroundStyle(Theme.dim)
+            }
             Text(approval.label)
                 .font(.caption.monospaced())
                 .foregroundStyle(Theme.ink)
@@ -311,67 +358,111 @@ struct SessionView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(Theme.dim)
                     .lineLimit(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Theme.bgDeep, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             HStack(spacing: 10) {
-                Button { transcript.resolve(true) } label: {
-                    Label("Allow", systemImage: "checkmark").frame(maxWidth: .infinity)
+                Button {
+                    Haptics.success(); transcript.resolve(true); toast = "Approved"
+                } label: {
+                    Label("Allow", systemImage: "checkmark")
                 }
-                .buttonStyle(.borderedProminent).tint(Theme.celadon)
-                Button(role: .destructive) { transcript.resolve(false) } label: {
-                    Label("Deny", systemImage: "xmark").frame(maxWidth: .infinity)
+                .buttonStyle(PrimaryButtonStyle())
+                Button {
+                    Haptics.warning(); transcript.resolve(false); toast = "Denied"
+                } label: {
+                    Label("Deny", systemImage: "xmark")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(GhostButtonStyle(tint: Theme.red))
             }
         }
-        .padding(14)
-        .background(Theme.attention.opacity(0.08))
-        .overlay(Rectangle().frame(height: 1).foregroundStyle(Theme.border), alignment: .top)
+        .padding(16)
+        .background(.ultraThinMaterial)
+        .overlay(LinearGradient(colors: [Theme.attention, Theme.attention.opacity(0.4)], startPoint: .leading, endPoint: .trailing)
+            .frame(height: 2), alignment: .top)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func questionCard(_ question: PendingQuestion) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("The agent is asking", systemImage: "questionmark.bubble.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.attention)
             Text(question.prompt)
                 .font(.subheadline)
                 .foregroundStyle(Theme.ink)
             HStack(spacing: 8) {
                 TextField("Answer…", text: $answerText, axis: .vertical)
                     .lineLimit(1...4)
-                    .textFieldStyle(.roundedBorder)
-                Button {
-                    transcript.answer(answerText)
-                    answerText = ""
-                } label: {
-                    Image(systemName: "arrow.turn.down.left")
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(Theme.bgDeep, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+                SendButton(enabled: !answerText.trimmingCharacters(in: .whitespaces).isEmpty) {
+                    Haptics.tap(); transcript.answer(answerText); answerText = ""
                 }
-                .buttonStyle(.borderedProminent).tint(Theme.attention)
-                .disabled(answerText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .padding(14)
-        .background(Theme.attention.opacity(0.08))
-        .overlay(Rectangle().frame(height: 1).foregroundStyle(Theme.border), alignment: .top)
+        .padding(16)
+        .background(.ultraThinMaterial)
+        .overlay(LinearGradient(colors: [Theme.attention, Theme.attention.opacity(0.4)], startPoint: .leading, endPoint: .trailing)
+            .frame(height: 2), alignment: .top)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private var composerBar: some View {
         let offline = !transcript.runnerConnected
         return HStack(alignment: .bottom, spacing: 8) {
-            TextField(offline ? "Editor offline…" : "Send a follow-up…", text: $composer, axis: .vertical)
-                .lineLimit(1...4)
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Theme.panel)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
-                .disabled(offline)
-            Button {
-                transcript.send(composer)
-                composer = ""
-            } label: {
-                Image(systemName: "arrow.up").font(.body.weight(.bold))
+            HStack(spacing: 8) {
+                if offline { Image(systemName: "bolt.slash.fill").font(.caption).foregroundStyle(Theme.dim) }
+                TextField(offline ? "Editor offline…" : "Send a follow-up…", text: $composer, axis: .vertical)
+                    .lineLimit(1...4)
+                    .disabled(offline)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(offline || composer.trimmingCharacters(in: .whitespaces).isEmpty)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+
+            SendButton(enabled: !offline && !composer.trimmingCharacters(in: .whitespaces).isEmpty) {
+                Haptics.tap(); transcript.send(composer); composer = ""
+            }
         }
         .padding(12)
-        .background(Theme.bg)
+        .background(.ultraThinMaterial)
+    }
+}
+
+/// Circular gradient send button used by the composer and question card.
+private struct SendButton: View {
+    var enabled: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Color(red: 0.04, green: 0.09, blue: 0.07))
+                .frame(width: 38, height: 38)
+                .background(enabled ? AnyShapeStyle(Theme.accentGradient) : AnyShapeStyle(Theme.panelHi), in: Circle())
+        }
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
+        .animation(Theme.snappy, value: enabled)
+    }
+}
+
+/// Three dots that ripple while the agent is working.
+private struct TypingDots: View {
+    @State private var t = false
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle().fill(Theme.celadonBright)
+                    .frame(width: 5, height: 5)
+                    .opacity(t ? 1 : 0.3)
+                    .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(i) * 0.2), value: t)
+            }
+        }
+        .onAppear { t = true }
     }
 }

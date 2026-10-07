@@ -5,65 +5,121 @@ import SwiftUI
 struct SessionsView: View {
     @Environment(AppModel.self) private var model
     @State private var actionError: String?
+    @State private var toast: String?
+    @State private var query = ""
     @State private var showAccount = false
-    @State private var showHistory = false
     @State private var showNewRun = false
+    @State private var didLoad = false
 
-    private var needsYou: [Session] { sorted(model.sessions.filter { $0.state == .awaiting || $0.state == .error }) }
-    private var working: [Session] { sorted(model.sessions.filter { $0.state == .running }) }
-    private var recent: [Session] { sorted(model.sessions.filter { !$0.state.isActive && $0.state != .error }) }
-
-    private func sorted(_ items: [Session]) -> [Session] {
-        items.sorted { $0.updatedAt > $1.updatedAt } // ISO8601 sorts lexically
+    private func match(_ items: [Session]) -> [Session] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let filtered = q.isEmpty ? items : items.filter { $0.title.localizedCaseInsensitiveContains(q) }
+        return filtered.sorted { $0.updatedAt > $1.updatedAt } // ISO8601 sorts lexically
     }
 
+    private var needsYou: [Session] { match(model.sessions.filter { $0.state == .awaiting || $0.state == .error }) }
+    private var working: [Session] { match(model.sessions.filter { $0.state == .running }) }
+    private var recent: [Session] { match(model.sessions.filter { !$0.state.isActive && $0.state != .error }) }
+
+    private var isEmpty: Bool { model.sessions.isEmpty }
+    private var noMatches: Bool { !isEmpty && needsYou.isEmpty && working.isEmpty && recent.isEmpty }
+
     var body: some View {
+        ZStack {
+            CeliadorBackground()
+            content
+        }
+        .toolbar {
+            ToolbarItem(placement: .principal) { Wordmark(size: 19, glow: false) }
+            ToolbarItem(placement: .topBarLeading) {
+                Button { Haptics.tap(); showAccount = true } label: { Image(systemName: "person.circle") }
+                    .accessibilityLabel("Account")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { Haptics.tap(); showNewRun = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New Cloud Run")
+            }
+        }
+        .toast($toast)
+        .sheet(isPresented: $showAccount) { AccountView() }
+        .sheet(isPresented: $showNewRun) { NewRunView() }
+        .task {
+            await model.refresh()
+            withAnimation(Theme.gentle) { didLoad = true }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if !didLoad && isEmpty {
+            skeleton
+        } else if isEmpty {
+            EmptyStateView(
+                icon: "sparkles",
+                title: "No runs yet",
+                message: "Kick off a task in the Celiador editor, or start one in the cloud. It shows up here so you can watch it work and approve changes from your phone.",
+                actionTitle: "Start a cloud run",
+                action: { showNewRun = true }
+            )
+        } else {
+            list
+        }
+    }
+
+    private var workingCount: Int { model.sessions.filter { $0.state == .running }.count }
+
+    private var list: some View {
         List {
+            if workingCount > 0 || model.needsYouCount > 0 {
+                HStack(spacing: 8) {
+                    if workingCount > 0 {
+                        StatusPill(text: "\(workingCount) working", color: Theme.celadonBright, icon: "bolt.fill")
+                    }
+                    if model.needsYouCount > 0 {
+                        StatusPill(text: "\(model.needsYouCount) need you", color: Theme.attention, icon: "hand.raised.fill")
+                    }
+                    Spacer()
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 4, trailing: 8))
+            }
+
             if let actionError {
                 Text(actionError)
-                    .font(.footnote)
-                    .foregroundStyle(Theme.red)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                    .font(.footnote).foregroundStyle(Theme.red)
+                    .listRowBackground(Color.clear).listRowSeparator(.hidden)
             }
 
             section("Needs you", needsYou, accent: Theme.attention)
             section("Working", working, accent: Theme.celadonBright)
             section("Recent", recent, accent: Theme.dim)
 
-            if model.sessions.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("No sessions yet.")
-                        .foregroundStyle(Theme.ink)
-                    Text("Start a task in the Celiador editor, or tap + to run one in the cloud. It'll appear here so you can watch it work and approve changes from your phone.")
-                        .font(.footnote)
-                        .foregroundStyle(Theme.dim)
-                }
-                .listRowBackground(Color.clear)
+            if noMatches {
+                Text("No sessions match “\(query)”.")
+                    .font(.footnote).foregroundStyle(Theme.dim)
+                    .listRowBackground(Color.clear)
             }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(Theme.bg)
+        .animation(Theme.spring, value: model.sessions.map(\.id))
         .refreshable { await model.refresh() }
-        .navigationTitle("Celiador")
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { showAccount = true } label: { Image(systemName: "person.circle") }
-                    .accessibilityLabel("Account")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showNewRun = true } label: { Image(systemName: "plus") }
-                    .accessibilityLabel("New Cloud Run")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
-                    .accessibilityLabel("History")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search runs")
+    }
+
+    private var skeleton: some View {
+        List {
+            Section {
+                ForEach(0..<4, id: \.self) { _ in
+                    SkeletonRow().listRowBackground(Theme.panel)
+                }
+            } header: {
+                SkeletonBar(width: 90, height: 10)
             }
         }
-        .sheet(isPresented: $showAccount) { AccountView() }
-        .sheet(isPresented: $showHistory) { HistoryView() }
-        .sheet(isPresented: $showNewRun) { NewRunView() }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
     }
 
     @ViewBuilder
@@ -82,15 +138,17 @@ struct SessionsView: View {
                     }
                 }
             } header: {
-                HStack {
+                HStack(spacing: 8) {
+                    Circle().fill(accent).frame(width: 6, height: 6)
                     Text(title.uppercased())
-                        .font(.caption2.weight(.bold))
-                        .kerning(1)
+                        .font(.caption2.weight(.bold)).kerning(1)
                         .foregroundStyle(accent)
                     Spacer()
                     Text("\(items.count)")
-                        .font(.caption2.monospaced())
+                        .font(.caption2.monospaced().weight(.semibold))
                         .foregroundStyle(Theme.dim)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Theme.panelHi, in: Capsule())
                 }
             }
         }
@@ -98,12 +156,15 @@ struct SessionsView: View {
 
     private func delete(_ session: Session) {
         actionError = nil
+        Haptics.warning()
         Task {
             do {
                 try await Api.shared.deleteSession(session.id)
                 await model.refresh()
+                toast = "Run deleted"
             } catch {
                 actionError = error.localizedDescription
+                Haptics.error()
             }
         }
     }
@@ -115,10 +176,10 @@ struct SessionRow: View {
 
     private var dotColor: Color {
         switch session.state {
-        case .running: return Theme.celadon
+        case .running: return Theme.celadonBright
         case .awaiting: return Theme.attention
         case .error: return Theme.red
-        default: return Theme.border
+        default: return Theme.faint
         }
     }
 
@@ -131,28 +192,45 @@ struct SessionRow: View {
         session.state == .awaiting ? Theme.attention : Theme.dim
     }
 
+    private var editorOffline: Bool { !session.runnerConnected && session.state.isActive }
+
     var body: some View {
-        HStack(spacing: 12) {
-            Circle().fill(dotColor).frame(width: 9, height: 9)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.title)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
+        HStack(alignment: .top, spacing: 12) {
+            StatusDot(color: dotColor, pulsing: session.state == .running, size: 10)
+                .padding(.top, 5)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(session.title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(RelativeTime.short(session.updatedAt))
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(Theme.faint)
+                }
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(subtitleColor)
                     .lineLimit(1)
                     .truncationMode(.middle)
-            }
-            Spacer()
-            if session.state == .running {
-                ProgressView().controlSize(.mini)
-            } else if !session.runnerConnected, session.state.isActive {
-                Image(systemName: "bolt.slash").font(.caption2).foregroundStyle(Theme.dim)
+
+                if session.state == .awaiting || session.state == .error || editorOffline {
+                    HStack(spacing: 6) {
+                        if session.state == .awaiting {
+                            StatusPill(text: "needs you", color: Theme.attention, icon: "hand.raised.fill")
+                        } else if session.state == .error {
+                            StatusPill(text: "error", color: Theme.red, icon: "exclamationmark.triangle.fill")
+                        }
+                        if editorOffline {
+                            StatusPill(text: "editor offline", color: Theme.dim, icon: "bolt.slash.fill")
+                        }
+                    }
+                    .padding(.top, 2)
+                }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 5)
     }
 }
 

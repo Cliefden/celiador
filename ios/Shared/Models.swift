@@ -158,3 +158,23 @@ struct ChatDetail: Codable {
     let chat: ChatSummary
     let messages: [ChatMessage]
 }
+
+// MARK: - Workspace files (served by the daemon: /api/sessions/:id/files|file)
+
+/// One entry in a workspace directory listing.
+struct FileEntry: Codable, Identifiable, Hashable {
+    let name: String
+    let type: String // "file" | "dir"
+    let size: Int?
+
+    var id: String { name }
+    var isDir: Bool { type == "dir" }
+}
+
+/// A file's contents (GET /api/sessions/:id/file). `truncated` when it exceeded the cap.
+struct FileContent: Codable {
+    let path: String
+    let content: String
+    let encoding: String
+    let truncated: Bool
+}
