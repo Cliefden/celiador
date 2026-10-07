@@ -1,4 +1,4 @@
-import type { SessionCommand, SessionEvent } from "./types";
+import type { FsCommand, FsResult, SessionCommand, SessionEvent } from "./types";
 
 /**
  * In-process pub/sub for session relay, keyed by sessionId. No external broker —
@@ -70,8 +70,13 @@ interface Channel {
   pending: Set<string>;
 }
 
+/** Default time a phone file request waits for the runner to answer. */
+const FS_TIMEOUT_MS = 10_000;
+
 class SessionBus {
   private channels = new Map<string, Channel>();
+  /** Outstanding `fs.*` requests awaiting an `fs.result`, keyed by requestId. */
+  private fsWaiters = new Map<string, { resolve: (r: FsResult) => void; timer: ReturnType<typeof setTimeout> }>();
 
   private channel(sessionId: string): Channel {
     let ch = this.channels.get(sessionId);
@@ -159,6 +164,38 @@ class SessionBus {
     const ch = this.channels.get(sessionId);
     if (!ch || !ch.pending.has(requestId)) return false;
     ch.pending.delete(requestId);
+    return true;
+  }
+
+  /**
+   * Round-trip an `fs.*` command to the runner and resolve with its `fs.result`.
+   * Rejects with "runner offline" if no runner is attached, or "timeout" if the
+   * runner doesn't answer in time. The requestId on the command correlates the reply.
+   */
+  requestFs(sessionId: string, command: FsCommand, timeoutMs = FS_TIMEOUT_MS): Promise<FsResult> {
+    return new Promise<FsResult>((resolve, reject) => {
+      const runner = this.channels.get(sessionId)?.runner;
+      if (!runner) {
+        reject(new Error("runner offline"));
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.fsWaiters.delete(command.requestId);
+        reject(new Error("timeout"));
+      }, timeoutMs);
+      timer.unref?.();
+      this.fsWaiters.set(command.requestId, { resolve, timer });
+      runner.send(command);
+    });
+  }
+
+  /** Resolve an awaiting `fs.*` request with the runner's result; false if none. */
+  resolveFs(requestId: string, result: FsResult): boolean {
+    const waiter = this.fsWaiters.get(requestId);
+    if (!waiter) return false;
+    clearTimeout(waiter.timer);
+    this.fsWaiters.delete(requestId);
+    waiter.resolve(result);
     return true;
   }
 }

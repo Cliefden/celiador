@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -7,7 +8,9 @@ import { sessionStores } from "./instance";
 import { sessionBus } from "./bus";
 import { publishSessionEvent } from "./publish";
 import { startServerRun } from "../runner/manager";
-import type { SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
+import { removeWorkspace, workspaceDir } from "../runner/workspace";
+import { listDir, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
+import type { FsCommand, FsResult, FsResultInput, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
 
 /** How often to send an SSE heartbeat so proxies/clients keep the stream open. */
 const HEARTBEAT_MS = 15000;
@@ -69,6 +72,13 @@ function validRunnerEvent(raw: unknown): raw is SessionEventInput {
   }
 }
 
+/** An `fs.result` reply posted on the event channel (resolved, not logged). */
+function isFsResult(raw: unknown): raw is FsResultInput {
+  if (!raw || typeof raw !== "object") return false;
+  const e = raw as Record<string, unknown>;
+  return e.kind === "fs.result" && typeof e.requestId === "string" && typeof e.ok === "boolean";
+}
+
 /**
  * The agent-session relay. A *runner* (the editor) publishes events and receives
  * commands; *watchers* (the phone) observe the event log and send commands. The
@@ -125,7 +135,11 @@ export function sessionRoutes(): Hono<AppEnv> {
   });
 
   app.delete("/:id", (c) => {
-    const ok = stores.for(c.get("user").userId).delete(c.req.param("id"));
+    const userId = c.get("user").userId;
+    const id = c.req.param("id");
+    const ok = stores.for(userId).delete(id);
+    // Reclaim the server-run workspace we kept around for file browsing.
+    void removeWorkspace(userId, id);
     return c.json({ ok });
   });
 
@@ -264,10 +278,19 @@ export function sessionRoutes(): Hono<AppEnv> {
     const session = stores.for(userId).get(c.req.param("id"));
     if (!session) return c.json({ error: "not found" }, 404);
     const body = await c.req.json().catch(() => null);
-    const inputs: unknown[] = Array.isArray(body) ? body : body ? [body] : [];
-    if (inputs.length === 0) return c.json({ error: "no events" }, 400);
-    if (inputs.length > MAX_BATCH) return c.json({ error: "too many events" }, 413);
-    // Validate the whole batch first so a bad event can't leave it half-applied.
+    const raw: unknown[] = Array.isArray(body) ? body : body ? [body] : [];
+    if (raw.length === 0) return c.json({ error: "no events" }, 400);
+    if (raw.length > MAX_BATCH) return c.json({ error: "too many events" }, 413);
+
+    // `fs.result` frames are replies to the phone's file-browser requests — resolve
+    // the awaiting HTTP request and keep them OUT of the durable log / watcher stream.
+    const inputs: unknown[] = [];
+    for (const r of raw) {
+      if (isFsResult(r)) sessionBus.resolveFs(r.requestId, r);
+      else inputs.push(r);
+    }
+
+    // Validate the remaining batch first so a bad event can't leave it half-applied.
     if (!inputs.every(validRunnerEvent)) return c.json({ error: "bad event" }, 400);
 
     let lastSeq = session.lastSeq;
@@ -277,6 +300,92 @@ export function sessionRoutes(): Hono<AppEnv> {
     }
     return c.json({ ok: true, lastSeq });
   });
+
+  // ---- Watcher: workspace files --------------------------------------------
+  // One API for both runners: a server run is served from the daemon-owned clone;
+  // an editor run is round-tripped to the desktop over the relay (fs.* ⇄ fs.result).
+
+  app.get("/:id/files", async (c) => {
+    const userId = c.get("user").userId;
+    const session = stores.for(userId).get(c.req.param("id"));
+    if (!session) return c.json({ error: "not found" }, 404);
+    const rel = c.req.query("path") ?? "";
+    if (session.runner === "server") {
+      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      if (!abs) return c.json({ error: "bad path" }, 400);
+      try {
+        return c.json({ entries: await listDir(abs) });
+      } catch {
+        return c.json({ error: "not found" }, 404);
+      }
+    }
+    if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
+    return relayFs(c, session.id, { kind: "fs.list", requestId: randomUUID(), path: rel });
+  });
+
+  app.get("/:id/file", async (c) => {
+    const userId = c.get("user").userId;
+    const session = stores.for(userId).get(c.req.param("id"));
+    if (!session) return c.json({ error: "not found" }, 404);
+    const rel = c.req.query("path") ?? "";
+    if (!rel) return c.json({ error: "path is required" }, 400);
+    if (session.runner === "server") {
+      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      if (!abs) return c.json({ error: "bad path" }, 400);
+      try {
+        const r = await readFileCapped(abs);
+        if (r.binary) return c.json({ error: "binary file" }, 415);
+        return c.json({ path: rel, content: r.content, encoding: r.encoding, truncated: r.truncated });
+      } catch {
+        return c.json({ error: "not found" }, 404);
+      }
+    }
+    if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
+    return relayFs(c, session.id, { kind: "fs.read", requestId: randomUUID(), path: rel });
+  });
+
+  app.put("/:id/file", async (c) => {
+    const userId = c.get("user").userId;
+    const session = stores.for(userId).get(c.req.param("id"));
+    if (!session) return c.json({ error: "not found" }, 404);
+    const { path: rel, content } = await c.req.json().catch(() => ({}));
+    if (!str(rel, 4096)) return c.json({ error: "path is required" }, 400);
+    if (typeof content !== "string") return c.json({ error: "content is required" }, 400);
+    if (content.length > 2_000_000) return c.json({ error: "file too large" }, 413);
+    if (session.runner === "server") {
+      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      if (!abs) return c.json({ error: "bad path" }, 400);
+      try {
+        await writeFileSafe(abs, content);
+        return c.json({ ok: true });
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : "write failed" }, 500);
+      }
+    }
+    if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
+    return relayFs(c, session.id, { kind: "fs.write", requestId: randomUUID(), path: rel, content });
+  });
+
+  /** Round-trip an fs.* command to the editor runner and shape the HTTP reply. */
+  async function relayFs(c: Context<AppEnv>, sessionId: string, command: FsCommand) {
+    let result: FsResult;
+    try {
+      result = await sessionBus.requestFs(sessionId, command);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === "timeout") return c.json({ error: "the editor didn't respond" }, 504);
+      return c.json({ error: msg }, 502);
+    }
+    if (!result.ok) {
+      if (result.error === "binary file") return c.json({ error: result.error }, 415);
+      return c.json({ error: result.error ?? "failed" }, 400);
+    }
+    if (command.kind === "fs.list") return c.json({ entries: result.entries ?? [] });
+    if (command.kind === "fs.read") {
+      return c.json({ path: command.path, content: result.content ?? "", encoding: result.encoding ?? "utf8", truncated: !!result.truncated });
+    }
+    return c.json({ ok: true });
+  }
 
   /**
    * Shared approve/reject/answer path: idempotent resolve → relay to runner.

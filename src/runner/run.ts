@@ -1,6 +1,6 @@
 import { publishSessionEvent } from "../sessions/publish";
 import type { SessionEventInput } from "../sessions/types";
-import { cloneRepo, computeDiffs, removeWorkspace, workspaceDir } from "./workspace";
+import { cloneRepo, computeDiffs, workspaceDir } from "./workspace";
 import { placeholderAgent, type RunnerAgent } from "./agent";
 
 export interface IServerRunOptions {
@@ -49,7 +49,8 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<void> {
     publish({ kind: "done" });
   } catch (err) {
     publish({ kind: "error", message: err instanceof Error ? err.message : String(err) });
-  } finally {
-    await removeWorkspace(opts.userId, opts.sessionId);
   }
+  // The workspace is intentionally retained after the run so the phone can browse
+  // its files; it's reclaimed when the session is deleted (see DELETE /:id),
+  // on account deletion (purgeUserRuns), and swept at daemon boot (reapOrphanRuns).
 }
