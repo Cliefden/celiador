@@ -112,6 +112,19 @@ class AgentQuota {
     };
   }
 
+  /**
+   * Read-only view of a user's current daily usage, the active limits, and when
+   * the daily counters reset (next UTC midnight). Pure: unlike {@link acquire},
+   * it never mutates counters or inserts a user entry — safe for a `/api/me` poll.
+   */
+  snapshot(userId: string): { usage: DayUsage; limits: ReturnType<typeof limits>; resetsAt: string } {
+    const d = today();
+    if (this.usage.day !== d) this.usage = { day: d, users: {} };
+    const used = this.usage.users[userId] ?? { requests: 0, inputTokens: 0, outputTokens: 0 };
+    const resetsAt = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString();
+    return { usage: { ...used }, limits: limits(), resetsAt };
+  }
+
   /** Record token usage reported by the upstream stream. */
   record(userId: string, inputTokens: number, outputTokens: number): void {
     const used = this.day(userId);

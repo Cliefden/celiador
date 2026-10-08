@@ -8,6 +8,7 @@ import { anthropicGateway, anthropicModels } from "./gateway";
 import { pushRoutes } from "./push/routes";
 import { sessionRoutes } from "./sessions/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
+import { meRoutes } from "./me/routes";
 import { accountRoutes } from "./account/routes";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
@@ -67,6 +68,9 @@ export function createApp(): Hono<AppEnv> {
   // Daemon-mediated app data (profiles + durable chat history) for both clients.
   app.route("/api/profile", profileRoutes());
   app.route("/api/chats", chatRoutes());
+
+  // Signed-in account summary: identity, plan, and current agent usage vs. quota.
+  app.route("/api/me", meRoutes());
 
   // Account self-service (in-app account deletion — App Store 5.1.1(v)).
   app.route("/api/account", accountRoutes());
