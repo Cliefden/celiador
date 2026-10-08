@@ -28,13 +28,20 @@ const SYSTEM = [
 const MAX_PREFIX = 4000;
 const MAX_SUFFIX = 1000;
 
-/** Strip a leading/trailing Markdown code fence if the model added one anyway. */
-function stripFences(text: string): string {
+/**
+ * Clean the model's raw output into something safe to insert: drop a Markdown
+ * code fence if it added one, and stop at the first blank line (the Anthropic
+ * API rejects a whitespace-only stop sequence, so we truncate here instead of
+ * asking it to stop). Trailing whitespace is trimmed.
+ */
+function cleanCompletion(text: string): string {
   let out = text;
   const fence = /^```[^\n]*\n([\s\S]*?)\n?```$/;
   const match = out.match(fence);
   if (match) out = match[1]!;
-  return out;
+  const blank = out.indexOf("\n\n");
+  if (blank !== -1) out = out.slice(0, blank);
+  return out.replace(/\s+$/, "");
 }
 
 /**
@@ -80,7 +87,6 @@ export async function completeHandler(c: Context<AppEnv>) {
         max_tokens: COMPLETE_MAX_TOKENS,
         temperature: 0.2,
         system: SYSTEM,
-        stop_sequences: ["\n\n"],
         messages: [{ role: "user", content: prompt }],
       },
       { signal: ac.signal }
@@ -93,7 +99,7 @@ export async function completeHandler(c: Context<AppEnv>) {
       .map((block) => block.text)
       .join("");
 
-    return c.json({ completion: stripFences(text) });
+    return c.json({ completion: cleanCompletion(text) });
   } catch (err) {
     if (ac.signal.aborted) return c.json({ completion: "" });
     const messageText = err instanceof Error ? err.message : String(err);
