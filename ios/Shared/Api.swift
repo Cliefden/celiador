@@ -348,10 +348,17 @@ final class Api {
     private struct SessionsEnvelope: Codable { let sessions: [Session] }
     private struct SessionEnvelope: Codable { let session: Session }
     private struct OkEnvelope: Codable { let ok: Bool }
+    private struct WorkspacesEnvelope: Codable { let workspaces: [EditorWorkspace] }
 
     /// All of the user's agent sessions, newest first (the daemon sorts).
     func listSessions() async throws -> [Session] {
         try await request(SessionsEnvelope.self, path: "api/sessions").sessions
+    }
+
+    /// Repos currently open in the user's editor(s), for the "from your editor"
+    /// repo picker. Best-effort presence — empty when no editor is connected.
+    func editorWorkspaces() async throws -> [EditorWorkspace] {
+        try await request(WorkspacesEnvelope.self, path: "api/presence/workspaces").workspaces
     }
 
     func getSession(_ id: String) async throws -> Session {

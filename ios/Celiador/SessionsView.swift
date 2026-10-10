@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The list of agent sessions. Editor-started runs show up here to watch and
 /// steer; tapping one opens its live transcript.
@@ -244,6 +245,8 @@ private struct NewRunView: View {
     @State private var prompt = ""
     @State private var starting = false
     @State private var error: String?
+    @State private var recents = RepoRecents.list()
+    @State private var editorWorkspaces: [EditorWorkspace] = []
 
     private var canStart: Bool {
         !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -261,6 +264,75 @@ private struct NewRunView: View {
                     TextField("Branch (optional)", text: $branch)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    Button {
+                        if let pasted = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                           !pasted.isEmpty {
+                            repoURL = pasted
+                            Haptics.tap()
+                        }
+                    } label: {
+                        Label("Paste repo URL", systemImage: "doc.on.clipboard")
+                    }
+                    .disabled(!UIPasteboard.general.hasStrings)
+                }
+                if !editorWorkspaces.isEmpty {
+                    Section("From your editor") {
+                        ForEach(editorWorkspaces) { ws in
+                            Button {
+                                repoURL = ws.remoteUrl
+                                if let b = ws.branch, !b.isEmpty { branch = b }
+                                Haptics.tap()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "laptopcomputer")
+                                        .foregroundStyle(Theme.dim)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(ws.name)
+                                            .foregroundStyle(Theme.ink)
+                                            .lineLimit(1)
+                                        Text(RepoRecents.shortLabel(ws.remoteUrl))
+                                            .font(.caption)
+                                            .foregroundStyle(Theme.dim)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+                                    Spacer()
+                                    if ws.remoteUrl == repoURL.trimmingCharacters(in: .whitespaces) {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(Theme.celadonBright)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !recents.isEmpty {
+                    Section("Recent") {
+                        ForEach(recents, id: \.self) { url in
+                            Button {
+                                repoURL = url
+                                Haptics.tap()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                        .foregroundStyle(Theme.dim)
+                                    Text(RepoRecents.shortLabel(url))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .foregroundStyle(Theme.ink)
+                                    Spacer()
+                                    if url == repoURL.trimmingCharacters(in: .whitespaces) {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(Theme.celadonBright)
+                                    }
+                                }
+                            }
+                        }
+                        .onDelete { offsets in
+                            for i in offsets { RepoRecents.forget(recents[i]) }
+                            recents = RepoRecents.list()
+                        }
+                    }
                 }
                 Section("Task") {
                     TextField("What should the agent do?", text: $prompt, axis: .vertical)
@@ -276,6 +348,7 @@ private struct NewRunView: View {
             }
             .navigationTitle("New Cloud Run")
             .navigationBarTitleDisplayMode(.inline)
+            .task { editorWorkspaces = (try? await Api.shared.editorWorkspaces()) ?? [] }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -296,11 +369,13 @@ private struct NewRunView: View {
         starting = true
         error = nil
         do {
+            let repo = repoURL.trimmingCharacters(in: .whitespaces)
             let session = try await Api.shared.startServerRun(
-                repoURL: repoURL.trimmingCharacters(in: .whitespaces),
+                repoURL: repo,
                 branch: branch.trimmingCharacters(in: .whitespaces).isEmpty ? nil : branch.trimmingCharacters(in: .whitespaces),
                 prompt: prompt
             )
+            RepoRecents.remember(repo)
             await model.refresh()
             dismiss()
             model.open(sessionId: session.id)

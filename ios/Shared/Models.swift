@@ -35,6 +35,16 @@ struct Session: Codable, Identifiable, Equatable {
 
 typealias SessionSummary = Session
 
+/// A repo open in the user's editor(s) right now (daemon presence). Feeds the
+/// phone's "from your editor" repo picker; `remoteUrl` is a normalised https
+/// clone URL the cloud run can clone directly.
+struct EditorWorkspace: Codable, Identifiable, Hashable {
+    let name: String
+    let remoteUrl: String
+    let branch: String?
+    var id: String { remoteUrl }
+}
+
 /// One entry in a session's event log. The daemon sends a discriminated union
 /// keyed by `kind`; we decode leniently so an unknown kind never drops the frame.
 struct SessionEvent: Codable, Identifiable, Equatable {
