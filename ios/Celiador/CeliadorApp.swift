@@ -12,7 +12,7 @@ struct CeliadorApp: App {
                 .preferredColorScheme(.dark)
                 .tint(Theme.celadonBright)
                 .onOpenURL { url in
-                    guard url.scheme == "celiador" else { return }
+                    guard url.scheme == AppScheme.scheme else { return }
                     switch url.host {
                     case "auth-callback":
                         // Magic-link / GitHub OAuth return — tokens in the fragment.

@@ -154,8 +154,9 @@ final class Api {
 
     /// The deep link the magic-link + OAuth flows return to. Tokens arrive in the
     /// URL fragment (implicit flow); completed by `handleAuthCallback`. Must be in
-    /// GoTrue's `GOTRUE_URI_ALLOW_LIST`. Mirrors the editor's `celiador://…/auth-callback`.
-    static let authRedirect = "celiador://auth-callback"
+    /// GoTrue's `GOTRUE_URI_ALLOW_LIST`. Channel-aware (see `AppScheme`) so a Dev /
+    /// Staging build returns to its own app, not the prod `celiador://`.
+    static var authRedirect: String { AppScheme.authCallback }
 
     /// Email a one-tap magic link. Opening it returns to `authRedirect` with tokens.
     func sendMagicLink(email: String) async throws {

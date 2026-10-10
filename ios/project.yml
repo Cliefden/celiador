@@ -35,6 +35,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: $(APP_NAME)
         CELIADOR_DAEMON_URL: $(CELIADOR_DAEMON_URL)
+        CELIADOR_URL_SCHEME: $(URL_SCHEME)
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIUserInterfaceStyle: Dark
@@ -46,6 +47,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.celiador.companion$(BUNDLE_ID_SUFFIX)
+        # Dev uses automatic signing so Xcode manages the development cert +
+        # profile (App Groups + Push) for on-device runs; Staging/Release below
+        # override to manual distribution signing for the App Store.
+        CODE_SIGN_STYLE: Automatic
         # aps-environment: Dev keeps development; Staging/Release use production
         # (distribution profiles authorize production push only).
         CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.entitlements
@@ -65,7 +70,16 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
           PROVISIONING_PROFILE_SPECIFIER: Celiador App Store
-    scheme: {}
+    scheme:
+      # On a physical device `localhost` (the Dev xcconfig default) resolves to
+      # the phone, not the Mac — so Run against the live daemon. Api.swift reads
+      # CELIADOR_URL first (overrides CELIADOR_DAEMON_URL). NOTE: scheme env vars
+      # apply only when launched FROM Xcode; a standalone relaunch falls back to
+      # the xcconfig. To point back at a local daemon, disable this in Edit Scheme.
+      environmentVariables:
+        - variable: CELIADOR_URL
+          value: https://celiador.ai
+          isEnabled: true
   CeliadorWidgets:
     type: app-extension
     platform: iOS
@@ -76,6 +90,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.celiador.companion$(BUNDLE_ID_SUFFIX).widgets
+        CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: CeliadorWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: CeliadorWidgets/CeliadorWidgets.entitlements

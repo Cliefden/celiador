@@ -148,7 +148,7 @@ struct LoginView: View {
                 let url = try await Api.shared.githubAuthorizeURL()
                 let callback = try await webAuthenticationSession.authenticate(
                     using: url,
-                    callbackURLScheme: "celiador"
+                    callbackURLScheme: AppScheme.scheme
                 )
                 if Api.shared.handleAuthCallback(callback) {
                     model.didSignIn()

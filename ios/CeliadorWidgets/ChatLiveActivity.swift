@@ -36,7 +36,7 @@ struct ChatLiveActivity: Widget {
             } minimal: {
                 Image(systemName: "hammer.fill").foregroundStyle(Theme.celadonBright)
             }
-            .widgetURL(URL(string: "celiador://session/\(context.attributes.sessionId)"))
+            .widgetURL(URL(string: AppScheme.session(context.attributes.sessionId)))
         }
     }
 

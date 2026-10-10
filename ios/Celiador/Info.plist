@@ -4,6 +4,8 @@
 <dict>
 	<key>CELIADOR_DAEMON_URL</key>
 	<string>$(CELIADOR_DAEMON_URL)</string>
+	<key>CELIADOR_URL_SCHEME</key>
+	<string>$(URL_SCHEME)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
