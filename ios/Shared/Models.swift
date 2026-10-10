@@ -129,6 +129,37 @@ struct Profile: Codable, Identifiable {
     }
 }
 
+/// GET /api/me — the signed-in account summary: identity, plan, and today's agent
+/// usage against the daemon-enforced daily quota. Mirrors the editor's account
+/// panel so both clients show the user the SAME honest numbers the daemon meters.
+/// Keys are already camelCase on the wire, so default decoding maps them 1:1.
+struct Me: Codable {
+    let userId: String
+    let email: String?
+    /// Billing plan, or nil in token/none (self-host/dev) mode or before a profile row exists.
+    let plan: String?
+    let usage: AgentUsage
+    let limits: AgentLimits
+    /// ISO timestamp when the daily counters reset (next UTC midnight).
+    let resetsAt: String
+}
+
+/// Today's agent usage (UTC day), as metered by the daemon's quota tracker.
+struct AgentUsage: Codable {
+    let requests: Int
+    let inputTokens: Int
+    let outputTokens: Int
+}
+
+/// Active per-user daily limits. A `0` means that limit is disabled (unlimited).
+struct AgentLimits: Codable {
+    let rpm: Int
+    let concurrency: Int
+    let dailyRequests: Int
+    let dailyInput: Int
+    let dailyOutput: Int
+}
+
 /// A durable past conversation (public.chats). A chat is a persisted session.
 struct ChatSummary: Codable, Identifiable {
     let id: String

@@ -355,6 +355,13 @@ final class Api {
         try await request(SessionsEnvelope.self, path: "api/sessions").sessions
     }
 
+    /// The signed-in account summary: identity, plan, and today's agent usage against
+    /// the daemon-enforced quota. Powers the Account screen's usage meters. Returned
+    /// unwrapped (no envelope), matching the daemon's /api/me shape.
+    func getMe() async throws -> Me {
+        try await request(Me.self, path: "api/me")
+    }
+
     /// Repos currently open in the user's editor(s), for the "from your editor"
     /// repo picker. Best-effort presence — empty when no editor is connected.
     func editorWorkspaces() async throws -> [EditorWorkspace] {
