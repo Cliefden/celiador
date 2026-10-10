@@ -82,6 +82,29 @@ async function main(): Promise<void> {
 	const bad = await app.request(`http://localhost/api/sessions/${sid}/events`, { method: "POST", headers: authH, body: JSON.stringify([{ kind: "tool" }]) });
 	ok("invalid event → 400", bad.status === 400, `got ${bad.status}`);
 
+	// ── Presence (editor → phone repo picker) ────────────────────────────────
+	console.log("\n== presence ==");
+	const PR = "http://localhost/api/presence/workspaces";
+	const put = await app.request(PR, {
+		method: "PUT", headers: authH,
+		body: JSON.stringify({
+			clientId: "editor-a",
+			workspaces: [
+				{ name: "celiador", remoteUrl: "https://github.com/Cliefden/celiador.git", branch: "main" },
+				{ name: "insecure", remoteUrl: "http://example.com/x.git" }, // non-https → filtered
+			],
+		}),
+	});
+	ok("heartbeat → 200, non-https filtered", put.status === 200 && ((await put.json()) as { count?: number }).count === 1, `got ${put.status}`);
+	await app.request(PR, {
+		method: "PUT", headers: authH,
+		body: JSON.stringify({ clientId: "editor-b", workspaces: [{ name: "celiador", remoteUrl: "https://github.com/Cliefden/celiador.git" }] }),
+	});
+	const list = ((await (await app.request(PR, { headers: authH })).json()) as { workspaces: Array<{ remoteUrl: string; branch?: string }> }).workspaces;
+	ok("list de-duped across editors", list.length === 1 && list[0].remoteUrl === "https://github.com/Cliefden/celiador.git", JSON.stringify(list));
+	const noClient = await app.request(PR, { method: "PUT", headers: authH, body: JSON.stringify({ workspaces: [] }) });
+	ok("missing clientId → 400", noClient.status === 400, `got ${noClient.status}`);
+
 	// ── Server runner (offline local repo) ────────────────────────────────────
 	console.log("\n== server runner ==");
 	const repo = path.join(HOME, "origin");

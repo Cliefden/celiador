@@ -7,6 +7,7 @@ import { agentProxy } from "./anthropic";
 import { anthropicGateway, anthropicModels } from "./gateway";
 import { pushRoutes } from "./push/routes";
 import { sessionRoutes } from "./sessions/routes";
+import { presenceRoutes } from "./presence/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
 import { meRoutes } from "./me/routes";
 import { accountRoutes } from "./account/routes";
@@ -64,6 +65,10 @@ export function createApp(): Hono<AppEnv> {
 
   // Agent-session relay (editor = runner, phone = watcher).
   app.route("/api/sessions", sessionRoutes());
+
+  // Editor presence: repos open in the user's editor(s), for the phone's
+  // "from your editor" repo picker.
+  app.route("/api/presence", presenceRoutes());
 
   // Daemon-mediated app data (profiles + durable chat history) for both clients.
   app.route("/api/profile", profileRoutes());
