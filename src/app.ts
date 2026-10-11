@@ -23,7 +23,7 @@ export function createApp(): Hono<AppEnv> {
     cors({
       origin: "*",
       allowHeaders: ["Authorization", "Content-Type"],
-      allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     })
   );
 
