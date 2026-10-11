@@ -27,9 +27,10 @@ final class AppModel {
     /// Shown as an active session's subtitle; pruned when the session goes inactive.
     var activity: [String: String] = [:]
 
-    /// Sessions blocked on you or failed — the badge count.
+    /// Sessions blocked on a decision from you — the badge count. Failed runs are
+    /// history, not actionable, so they don't badge.
     var needsYouCount: Int {
-        sessions.filter { $0.state == .awaiting || $0.state == .error }.count
+        sessions.filter { $0.state == .awaiting }.count
     }
 
     private var pollTask: Task<Void, Never>?
@@ -183,7 +184,7 @@ final class AppModel {
     }
 
     /// Publish a compact snapshot for the Home Screen widget (App Group) and nudge
-    /// WidgetKit. Ordered attention-first (awaiting/error), then running.
+    /// WidgetKit. Ordered attention-first (awaiting), then running.
     private func publishSnapshot() {
         func bucket(_ state: SessionState) -> String {
             switch state {
@@ -198,7 +199,7 @@ final class AppModel {
             return s.state.label
         }
 
-        let attention = sessions.filter { $0.state == .awaiting || $0.state == .error }
+        let attention = sessions.filter { $0.state == .awaiting }
         let running = sessions.filter { $0.state == .running }
         let ordered = (attention + running).sorted { $0.updatedAt > $1.updatedAt }
         let items = ordered.prefix(5).map {

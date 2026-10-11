@@ -18,9 +18,11 @@ struct SessionsView: View {
         return filtered.sorted { $0.updatedAt > $1.updatedAt } // ISO8601 sorts lexically
     }
 
-    private var needsYou: [Session] { match(model.sessions.filter { $0.state == .awaiting || $0.state == .error }) }
+    // Only sessions actually blocked on a decision belong in "Needs you"; a failed
+    // run is history (nothing to act on from the phone), so it lands in Recent.
+    private var needsYou: [Session] { match(model.sessions.filter { $0.state == .awaiting }) }
     private var working: [Session] { match(model.sessions.filter { $0.state == .running }) }
-    private var recent: [Session] { match(model.sessions.filter { !$0.state.isActive && $0.state != .error }) }
+    private var recent: [Session] { match(model.sessions.filter { !$0.state.isActive }) }
 
     private var isEmpty: Bool { model.sessions.isEmpty }
     private var noMatches: Bool { !isEmpty && needsYou.isEmpty && working.isEmpty && recent.isEmpty }
@@ -221,7 +223,7 @@ struct SessionRow: View {
                         if session.state == .awaiting {
                             StatusPill(text: "needs you", color: Theme.attention, icon: "hand.raised.fill")
                         } else if session.state == .error {
-                            StatusPill(text: "error", color: Theme.red, icon: "exclamationmark.triangle.fill")
+                            StatusPill(text: "failed", color: Theme.red, icon: "exclamationmark.triangle.fill")
                         }
                         if editorOffline {
                             StatusPill(text: "editor offline", color: Theme.dim, icon: "bolt.slash.fill")
