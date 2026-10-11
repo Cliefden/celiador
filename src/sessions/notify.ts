@@ -12,9 +12,12 @@ export async function notifySession(userId: string, session: Session, event: Ses
   if (!apnsAvailable()) return;
   const push = pushStores.for(userId);
   switch (event.kind) {
-    case "approval":
-      await alertDevices(push, "Celiador needs you", `Approve a write to ${event.path ?? "a file"}`, session.id);
+    case "approval": {
+      // Prefer a human-readable title; fall back to the path (write/edit) or the kind.
+      const what = event.title ?? (event.path ? `Approve a write to ${event.path}` : `Approve: ${event.approvalKind}`);
+      await alertDevices(push, "Celiador needs you", what, session.id);
       break;
+    }
     case "question":
       await alertDevices(push, "Celiador has a question", event.prompt ?? "Tap to answer.", session.id);
       break;

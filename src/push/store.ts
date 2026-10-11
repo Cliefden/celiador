@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { deletedUsers } from "../deleted-users";
 
 /** An APNs device token for one of a user's devices. */
 export interface DeviceToken {
@@ -16,6 +15,10 @@ export interface ActivityToken {
   env: string;
   addedAt: string;
 }
+
+/** Per-user caps so registrations can't grow a user's file without bound. */
+const MAX_DEVICES = 20;
+const MAX_ACTIVITIES = 50;
 
 interface PushData {
   devices: DeviceToken[];
@@ -43,7 +46,9 @@ export class PushStore {
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, JSON.stringify(this.data, null, 2));
+    const tmp = `${this.file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2));
+    fs.renameSync(tmp, this.file);
   }
 
   devices(): DeviceToken[] {
@@ -53,6 +58,7 @@ export class PushStore {
   addDevice(token: string, env: string): void {
     this.data.devices = this.data.devices.filter((d) => d.token !== token);
     this.data.devices.push({ token, env, addedAt: new Date().toISOString() });
+    if (this.data.devices.length > MAX_DEVICES) this.data.devices.splice(0, this.data.devices.length - MAX_DEVICES);
     this.save();
   }
 
@@ -71,6 +77,9 @@ export class PushStore {
       (a) => !(a.activityId === activityId && a.token === token)
     );
     this.data.activities.push({ activityId, token, env, addedAt: new Date().toISOString() });
+    if (this.data.activities.length > MAX_ACTIVITIES) {
+      this.data.activities.splice(0, this.data.activities.length - MAX_ACTIVITIES);
+    }
     this.save();
   }
 
@@ -95,10 +104,6 @@ export class PushStores {
   constructor(private root: string) {}
 
   for(userId: string): PushStore {
-    // Never create stores for deleted users
-    if (deletedUsers.isDeleted(userId)) {
-      throw new Error("user deleted");
-    }
     let store = this.stores.get(userId);
     if (!store) {
       store = new PushStore(path.join(this.root, "data", "push", `${userId}.json`));
@@ -107,18 +112,9 @@ export class PushStores {
     return store;
   }
 
-  /**
-   * Evict a user's push store from the cache and delete their push file.
-   * MUST be called before deleting the user to prevent mutations from
-   * recreating the file.
-   */
-  evict(userId: string): void {
+  /** Forget everything stored for a user (account deletion). */
+  purge(userId: string): void {
     this.stores.delete(userId);
-    const file = path.join(this.root, "data", "push", `${userId}.json`);
-    try {
-      if (fs.existsSync(file)) fs.unlinkSync(file);
-    } catch (err) {
-      console.error(`[PushStores] failed to delete push file for ${userId}:`, err);
-    }
+    fs.rmSync(path.join(this.root, "data", "push", `${userId}.json`), { force: true });
   }
 }

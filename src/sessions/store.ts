@@ -2,16 +2,21 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRunner, SessionState } from "./types";
-import { deletedUsers } from "../deleted-users";
 
 /** Max events retained per session (older ones fall out of the ring). */
 const RING = 2000;
 /** Sessions older than this (by updatedAt) are reaped on load. */
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Errored/cancelled runs are debris, not history — they get a much shorter TTL. */
+const STALE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 /** Hard cap on sessions kept per user (oldest reaped first). */
 const MAX_SESSIONS = 200;
 /** Debounce window for disk writes so streaming deltas don't fsync per token. */
 const SAVE_DEBOUNCE_MS = 250;
+/** Debounce for event-log writes (only dirty sessions are rewritten). */
+const LOG_DEBOUNCE_MS = 1000;
+/** Session ids are daemon-issued UUIDs; anything else never touches the disk. */
+const SAFE_ID = /^[A-Za-z0-9-]{1,64}$/;
 
 interface MetaFile {
   sessions: Session[];
@@ -22,23 +27,38 @@ interface LogFile {
 }
 
 /**
- * Per-user session store. Durable metadata lives in `meta/<userId>.json`; the
- * event log (a bounded ring buffer per session) lives in `log/<userId>.json`.
- * Structural changes (create/delete/state/runner) persist immediately; plain
- * event appends are debounced. Mirrors the disk/cache shape of push/store.ts.
+ * Per-user session store. Durable metadata lives in `meta/<userId>.json`; each
+ * session's event log (a bounded ring buffer) lives in `log/<userId>/<id>.json`,
+ * so a streaming session only rewrites its own (compact) file — not every
+ * session the user has. Structural changes (create/delete/state/runner) persist
+ * immediately; plain event appends are debounced. Writes are atomic (tmp+rename).
+ * (A legacy single-file `log/<userId>.json` is migrated on first load.)
  */
 export class SessionStore {
   private sessions: Session[] = [];
   private logs = new Map<string, SessionEvent[]>();
+  private dirtyLogs = new Set<string>();
   private metaTimer: NodeJS.Timeout | null = null;
   private logTimer: NodeJS.Timeout | null = null;
-  private disposed = false;
 
-  constructor(private userId: string, private metaFile: string, private logFile: string) {
+  constructor(private userId: string, private metaFile: string, private logDir: string) {
     this.sessions = readJson<MetaFile>(metaFile)?.sessions ?? [];
-    const loadedLogs = readJson<LogFile>(logFile)?.logs ?? {};
-    for (const [id, events] of Object.entries(loadedLogs)) this.logs.set(id, events);
+    const legacy = `${logDir}.json`;
+    const legacyLogs = readJson<LogFile>(legacy)?.logs;
+    for (const s of this.sessions) {
+      const events = legacyLogs?.[s.id] ?? readJson<SessionEvent[]>(this.logPath(s.id));
+      if (Array.isArray(events)) this.logs.set(s.id, events);
+      if (legacyLogs) this.dirtyLogs.add(s.id);
+    }
     this.reap();
+    if (legacyLogs) {
+      this.saveLogNow();
+      fs.rmSync(legacy, { force: true });
+    }
+  }
+
+  private logPath(id: string): string {
+    return path.join(this.logDir, `${id}.json`);
   }
 
   list(): Session[] {
@@ -50,12 +70,11 @@ export class SessionStore {
   }
 
   create(input: { title?: string; origin: SessionOrigin; runner: SessionRunner }): Session {
-    if (this.disposed) throw new Error("store disposed");
     const now = new Date().toISOString();
     const session: Session = {
       id: crypto.randomUUID(),
       userId: this.userId,
-      title: input.title?.trim() || "Untitled task",
+      title: (typeof input.title === "string" ? input.title.trim().slice(0, 200) : "") || "Untitled task",
       origin: input.origin,
       runner: input.runner,
       state: "idle",
@@ -72,19 +91,18 @@ export class SessionStore {
   }
 
   delete(id: string): boolean {
-    if (this.disposed) return false;
     const before = this.sessions.length;
     this.sessions = this.sessions.filter((s) => s.id !== id);
     this.logs.delete(id);
+    this.dirtyLogs.delete(id);
     if (this.sessions.length === before) return false;
     this.saveMetaNow();
-    this.saveLogNow();
+    if (SAFE_ID.test(id)) fs.rmSync(this.logPath(id), { force: true });
     return true;
   }
 
   /** Append a runner event; assigns seq/at, updates session state, returns the stored event. */
   append(id: string, input: SessionEventInput): SessionEvent | undefined {
-    if (this.disposed) return undefined;
     const session = this.get(id);
     if (!session) return undefined;
     const seq = ++session.lastSeq;
@@ -92,8 +110,9 @@ export class SessionStore {
 
     const ring = this.logs.get(id) ?? [];
     ring.push(event);
-    if (ring.length > RING) ring.splice(0, ring.length - RING);
+    while (ring.length > RING) compactOldest(ring);
     this.logs.set(id, ring);
+    this.dirtyLogs.add(id);
 
     session.updatedAt = event.at;
     // A `state` event is the runner's authoritative state transition.
@@ -120,7 +139,6 @@ export class SessionStore {
   }
 
   setRunnerConnected(id: string, connected: boolean): void {
-    if (this.disposed) return;
     const session = this.get(id);
     if (!session || session.runnerConnected === connected) return;
     session.runnerConnected = connected;
@@ -130,7 +148,6 @@ export class SessionStore {
 
   /** Force-set state without an event (used when a runner drops mid-run). */
   setState(id: string, state: SessionState): void {
-    if (this.disposed) return;
     const session = this.get(id);
     if (!session || session.state === state) return;
     session.state = state;
@@ -139,9 +156,11 @@ export class SessionStore {
   }
 
   private reap(): void {
-    const cutoff = Date.now() - SESSION_TTL_MS;
+    const now = Date.now();
+    const cutoffFor = (s: Session): number =>
+      now - (s.state === "error" || s.state === "cancelled" ? STALE_SESSION_TTL_MS : SESSION_TTL_MS);
     let changed = false;
-    const fresh = this.sessions.filter((s) => Date.parse(s.updatedAt) >= cutoff);
+    const fresh = this.sessions.filter((s) => Date.parse(s.updatedAt) >= cutoffFor(s));
     if (fresh.length !== this.sessions.length) changed = true;
     fresh.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     if (fresh.length > MAX_SESSIONS) {
@@ -151,24 +170,27 @@ export class SessionStore {
     if (changed) {
       const keep = new Set(fresh.map((s) => s.id));
       this.sessions = fresh;
-      for (const id of [...this.logs.keys()]) if (!keep.has(id)) this.logs.delete(id);
+      for (const id of [...this.logs.keys()]) {
+        if (keep.has(id)) continue;
+        this.logs.delete(id);
+        this.dirtyLogs.delete(id);
+        if (SAFE_ID.test(id)) fs.rmSync(this.logPath(id), { force: true });
+      }
       this.saveMetaNow();
-      this.saveLogNow();
     }
   }
 
   private scheduleMetaSave(): void {
-    if (this.disposed || this.metaTimer) return;
+    if (this.metaTimer) return;
     this.metaTimer = setTimeout(() => this.saveMetaNow(), SAVE_DEBOUNCE_MS);
   }
 
   private scheduleLogSave(): void {
-    if (this.disposed || this.logTimer) return;
-    this.logTimer = setTimeout(() => this.saveLogNow(), SAVE_DEBOUNCE_MS);
+    if (this.logTimer) return;
+    this.logTimer = setTimeout(() => this.saveLogNow(), LOG_DEBOUNCE_MS);
   }
 
   private saveMetaNow(): void {
-    if (this.disposed) return;
     if (this.metaTimer) {
       clearTimeout(this.metaTimer);
       this.metaTimer = null;
@@ -177,40 +199,76 @@ export class SessionStore {
   }
 
   private saveLogNow(): void {
-    if (this.disposed) return;
     if (this.logTimer) {
       clearTimeout(this.logTimer);
       this.logTimer = null;
     }
-    writeJson<LogFile>(this.logFile, { logs: Object.fromEntries(this.logs) });
+    for (const id of this.dirtyLogs) {
+      const ring = this.logs.get(id);
+      if (ring && SAFE_ID.test(id)) writeJson(this.logPath(id), ring);
+    }
+    this.dirtyLogs.clear();
   }
 
-  /** Cancel pending timers and mark disposed. All future writes become no-ops. */
-  dispose(): void {
-    this.disposed = true;
-    if (this.metaTimer) {
-      clearTimeout(this.metaTimer);
-      this.metaTimer = null;
-    }
-    if (this.logTimer) {
-      clearTimeout(this.logTimer);
-      this.logTimer = null;
+  /** Flush pending writes (used before purging / on shutdown). */
+  flush(): void {
+    if (this.metaTimer) this.saveMetaNow();
+    if (this.logTimer) this.saveLogNow();
+  }
+
+  /** Stop timers without writing (account deletion). */
+  discard(): void {
+    if (this.metaTimer) clearTimeout(this.metaTimer);
+    if (this.logTimer) clearTimeout(this.logTimer);
+    this.metaTimer = this.logTimer = null;
+    this.dirtyLogs.clear();
+  }
+}
+
+/**
+ * Shrink a full ring by one entry without losing conversation structure: merge
+ * the oldest pair of adjacent `delta` events (text concatenated into the later
+ * one, which keeps its seq) so a long streamed reply doesn't evict earlier
+ * messages/approvals from replay. Only when no such pair exists is the oldest
+ * event dropped.
+ */
+function compactOldest(ring: SessionEvent[]): void {
+  for (let i = 0; i < ring.length - 1; i++) {
+    const a = ring[i]!;
+    const b = ring[i + 1]!;
+    if (a.kind === "delta" && b.kind === "delta") {
+      ring[i + 1] = { ...b, text: a.text + b.text };
+      ring.splice(i, 1);
+      return;
     }
   }
+  ring.shift();
 }
 
 function readJson<T>(file: string): T | null {
   if (!fs.existsSync(file)) return null;
   try {
     return JSON.parse(fs.readFileSync(file, "utf8")) as T;
-  } catch {
-    return null; // corrupt — start clean; rewritten on next mutation
+  } catch (err) {
+    // Corrupt: keep the bytes for recovery instead of silently overwriting them
+    // with an empty store on the next mutation.
+    const aside = `${file}.corrupt-${Date.now()}`;
+    try {
+      fs.renameSync(file, aside);
+    } catch {
+      /* best-effort */
+    }
+    console.error(`[sessions] corrupt ${file} moved to ${aside}:`, err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
+/** Atomic write: a crash mid-write leaves the previous file intact. */
 function writeJson<T>(file: string, data: T): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data));
+  fs.renameSync(tmp, file);
 }
 
 /** Per-user SessionStore cache, rooted under <root>/data/sessions. */
@@ -218,51 +276,27 @@ export class SessionStores {
   private stores = new Map<string, SessionStore>();
   constructor(private root: string) {}
 
+  private base(): string {
+    return path.join(this.root, "data", "sessions");
+  }
+
   for(userId: string): SessionStore {
-    // Never create stores for deleted users
-    if (deletedUsers.isDeleted(userId)) {
-      throw new Error("user deleted");
-    }
     let store = this.stores.get(userId);
     if (!store) {
-      const base = path.join(this.root, "data", "sessions");
-      store = new SessionStore(userId, path.join(base, "meta", `${userId}.json`), path.join(base, "log", `${userId}.json`));
+      const base = this.base();
+      store = new SessionStore(userId, path.join(base, "meta", `${userId}.json`), path.join(base, "log", userId));
       this.stores.set(userId, store);
     }
     return store;
   }
 
-  /**
-   * Evict a user's store from the cache, cancel any pending saves, and delete
-   * their session files. Returns the session IDs that were active (from cache
-   * if present, otherwise empty). Always deletes files on disk regardless of
-   * whether the user is cached.
-   */
-  evict(userId: string): string[] {
-    const store = this.stores.get(userId);
-    let sessionIds: string[] = [];
-    
-    if (store) {
-      // Get session IDs from cache and cancel pending saves
-      sessionIds = store.list().map(s => s.id);
-      store.dispose();
-      this.stores.delete(userId);
-    }
-    
-    // Always delete files, even if the store wasn't in cache
-    const metaFile = path.join(this.root, "data", "sessions", "meta", `${userId}.json`);
-    const logFile = path.join(this.root, "data", "sessions", "log", `${userId}.json`);
-    try {
-      if (fs.existsSync(metaFile)) fs.unlinkSync(metaFile);
-    } catch (err) {
-      console.error(`[SessionStores] failed to delete meta for ${userId}:`, err);
-    }
-    try {
-      if (fs.existsSync(logFile)) fs.unlinkSync(logFile);
-    } catch (err) {
-      console.error(`[SessionStores] failed to delete log for ${userId}:`, err);
-    }
-    
-    return sessionIds;
+  /** Forget everything stored for a user (account deletion). */
+  purge(userId: string): void {
+    this.stores.get(userId)?.discard();
+    this.stores.delete(userId);
+    const base = this.base();
+    fs.rmSync(path.join(base, "meta", `${userId}.json`), { force: true });
+    fs.rmSync(path.join(base, "log", `${userId}.json`), { force: true });
+    fs.rmSync(path.join(base, "log", userId), { recursive: true, force: true });
   }
 }

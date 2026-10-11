@@ -9,11 +9,12 @@ key and the DB connection — clients never hold either.
 | Area | Endpoint | Who | Notes |
 |---|---|---|---|
 | Health/boot | `GET /api/health`, `GET /api/config` | any | config → authMode + Supabase client cfg |
-| Agent | `POST /api/agent/messages` | editor | Claude proxy, SSE |
+| Agent | `POST /api/agent/messages` | editor | Claude proxy, SSE. Server-owned system prompt + tools; client sends `messages` only; per-user quota (429 + Retry-After) |
 | Relay | `POST /api/sessions`, `GET /:id/events`, `GET /:id/commands`, `POST /:id/events`, `POST /:id/{message,approvals/:rid,answers/:rid,cancel}` | editor=runner, phone=watcher | live, ephemeral |
 | Profile | `GET /api/profile`, `PATCH /api/profile` | both | durable |
 | Chat history | `GET /api/chats`, `GET /api/chats/:id`, `PATCH/DELETE /api/chats/:id` | both | durable; rows written by the relay persister |
 | Push | `POST/DELETE /api/push/register`, `POST /api/push/activity` | phone | APNs |
+| Account | `DELETE /api/account` | phone (editor later) | permanent account deletion (App Store 5.1.1(v)) |
 
 Two layers, already wired end-to-end on the daemon: **relay = live**, **Supabase = durable**.
 As the editor (runner) publishes to `/api/sessions/:id/events`, the daemon fans out

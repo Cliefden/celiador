@@ -1,4 +1,4 @@
-import type { SessionCommand, SessionEvent } from "./types";
+import type { FsCommand, FsResult, SessionCommand, SessionEvent } from "./types";
 
 /**
  * In-process pub/sub for session relay, keyed by sessionId. No external broker —
@@ -57,21 +57,31 @@ class WriteQueue {
   }
 }
 
+interface Runner {
+  send: CommandFn;
+  /** Close this runner's stream (called when a newer runner replaces it). */
+  close: () => void;
+}
+
 interface Channel {
   watchers: Set<WriteQueue>;
-  runner: CommandFn | null;
-  runnerClose: (() => void) | null;
+  runner: Runner | null;
   /** Outstanding approval/question requestIds awaiting a watcher decision. */
   pending: Set<string>;
 }
 
+/** Default time a phone file request waits for the runner to answer. */
+const FS_TIMEOUT_MS = 10_000;
+
 class SessionBus {
   private channels = new Map<string, Channel>();
+  /** Outstanding `fs.*` requests awaiting an `fs.result`, keyed by requestId. */
+  private fsWaiters = new Map<string, { resolve: (r: FsResult) => void; timer: ReturnType<typeof setTimeout> }>();
 
   private channel(sessionId: string): Channel {
     let ch = this.channels.get(sessionId);
     if (!ch) {
-      ch = { watchers: new Set(), runner: null, runnerClose: null, pending: new Set() };
+      ch = { watchers: new Set(), runner: null, pending: new Set() };
       this.channels.set(sessionId, ch);
     }
     return ch;
@@ -79,7 +89,7 @@ class SessionBus {
 
   private gc(sessionId: string): void {
     const ch = this.channels.get(sessionId);
-    if (ch && ch.watchers.size === 0 && !ch.runner && ch.runnerClose === null && ch.pending.size === 0) {
+    if (ch && ch.watchers.size === 0 && !ch.runner && ch.pending.size === 0) {
       this.channels.delete(sessionId);
     }
   }
@@ -100,24 +110,40 @@ class SessionBus {
     };
   }
 
-  /** Fan an event out to all watchers; tracks pending approvals/questions. */
+  /**
+   * Fan an event out to all watchers; tracks pending approvals/questions. Doesn't
+   * create a channel when nobody is listening (avoids leaking empty channels).
+   */
   publishEvent(sessionId: string, event: SessionEvent): void {
-    const ch = this.channel(sessionId);
+    const tracked = event.kind === "approval" || event.kind === "question";
+    const ch = tracked ? this.channel(sessionId) : this.channels.get(sessionId);
+    if (!ch) return;
     if (event.kind === "approval" || event.kind === "question") ch.pending.add(event.requestId);
+    // Leaving "awaiting" means any outstanding decision was resolved (possibly on
+    // the desktop, which never calls resolvePending) or abandoned.
+    if (event.kind === "state" && event.state !== "awaiting") ch.pending.clear();
     for (const q of ch.watchers) q.push(event);
+    this.gc(sessionId);
   }
 
-  /** Attach the (single) runner command sink; a new one replaces any prior. */
-  attachRunner(sessionId: string, send: CommandFn, close: () => void): () => void {
+  /**
+   * Attach the (single) runner command sink. A new runner replaces — and closes —
+   * any prior one, so a stale stream from before a network blip can't linger.
+   * The returned detach reports whether this runner was still the current one
+   * (false once replaced), so the caller only reports a disconnect for the
+   * runner that actually owns the session.
+   */
+  attachRunner(sessionId: string, send: CommandFn, close: () => void): () => boolean {
     const ch = this.channel(sessionId);
-    ch.runner = send;
-    ch.runnerClose = close;
+    const previous = ch.runner;
+    const runner: Runner = { send, close };
+    ch.runner = runner;
+    if (previous) previous.close();
     return () => {
-      if (ch.runner === send) {
-        ch.runner = null;
-        ch.runnerClose = null;
-      }
+      const current = ch.runner === runner;
+      if (current) ch.runner = null;
       this.gc(sessionId);
+      return current;
     };
   }
 
@@ -129,7 +155,7 @@ class SessionBus {
   sendCommand(sessionId: string, command: SessionCommand): boolean {
     const runner = this.channels.get(sessionId)?.runner;
     if (!runner) return false;
-    runner(command);
+    runner.send(command);
     return true;
   }
 
@@ -142,35 +168,35 @@ class SessionBus {
   }
 
   /**
-   * Close all streams and clear all state for a session. Used during account
-   * deletion to force-close any open runner/watcher connections.
+   * Round-trip an `fs.*` command to the runner and resolve with its `fs.result`.
+   * Rejects with "runner offline" if no runner is attached, or "timeout" if the
+   * runner doesn't answer in time. The requestId on the command correlates the reply.
    */
-  closeSession(sessionId: string): void {
-    const ch = this.channels.get(sessionId);
-    if (!ch) return;
-    // Close all watcher streams
-    for (const q of ch.watchers) {
-      q.fail();
-    }
-    ch.watchers.clear();
-    // Close runner stream
-    if (ch.runnerClose) {
-      ch.runnerClose();
-    }
-    ch.runner = null;
-    ch.runnerClose = null;
-    ch.pending.clear();
-    this.channels.delete(sessionId);
+  requestFs(sessionId: string, command: FsCommand, timeoutMs = FS_TIMEOUT_MS): Promise<FsResult> {
+    return new Promise<FsResult>((resolve, reject) => {
+      const runner = this.channels.get(sessionId)?.runner;
+      if (!runner) {
+        reject(new Error("runner offline"));
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.fsWaiters.delete(command.requestId);
+        reject(new Error("timeout"));
+      }, timeoutMs);
+      timer.unref?.();
+      this.fsWaiters.set(command.requestId, { resolve, timer });
+      runner.send(command);
+    });
   }
 
-  /**
-   * Close all sessions for a given list of session IDs. Used during account
-   * deletion to clean up all of a user's active sessions.
-   */
-  closeSessions(sessionIds: string[]): void {
-    for (const id of sessionIds) {
-      this.closeSession(id);
-    }
+  /** Resolve an awaiting `fs.*` request with the runner's result; false if none. */
+  resolveFs(requestId: string, result: FsResult): boolean {
+    const waiter = this.fsWaiters.get(requestId);
+    if (!waiter) return false;
+    clearTimeout(waiter.timer);
+    this.fsWaiters.delete(requestId);
+    waiter.resolve(result);
+    return true;
   }
 }
 

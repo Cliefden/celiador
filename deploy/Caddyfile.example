@@ -1,0 +1,43 @@
+# Caddy vhosts for the staging + dev environments — mirror the live celiador.ai
+# block, but point /auth/* at the env's STANDALONE GoTrue (no kong/rest/storage/
+# realtime for the lightweight stacks) and /api,/p at the env's daemon.
+# Merge into /etc/caddy/Caddyfile (back it up first), add DNS A records for the
+# subdomains, then: sudo systemctl reload caddy
+
+staging.celiador.ai {
+	encode zstd gzip
+
+	@auth path /auth/*
+	handle @auth {
+		reverse_proxy 127.0.0.1:9997
+	}
+
+	@daemon path /api/* /p/*
+	handle @daemon {
+		reverse_proxy 127.0.0.1:4672
+	}
+
+	# No per-env web service yet → point root at the prod marketing site, or
+	# swap to a staging celiador-web service (e.g. :3101) when one exists.
+	handle {
+		reverse_proxy 127.0.0.1:3100
+	}
+}
+
+dev.celiador.ai {
+	encode zstd gzip
+
+	@auth path /auth/*
+	handle @auth {
+		reverse_proxy 127.0.0.1:9996
+	}
+
+	@daemon path /api/* /p/*
+	handle @daemon {
+		reverse_proxy 127.0.0.1:4673
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3100
+	}
+}

@@ -56,7 +56,7 @@ export type SessionEvent =
   | { seq: number; at: string; kind: "message"; role: "user" | "assistant"; text: string }
   | { seq: number; at: string; kind: "tool"; callId: string; name: string; input: unknown }
   | { seq: number; at: string; kind: "toolResult"; callId: string; ok: boolean }
-  | { seq: number; at: string; kind: "approval"; requestId: string; approvalKind: "write_file"; path: string; preview?: string }
+  | { seq: number; at: string; kind: "approval"; requestId: string; approvalKind: string; title?: string; path?: string; preview?: string }
   | { seq: number; at: string; kind: "question"; requestId: string; prompt: string; choices?: string[] }
   | { seq: number; at: string; kind: "diff"; path: string; patch: string }
   | { seq: number; at: string; kind: "state"; state: SessionState }
@@ -70,13 +70,47 @@ export type SessionEventInput = DistributiveOmit<SessionEvent, "seq" | "at">;
 /**
  * A command sent from a watcher, relayed by the daemon to the runner over the
  * command channel. Transient — never persisted to the log.
+ *
+ * The `fs.*` kinds are request/response: the daemon sends one on behalf of a phone
+ * file-browser request and awaits the matching `fs.result` event (by requestId).
+ * They never touch the durable event log.
  */
 export type SessionCommand =
   | { kind: "instruct"; text: string }
   | { kind: "approve"; requestId: string }
   | { kind: "reject"; requestId: string }
   | { kind: "answer"; requestId: string; text: string }
-  | { kind: "cancel" };
+  | { kind: "cancel" }
+  | { kind: "fs.list"; requestId: string; path: string }
+  | { kind: "fs.read"; requestId: string; path: string }
+  | { kind: "fs.write"; requestId: string; path: string; content: string };
+
+/** Any `fs.*` command the daemon can round-trip to the runner. */
+export type FsCommand = Extract<SessionCommand, { kind: "fs.list" | "fs.read" | "fs.write" }>;
+
+/** One entry in a workspace directory listing. */
+export interface FsEntry {
+  name: string;
+  type: "file" | "dir";
+  size?: number;
+}
+
+/** The runner's answer to an `fs.*` command. */
+export interface FsResult {
+  ok: boolean;
+  entries?: FsEntry[];
+  content?: string;
+  encoding?: string;
+  truncated?: boolean;
+  error?: string;
+}
+
+/**
+ * How a runner reports an `fs.*` result: posted on the event channel but NEVER
+ * appended to the log or fanned to watchers — the daemon intercepts it by
+ * requestId and resolves the awaiting HTTP request.
+ */
+export type FsResultInput = { kind: "fs.result"; requestId: string } & FsResult;
 
 /** Omit that distributes over union members (so the `kind` discriminant survives). */
 type DistributiveOmit<T, K extends keyof any> = T extends unknown ? Omit<T, K> : never;
