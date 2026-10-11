@@ -249,8 +249,12 @@ private struct NewRunView: View {
     @State private var error: String?
     @State private var recents = RepoRecents.list()
     @State private var editorWorkspaces: [EditorWorkspace] = []
-    /// The editor repo currently being opened (shows a spinner on its row).
-    @State private var openingRepo: String?
+    // Compose mode: tapping an editor repo opens a chat composer for it. The first
+    // message you send creates the run on your Mac and drops you into the live chat.
+    @State private var composing: EditorWorkspace?
+    @State private var firstMessage = ""
+    @State private var sending = false
+    @FocusState private var composerFocused: Bool
 
     /// Cloud runs execute unattended, so the form needs a repo URL and a task.
     private var canStart: Bool {
@@ -261,154 +265,212 @@ private struct NewRunView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if !editorWorkspaces.isEmpty {
-                    Section {
-                        ForEach(editorWorkspaces) { ws in
-                            Button {
-                                Task { await openEditorChat(ws) }
-                            } label: {
-                                HStack {
-                                    Image(systemName: "laptopcomputer")
-                                        .foregroundStyle(Theme.dim)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(ws.name)
-                                            .foregroundStyle(Theme.ink)
-                                            .lineLimit(1)
-                                        Text(RepoRecents.shortLabel(ws.remoteUrl))
-                                            .font(.caption)
-                                            .foregroundStyle(Theme.dim)
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                    }
-                                    Spacer()
-                                    if openingRepo == ws.remoteUrl {
-                                        ProgressView()
-                                    } else {
-                                        Image(systemName: "chevron.right")
-                                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.dim)
-                                    }
-                                }
-                            }
-                            .disabled(openingRepo != nil)
-                        }
-                    } header: {
-                        Text("From your editor")
-                    } footer: {
-                        Text("Opens a chat on your Mac — runs on the local copy, no clone.")
-                    }
-                }
-
-                Section {
-                    TextField("https://github.com/owner/repo.git", text: $repoURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    TextField("Branch (optional)", text: $branch)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Button {
-                        if let pasted = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-                           !pasted.isEmpty {
-                            repoURL = pasted
-                            Haptics.tap()
-                        }
-                    } label: {
-                        Label("Paste repo URL", systemImage: "doc.on.clipboard")
-                    }
-                    .disabled(!UIPasteboard.general.hasStrings)
-                } header: {
-                    Text(editorWorkspaces.isEmpty ? "Repository" : "Or run in the cloud")
-                }
-                if !recents.isEmpty {
-                    Section("Recent") {
-                        ForEach(recents, id: \.self) { url in
-                            Button {
-                                repoURL = url
-                                Haptics.tap()
-                            } label: {
-                                HStack {
-                                    Image(systemName: "clock.arrow.circlepath")
-                                        .foregroundStyle(Theme.dim)
-                                    Text(RepoRecents.shortLabel(url))
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                        .foregroundStyle(Theme.ink)
-                                    Spacer()
-                                    if url == repoURL.trimmingCharacters(in: .whitespaces) {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(Theme.celadonBright)
-                                    }
-                                }
-                            }
-                        }
-                        .onDelete { offsets in
-                            for i in offsets { RepoRecents.forget(recents[i]) }
-                            recents = RepoRecents.list()
-                        }
-                    }
-                }
-                Section("Task") {
-                    TextField("What should the agent do?", text: $prompt, axis: .vertical)
-                        .lineLimit(3...8)
-                }
-                if let error {
-                    Text(error).font(.footnote).foregroundStyle(Theme.red)
-                }
-                Section {
-                    Text("Runs on Celiador's servers — clones the repo (public repos only for now). You'll watch it here and get a diff back.")
-                        .font(.footnote).foregroundStyle(Theme.dim)
+            Group {
+                if let ws = composing {
+                    composeView(ws)
+                } else {
+                    formView
                 }
             }
-            .navigationTitle("New Run")
             .navigationBarTitleDisplayMode(.inline)
             .task { editorWorkspaces = (try? await Api.shared.editorWorkspaces()) ?? [] }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if starting {
-                        ProgressView()
+                    if composing != nil {
+                        Button { composing = nil; firstMessage = ""; error = nil } label: {
+                            Image(systemName: "chevron.left")
+                        }
+                        .accessibilityLabel("Back")
                     } else {
-                        Button("Start") { Task { await start() } }
-                            .disabled(!canStart)
+                        Button("Cancel") { dismiss() }
+                    }
+                }
+                ToolbarItem(placement: .principal) {
+                    Text(composing?.name ?? "New Run").font(.headline).foregroundStyle(Theme.ink)
+                }
+                if composing == nil {
+                    ToolbarItem(placement: .confirmationAction) {
+                        if starting {
+                            ProgressView()
+                        } else {
+                            Button("Start") { Task { await start() } }
+                                .disabled(!canStart)
+                        }
                     }
                 }
             }
         }
     }
 
-    /// Tap a repo open in the editor → run on the Mac's local copy and jump straight
-    /// into the chat. The editor opens an idle session; we wait for it to appear via
-    /// the relay, then navigate in so the user just starts typing.
-    private func openEditorChat(_ ws: EditorWorkspace) async {
-        guard openingRepo == nil else { return }
-        openingRepo = ws.remoteUrl
+    private var formView: some View {
+        Form {
+            if !editorWorkspaces.isEmpty {
+                Section {
+                    ForEach(editorWorkspaces) { ws in
+                        Button {
+                            Haptics.tap()
+                            composing = ws
+                        } label: {
+                            HStack {
+                                Image(systemName: "laptopcomputer")
+                                    .foregroundStyle(Theme.dim)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(ws.name)
+                                        .foregroundStyle(Theme.ink)
+                                        .lineLimit(1)
+                                    Text(RepoRecents.shortLabel(ws.remoteUrl))
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.dim)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(Theme.dim)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("From your editor")
+                } footer: {
+                    Text("Opens a chat on your Mac — runs on the local copy, no clone.")
+                }
+            }
+
+            Section {
+                TextField("https://github.com/owner/repo.git", text: $repoURL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                TextField("Branch (optional)", text: $branch)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button {
+                    if let pasted = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !pasted.isEmpty {
+                        repoURL = pasted
+                        Haptics.tap()
+                    }
+                } label: {
+                    Label("Paste repo URL", systemImage: "doc.on.clipboard")
+                }
+                .disabled(!UIPasteboard.general.hasStrings)
+            } header: {
+                Text(editorWorkspaces.isEmpty ? "Repository" : "Or run in the cloud")
+            }
+            if !recents.isEmpty {
+                Section("Recent") {
+                    ForEach(recents, id: \.self) { url in
+                        Button {
+                            repoURL = url
+                            Haptics.tap()
+                        } label: {
+                            HStack {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .foregroundStyle(Theme.dim)
+                                Text(RepoRecents.shortLabel(url))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .foregroundStyle(Theme.ink)
+                                Spacer()
+                                if url == repoURL.trimmingCharacters(in: .whitespaces) {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Theme.celadonBright)
+                                }
+                            }
+                        }
+                    }
+                    .onDelete { offsets in
+                        for i in offsets { RepoRecents.forget(recents[i]) }
+                        recents = RepoRecents.list()
+                    }
+                }
+            }
+            Section("Task") {
+                TextField("What should the agent do?", text: $prompt, axis: .vertical)
+                    .lineLimit(3...8)
+            }
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(Theme.red)
+            }
+            Section {
+                Text("Runs on Celiador's servers — clones the repo (public repos only for now). You'll watch it here and get a diff back.")
+                    .font(.footnote).foregroundStyle(Theme.dim)
+            }
+        }
+    }
+
+    /// A chat-style first-message composer for a repo open in the editor. Sending the
+    /// message starts a local run on the Mac and navigates into the live session.
+    private func composeView(_ ws: EditorWorkspace) -> some View {
+        VStack(spacing: 0) {
+            Spacer()
+            VStack(spacing: 10) {
+                Image(systemName: "laptopcomputer")
+                    .font(.system(size: 40)).foregroundStyle(Theme.celadonBright)
+                Text("Chat with \(ws.name)")
+                    .font(.title3.weight(.semibold)).foregroundStyle(Theme.ink)
+                Text("Runs on your Mac · \(RepoRecents.shortLabel(ws.remoteUrl))")
+                    .font(.caption).foregroundStyle(Theme.dim)
+                    .lineLimit(1).truncationMode(.middle)
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(Theme.red)
+                        .multilineTextAlignment(.center).padding(.top, 4)
+                }
+            }
+            .padding(.horizontal, 32)
+            Spacer()
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("Message…", text: $firstMessage, axis: .vertical)
+                    .lineLimit(1...6)
+                    .focused($composerFocused)
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(Theme.panel, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+                    .onSubmit { Task { await sendFirst(ws) } }
+                if sending {
+                    ProgressView().frame(width: 36, height: 36)
+                } else {
+                    SendButton(enabled: !firstMessage.trimmingCharacters(in: .whitespaces).isEmpty) {
+                        Task { await sendFirst(ws) }
+                    }
+                }
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(CeliadorBackground())
+        .onAppear { composerFocused = true }
+    }
+
+    /// Send the first message → create the local run on the Mac → jump into the chat.
+    private func sendFirst(_ ws: EditorWorkspace) async {
+        let msg = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !msg.isEmpty, !sending else { return }
+        sending = true
         error = nil
         Haptics.tap()
         do {
             let before = Set((try? await Api.shared.listSessions())?.map(\.id) ?? [])
-            try await Api.shared.requestEditorRun(remoteUrl: ws.remoteUrl, name: ws.name, branch: ws.branch, prompt: "")
+            try await Api.shared.requestEditorRun(remoteUrl: ws.remoteUrl, name: ws.name, branch: ws.branch, prompt: msg)
             RepoRecents.remember(ws.remoteUrl)
-            for _ in 0..<16 {
+            for _ in 0..<20 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 let now = (try? await Api.shared.listSessions()) ?? []
                 if let fresh = now.first(where: { !before.contains($0.id) }) {
                     await model.refresh()
                     dismiss()
                     model.open(sessionId: fresh.id)
-                    openingRepo = nil
+                    sending = false
                     return
                 }
             }
-            // The editor didn't report a session in time — land on the list.
-            await model.refresh()
-            dismiss()
+            error = "Couldn't reach your editor. Make sure Celiador is open and signed in on your Mac."
         } catch {
             self.error = (error as NSError).localizedDescription
         }
-        openingRepo = nil
+        sending = false
     }
 
     /// Start a cloud run (unattended, on Celiador's servers) from the form.

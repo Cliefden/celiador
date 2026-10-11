@@ -433,7 +433,7 @@ struct SessionView: View {
 }
 
 /// Circular gradient send button used by the composer and question card.
-private struct SendButton: View {
+struct SendButton: View {
     var enabled: Bool
     var action: () -> Void
 
