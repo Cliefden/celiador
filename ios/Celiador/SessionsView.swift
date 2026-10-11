@@ -252,8 +252,11 @@ private struct NewRunView: View {
     @State private var runOnEditor = true
 
     private var canStart: Bool {
-        !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (repoURL.hasPrefix("http://") || repoURL.hasPrefix("https://"))
+        let validRepo = repoURL.hasPrefix("http://") || repoURL.hasPrefix("https://")
+        let hasPrompt = !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Editor runs can open a blank chat (type the first message there); cloud
+        // runs execute unattended, so they still need a task up front.
+        return validRepo && (effectiveEditorRun || hasPrompt)
     }
 
     /// The selected repo, trimmed.
@@ -357,8 +360,9 @@ private struct NewRunView: View {
                         Text("Run on")
                     }
                 }
-                Section("Task") {
-                    TextField("What should the agent do?", text: $prompt, axis: .vertical)
+                Section(effectiveEditorRun ? "Message" : "Task") {
+                    TextField(effectiveEditorRun ? "Say something, or leave blank to open a chat" : "What should the agent do?",
+                              text: $prompt, axis: .vertical)
                         .lineLimit(3...8)
                 }
                 if let error {
@@ -397,12 +401,28 @@ private struct NewRunView: View {
             let repo = selectedRepo
             let br = branch.trimmingCharacters(in: .whitespaces).isEmpty ? nil : branch.trimmingCharacters(in: .whitespaces)
             if effectiveEditorRun {
-                // Run on the Mac's local copy. The editor opens the session; it shows
-                // up in the list via the relay, so just refresh and dismiss.
+                // Run on the Mac's local copy. The editor opens the session; we wait
+                // for it to appear via the relay, then jump straight into the chat.
+                let before = Set((try? await Api.shared.listSessions())?.map(\.id) ?? [])
                 try await Api.shared.requestEditorRun(remoteUrl: repo, name: selectedWorkspaceName, branch: br, prompt: prompt)
                 RepoRecents.remember(repo)
-                dismiss()
-                await model.refresh()
+                var opened = false
+                for _ in 0..<16 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    let now = (try? await Api.shared.listSessions()) ?? []
+                    if let fresh = now.first(where: { !before.contains($0.id) }) {
+                        await model.refresh()
+                        dismiss()
+                        model.open(sessionId: fresh.id)
+                        opened = true
+                        break
+                    }
+                }
+                if !opened {
+                    // The editor didn't report a session in time — land on the list.
+                    await model.refresh()
+                    dismiss()
+                }
             } else {
                 let session = try await Api.shared.startServerRun(repoURL: repo, branch: br, prompt: prompt)
                 RepoRecents.remember(repo)
