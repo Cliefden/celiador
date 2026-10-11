@@ -47,8 +47,15 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<void> {
       text: diffs.length ? `Done — changed ${diffs.length} file(s).` : "Done — no changes were needed.",
     });
     publish({ kind: "done" });
+    publish({ kind: "state", state: "done" });
   } catch (err) {
-    publish({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    const raw = err instanceof Error ? err.message : String(err);
+    // An anonymous clone of a private repo makes git try to prompt for credentials.
+    const message = /could not read Username/i.test(raw)
+      ? "Cloning failed — this repo looks private. Cloud runs can only clone public repos for now."
+      : raw;
+    publish({ kind: "error", message });
+    publish({ kind: "state", state: "error" });
   }
   // The workspace is intentionally retained after the run so the phone can browse
   // its files; it's reclaimed when the session is deleted (see DELETE /:id),

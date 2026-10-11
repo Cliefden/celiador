@@ -7,6 +7,8 @@ import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRu
 const RING = 2000;
 /** Sessions older than this (by updatedAt) are reaped on load. */
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Errored/cancelled runs are debris, not history — they get a much shorter TTL. */
+const STALE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 /** Hard cap on sessions kept per user (oldest reaped first). */
 const MAX_SESSIONS = 200;
 /** Debounce window for disk writes so streaming deltas don't fsync per token. */
@@ -154,9 +156,11 @@ export class SessionStore {
   }
 
   private reap(): void {
-    const cutoff = Date.now() - SESSION_TTL_MS;
+    const now = Date.now();
+    const cutoffFor = (s: Session): number =>
+      now - (s.state === "error" || s.state === "cancelled" ? STALE_SESSION_TTL_MS : SESSION_TTL_MS);
     let changed = false;
-    const fresh = this.sessions.filter((s) => Date.parse(s.updatedAt) >= cutoff);
+    const fresh = this.sessions.filter((s) => Date.parse(s.updatedAt) >= cutoffFor(s));
     if (fresh.length !== this.sessions.length) changed = true;
     fresh.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     if (fresh.length > MAX_SESSIONS) {

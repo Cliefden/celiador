@@ -17,8 +17,7 @@ const HEARTBEAT_MS = 15000;
 
 /**
  * How long a dropped runner has to reconnect before watchers are told it's gone.
- * The editor reconnects after ~1.5s, so a network blip doesn't turn into a false
- * "Task failed" push.
+ * The editor reconnects after ~1.5s, so a network blip doesn't falsely end the run.
  */
 const RUNNER_GRACE_MS = 10000;
 
@@ -263,11 +262,13 @@ export function sessionRoutes(): Hono<AppEnv> {
       setTimeout(() => {
         if (sessionBus.hasRunner(session.id)) return;
         store.setRunnerConnected(session.id, false);
-        // If the runner vanished mid-run, unstick any watchers.
+        // If the runner vanished mid-run, unstick any watchers. A closed editor
+        // isn't a failure the phone can act on, so the run ends as "cancelled",
+        // not "error" — no "Task failed" push, no red row on the phone.
         const current = store.get(session.id);
         if (current && (current.state === "running" || current.state === "awaiting")) {
-          publish(userId, session.id, { kind: "error", message: "The editor disconnected." });
-          publish(userId, session.id, { kind: "state", state: "error" });
+          publish(userId, session.id, { kind: "activity", text: "The editor disconnected." });
+          publish(userId, session.id, { kind: "state", state: "cancelled" });
         }
       }, RUNNER_GRACE_MS).unref?.();
     });
