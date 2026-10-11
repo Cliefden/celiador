@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { VERSION } from "./config";
 import { authMode, requireUser, type AppEnv } from "./auth";
 import { agentProxy } from "./anthropic";
+import { completeHandler } from "./complete/routes";
 import { pushRoutes } from "./push/routes";
 import { sessionRoutes } from "./sessions/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
@@ -41,6 +42,10 @@ export function createApp(): Hono<AppEnv> {
 
   // Anthropic agent proxy (SSE). Auth handled inside (user JWT or shared token).
   app.post("/api/agent/messages", agentProxy);
+
+  // Inline completion ("Tab autocomplete") — small fast Haiku call, non-streaming.
+  // requireUser (per-user rate limited inside), independent of the agent proxy.
+  app.post("/api/complete", requireUser, completeHandler);
 
   // Push registration + APNs.
   app.route("/api/push", pushRoutes());

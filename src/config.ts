@@ -19,6 +19,21 @@ export const AGENT_MODEL = process.env.CELIADOR_AGENT_MODEL ?? "claude-opus-4-8"
 export const AGENT_MAX_TOKENS = Number(process.env.CELIADOR_AGENT_MAX_TOKENS ?? 32000);
 
 /**
+ * Inline-completion ("Tab autocomplete") settings. A deliberately small, fast
+ * model — Claude is not a fill-in-the-middle model, so completions are kept
+ * single-ish-line, cheap, and off by default on the client. The caps here are a
+ * server-side backstop independent of the agent proxy's limits.
+ */
+export const COMPLETE_MODEL = process.env.CELIADOR_COMPLETE_MODEL ?? "claude-haiku-4-5";
+export const COMPLETE_MAX_TOKENS = Number(process.env.CELIADOR_COMPLETE_MAX_TOKENS ?? 64);
+/** Per-user completion requests allowed per rolling minute. */
+export const COMPLETE_RPM = Number(process.env.CELIADOR_COMPLETE_RPM ?? 120);
+/** Per-user completion output-token budget per rolling day. */
+export const COMPLETE_DAILY_OUTPUT_TOKENS = Number(
+  process.env.CELIADOR_COMPLETE_DAILY_OUTPUT_TOKENS ?? 200000
+);
+
+/**
  * Minimal .env loader (no dependency): `KEY=value` per line, existing
  * environment wins. Mirrors the old daemon so the same .env drops straight in.
  */
