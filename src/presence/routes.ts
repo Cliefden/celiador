@@ -99,9 +99,11 @@ export function presenceRoutes(): Hono<AppEnv> {
       | { remoteUrl?: unknown; name?: unknown; branch?: unknown; prompt?: unknown }
       | null;
     const remoteUrl = typeof body?.remoteUrl === "string" ? body.remoteUrl : "";
+    // The prompt is optional: with none, the editor opens an idle session and the
+    // user types the first message in the chat ("get into a chat straight away").
     const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
-    if (!/^https:\/\//.test(remoteUrl) || !prompt) {
-      return c.json({ error: "remoteUrl (https) and prompt are required" }, 400);
+    if (!/^https:\/\//.test(remoteUrl)) {
+      return c.json({ error: "remoteUrl (https) is required" }, 400);
     }
     const req: EditorRunRequest = {
       kind: "start-run",

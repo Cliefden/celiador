@@ -107,8 +107,8 @@ async function main(): Promise<void> {
 
 	// Editor run-requests ("Run on your editor"): validation, no-editor 409, and fan-out.
 	const RQ = "http://localhost/api/presence/requests";
-	const badReq = await app.request(RQ, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: "https://x/y.git" }) });
-	ok("run request without prompt → 400", badReq.status === 400, `got ${badReq.status}`);
+	const badReq = await app.request(RQ, { method: "POST", headers: authH, body: JSON.stringify({ prompt: "hi" }) });
+	ok("run request without a repo → 400", badReq.status === 400, `got ${badReq.status}`);
 	const noEditor = await app.request(RQ, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: "https://github.com/Cliefden/celiador.git", prompt: "check the code" }) });
 	ok("run request with no editor online → 409", noEditor.status === 409, `got ${noEditor.status}`);
 	const { editorControl } = await import("../src/presence/control.ts");
@@ -117,6 +117,9 @@ async function main(): Promise<void> {
 	const okReq = await app.request(RQ, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: "https://github.com/Cliefden/celiador.git", name: "celiador", branch: "main", prompt: "check the code" }) });
 	ok("run request with editor online → 200", okReq.status === 200, `got ${okReq.status}`);
 	ok("editor received a start-run command", received.length === 1 && received[0].kind === "start-run" && received[0].prompt === "check the code" && received[0].branch === "main");
+	const emptyReq = await app.request(RQ, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: "https://github.com/Cliefden/celiador.git" }) });
+	ok("run request with no prompt → 200 (opens an idle chat)", emptyReq.status === 200, `got ${emptyReq.status}`);
+	ok("empty-prompt start-run has an empty prompt", received.length === 2 && received[1].prompt === "");
 	unsub();
 
 	// ── Server runner (offline local repo) ────────────────────────────────────
