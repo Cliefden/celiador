@@ -404,6 +404,22 @@ final class Api {
         ).session
     }
 
+    /// Ask the user's editor to run an agent on a repo it already has open — on the
+    /// local working copy, no clone, no credentials. The editor starts the session;
+    /// it appears in the list shortly via the relay. Throws with status 409 when no
+    /// editor is online. Returns the request id (for correlation/logging).
+    @discardableResult
+    func requestEditorRun(remoteUrl: String, name: String?, branch: String?, prompt: String) async throws -> String {
+        struct Body: Encodable { let remoteUrl: String; let name: String?; let branch: String?; let prompt: String }
+        struct Resp: Decodable { let ok: Bool; let requestId: String; let delivered: Int }
+        return try await request(
+            Resp.self,
+            path: "api/presence/requests",
+            method: "POST",
+            body: Body(remoteUrl: remoteUrl, name: name, branch: branch, prompt: prompt)
+        ).requestId
+    }
+
     /// Send a follow-up instruction to the runner (409 if no runner is attached).
     func sendMessage(_ id: String, text: String) async throws {
         _ = try await request(

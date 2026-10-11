@@ -247,11 +247,23 @@ private struct NewRunView: View {
     @State private var error: String?
     @State private var recents = RepoRecents.list()
     @State private var editorWorkspaces: [EditorWorkspace] = []
+    /// Preference for where a run executes; only applies when the repo is one the
+    /// editor has open. Defaults to the Mac (local-first), falling back to Cloud.
+    @State private var runOnEditor = true
 
     private var canStart: Bool {
         !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (repoURL.hasPrefix("http://") || repoURL.hasPrefix("https://"))
     }
+
+    /// The selected repo, trimmed.
+    private var selectedRepo: String { repoURL.trimmingCharacters(in: .whitespaces) }
+    /// True when the selected repo is currently open in the user's editor(s).
+    private var selectedIsEditorRepo: Bool { editorWorkspaces.contains { $0.remoteUrl == selectedRepo } }
+    /// Run in the editor when it's preferred AND the repo is actually open there.
+    private var effectiveEditorRun: Bool { runOnEditor && selectedIsEditorRepo }
+    /// The open-workspace name for the selected repo, if any (for the editor request).
+    private var selectedWorkspaceName: String? { editorWorkspaces.first { $0.remoteUrl == selectedRepo }?.name }
 
     var body: some View {
         NavigationStack {
@@ -334,6 +346,17 @@ private struct NewRunView: View {
                         }
                     }
                 }
+                if selectedIsEditorRepo {
+                    Section {
+                        Picker("Run on", selection: $runOnEditor) {
+                            Text("Your Mac").tag(true)
+                            Text("Cloud").tag(false)
+                        }
+                        .pickerStyle(.segmented)
+                    } header: {
+                        Text("Run on")
+                    }
+                }
                 Section("Task") {
                     TextField("What should the agent do?", text: $prompt, axis: .vertical)
                         .lineLimit(3...8)
@@ -342,7 +365,9 @@ private struct NewRunView: View {
                     Text(error).font(.footnote).foregroundStyle(Theme.red)
                 }
                 Section {
-                    Text("Runs on Celiador's servers — no desktop needed. You'll watch it here and get a diff back.")
+                    Text(effectiveEditorRun
+                         ? "Runs in your editor on the local working copy — no clone, no credentials, uses your current changes."
+                         : "Runs on Celiador's servers — clones the repo (public repos only for now). You'll watch it here and get a diff back.")
                         .font(.footnote).foregroundStyle(Theme.dim)
                 }
             }
@@ -369,16 +394,22 @@ private struct NewRunView: View {
         starting = true
         error = nil
         do {
-            let repo = repoURL.trimmingCharacters(in: .whitespaces)
-            let session = try await Api.shared.startServerRun(
-                repoURL: repo,
-                branch: branch.trimmingCharacters(in: .whitespaces).isEmpty ? nil : branch.trimmingCharacters(in: .whitespaces),
-                prompt: prompt
-            )
-            RepoRecents.remember(repo)
-            await model.refresh()
-            dismiss()
-            model.open(sessionId: session.id)
+            let repo = selectedRepo
+            let br = branch.trimmingCharacters(in: .whitespaces).isEmpty ? nil : branch.trimmingCharacters(in: .whitespaces)
+            if effectiveEditorRun {
+                // Run on the Mac's local copy. The editor opens the session; it shows
+                // up in the list via the relay, so just refresh and dismiss.
+                try await Api.shared.requestEditorRun(remoteUrl: repo, name: selectedWorkspaceName, branch: br, prompt: prompt)
+                RepoRecents.remember(repo)
+                dismiss()
+                await model.refresh()
+            } else {
+                let session = try await Api.shared.startServerRun(repoURL: repo, branch: br, prompt: prompt)
+                RepoRecents.remember(repo)
+                await model.refresh()
+                dismiss()
+                model.open(sessionId: session.id)
+            }
         } catch {
             self.error = (error as NSError).localizedDescription
         }
