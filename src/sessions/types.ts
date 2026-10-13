@@ -83,10 +83,27 @@ export type SessionCommand =
   | { kind: "cancel" }
   | { kind: "fs.list"; requestId: string; path: string }
   | { kind: "fs.read"; requestId: string; path: string }
-  | { kind: "fs.write"; requestId: string; path: string; content: string };
+  | { kind: "fs.write"; requestId: string; path: string; content: string }
+  | { kind: "git.status"; requestId: string }
+  | { kind: "git.diff"; requestId: string; path?: string }
+  | { kind: "git.commit"; requestId: string; message: string; paths?: string[] }
+  | { kind: "git.revert"; requestId: string; paths: string[] };
 
 /** Any `fs.*` command the daemon can round-trip to the runner. */
 export type FsCommand = Extract<SessionCommand, { kind: "fs.list" | "fs.read" | "fs.write" }>;
+
+/** Any `git.*` review command the daemon can round-trip to the runner. */
+export type GitCommand = Extract<SessionCommand, { kind: "git.status" | "git.diff" | "git.commit" | "git.revert" }>;
+
+/** A runner request the daemon awaits an `fs.result` reply for (by requestId). */
+export type RunnerRequest = FsCommand | GitCommand;
+
+/** One changed file in a `git.status` reply (porcelain-style status code). */
+export interface GitFileStatus {
+  path: string;
+  /** "M" modified, "A" added, "D" deleted, "R" renamed, "U" untracked, … */
+  status: string;
+}
 
 /** One entry in a workspace directory listing. */
 export interface FsEntry {
@@ -95,7 +112,7 @@ export interface FsEntry {
   size?: number;
 }
 
-/** The runner's answer to an `fs.*` command. */
+/** The runner's answer to an `fs.*` or `git.*` command (one shared envelope). */
 export interface FsResult {
   ok: boolean;
   entries?: FsEntry[];
@@ -103,6 +120,11 @@ export interface FsResult {
   encoding?: string;
   truncated?: boolean;
   error?: string;
+  // git.* payloads:
+  branch?: string;
+  files?: GitFileStatus[];
+  patch?: string;
+  sha?: string;
 }
 
 /**

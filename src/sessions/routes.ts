@@ -10,7 +10,7 @@ import { publishSessionEvent } from "./publish";
 import { startServerRun } from "../runner/manager";
 import { removeWorkspace, workspaceDir } from "../runner/workspace";
 import { listDir, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
-import type { FsCommand, FsResult, FsResultInput, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
+import type { FsCommand, FsResult, FsResultInput, GitCommand, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
 
 /** How often to send an SSE heartbeat so proxies/clients keep the stream open. */
 const HEARTBEAT_MS = 15000;
@@ -366,6 +366,69 @@ export function sessionRoutes(): Hono<AppEnv> {
     if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
     return relayFs(c, session.id, { kind: "fs.write", requestId: randomUUID(), path: rel, content });
   });
+
+  // ---- Watcher: run review (git) -------------------------------------------
+  // Review what a run changed in the working copy: status, per-file diff, commit,
+  // revert — round-tripped to the editor runner, which executes them through the
+  // editor's git machinery. Editor runs only in v1 (a server run's clone has no
+  // user git identity or push credentials).
+
+  /** Commit can run hooks; give review round-trips a longer leash than fs. */
+  const GIT_TIMEOUT_MS = 30_000;
+
+  app.get("/:id/git/status", (c) => relayGit(c, { kind: "git.status", requestId: randomUUID() }));
+
+  app.get("/:id/git/diff", (c) => {
+    const path = c.req.query("path");
+    if (path !== undefined && !str(path, 4096)) return c.json({ error: "bad path" }, 400);
+    return relayGit(c, { kind: "git.diff", requestId: randomUUID(), path: path || undefined });
+  });
+
+  app.post("/:id/git/commit", async (c) => {
+    const { message, paths } = await c.req.json().catch(() => ({}));
+    if (!str(message, 5000) || !message.trim()) return c.json({ error: "message is required" }, 400);
+    if (!validPaths(paths, true)) return c.json({ error: "bad paths" }, 400);
+    return relayGit(c, { kind: "git.commit", requestId: randomUUID(), message: message.trim(), paths });
+  });
+
+  app.post("/:id/git/revert", async (c) => {
+    const { paths } = await c.req.json().catch(() => ({}));
+    if (!validPaths(paths, false) || !paths) return c.json({ error: "paths are required" }, 400);
+    return relayGit(c, { kind: "git.revert", requestId: randomUUID(), paths });
+  });
+
+  /** paths: an array of ≤1000 non-empty relative paths (optional when `optional`). */
+  function validPaths(paths: unknown, optional: boolean): paths is string[] | undefined {
+    if (paths === undefined) return optional;
+    return Array.isArray(paths) && paths.length > 0 && paths.length <= 1000 && paths.every((p) => str(p, 4096) && p.length > 0);
+  }
+
+  /** Guard (editor runner online) + round-trip a git.* command + shape the reply. */
+  async function relayGit(c: Context<AppEnv>, command: GitCommand) {
+    const session = stores.for(c.get("user").userId).get(c.req.param("id") ?? "");
+    if (!session) return c.json({ error: "not found" }, 404);
+    if (session.runner !== "editor") return c.json({ error: "review is only available for editor runs" }, 409);
+    if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
+    let result: FsResult;
+    try {
+      result = await sessionBus.requestFs(session.id, command, GIT_TIMEOUT_MS);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === "timeout") return c.json({ error: "the editor didn't respond" }, 504);
+      return c.json({ error: msg }, 502);
+    }
+    if (!result.ok) return c.json({ error: result.error ?? "failed" }, 400);
+    switch (command.kind) {
+      case "git.status":
+        return c.json({ branch: result.branch ?? null, files: result.files ?? [] });
+      case "git.diff":
+        return c.json({ patch: result.patch ?? "" });
+      case "git.commit":
+        return c.json({ ok: true, sha: result.sha });
+      default:
+        return c.json({ ok: true });
+    }
+  }
 
   /** Round-trip an fs.* command to the editor runner and shape the HTTP reply. */
   async function relayFs(c: Context<AppEnv>, sessionId: string, command: FsCommand) {

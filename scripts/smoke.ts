@@ -82,6 +82,53 @@ async function main(): Promise<void> {
 	const bad = await app.request(`http://localhost/api/sessions/${sid}/events`, { method: "POST", headers: authH, body: JSON.stringify([{ kind: "tool" }]) });
 	ok("invalid event → 400", bad.status === 400, `got ${bad.status}`);
 
+	// ── Run review (git over the relay) ──────────────────────────────────────
+	console.log("\n== git review ==");
+	const G = `http://localhost/api/sessions/${sid}/git`;
+	const offline = await app.request(`${G}/status`, { headers: authH });
+	ok("git status with runner offline → 409", offline.status === 409, `got ${offline.status}`);
+	const noMsg = await app.request(`${G}/commit`, { method: "POST", headers: authH, body: JSON.stringify({ message: "  " }) });
+	ok("commit without a message → 400", noMsg.status === 400, `got ${noMsg.status}`);
+	const noPaths = await app.request(`${G}/revert`, { method: "POST", headers: authH, body: JSON.stringify({}) });
+	ok("revert without paths → 400", noPaths.status === 400, `got ${noPaths.status}`);
+
+	// Full round-trip: attach a fake runner on the real SSE command channel, let it
+	// answer the relayed git.status with an fs.result, and check the HTTP reply.
+	const runnerAbort = new AbortController();
+	const cmdStream = await app.request(`http://localhost/api/sessions/${sid}/commands`, { headers: authH, signal: runnerAbort.signal } as RequestInit);
+	const fakeRunner = (async () => {
+		const reader = cmdStream.body!.getReader();
+		const decoder = new TextDecoder();
+		let buf = "";
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) { return; }
+			buf += decoder.decode(value, { stream: true });
+			const lines = buf.split("\n");
+			buf = lines.pop() ?? "";
+			for (const line of lines) {
+				if (!line.startsWith("data:")) continue;
+				const payload = line.slice(5).trim();
+				if (!payload) continue;
+				const cmd = JSON.parse(payload) as { kind?: string; requestId?: string };
+				if (cmd.kind === "git.status" && cmd.requestId) {
+					await app.request(`http://localhost/api/sessions/${sid}/events`, {
+						method: "POST", headers: authH,
+						body: JSON.stringify({ kind: "fs.result", requestId: cmd.requestId, ok: true, branch: "main", files: [{ path: "a.ts", status: "M" }] }),
+					});
+					return;
+				}
+			}
+		}
+	})();
+	// Give the stream a tick to attach as the runner, then ask for status.
+	await new Promise((r) => setTimeout(r, 50));
+	const statusRes = await app.request(`${G}/status`, { headers: authH });
+	const status = (await statusRes.json()) as { branch?: string; files?: Array<{ path: string; status: string }> };
+	ok("git status round-trip → 200 with payload", statusRes.status === 200 && status.branch === "main" && status.files?.[0]?.path === "a.ts", JSON.stringify(status));
+	await fakeRunner;
+	runnerAbort.abort();
+
 	// ── Presence (editor → phone repo picker) ────────────────────────────────
 	console.log("\n== presence ==");
 	const PR = "http://localhost/api/presence/workspaces";

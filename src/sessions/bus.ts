@@ -1,4 +1,4 @@
-import type { FsCommand, FsResult, SessionCommand, SessionEvent } from "./types";
+import type { FsResult, RunnerRequest, SessionCommand, SessionEvent } from "./types";
 
 /**
  * In-process pub/sub for session relay, keyed by sessionId. No external broker —
@@ -168,11 +168,12 @@ class SessionBus {
   }
 
   /**
-   * Round-trip an `fs.*` command to the runner and resolve with its `fs.result`.
-   * Rejects with "runner offline" if no runner is attached, or "timeout" if the
-   * runner doesn't answer in time. The requestId on the command correlates the reply.
+   * Round-trip an `fs.*`/`git.*` command to the runner and resolve with its
+   * `fs.result`. Rejects with "runner offline" if no runner is attached, or
+   * "timeout" if the runner doesn't answer in time. The requestId on the command
+   * correlates the reply.
    */
-  requestFs(sessionId: string, command: FsCommand, timeoutMs = FS_TIMEOUT_MS): Promise<FsResult> {
+  requestFs(sessionId: string, command: RunnerRequest, timeoutMs = FS_TIMEOUT_MS): Promise<FsResult> {
     return new Promise<FsResult>((resolve, reject) => {
       const runner = this.channels.get(sessionId)?.runner;
       if (!runner) {
