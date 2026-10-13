@@ -179,6 +179,7 @@ export const footerLinks: { heading: string; links: { label: string; href: strin
   {
     heading: "Legal",
     links: [
+      { label: "Conduct pledge", href: "/conduct" },
       { label: "Privacy", href: "/privacy" },
       { label: "Terms", href: "/terms" },
     ],
