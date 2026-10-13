@@ -200,6 +200,22 @@ struct ChatDetail: Codable {
     let messages: [ChatMessage]
 }
 
+// MARK: - Run review (git, served by the editor runner over the relay)
+
+/// One changed file in the session repo's working copy.
+struct GitFileStatus: Codable, Identifiable, Hashable {
+    let path: String
+    /// "M" modified, "A" added, "D" deleted, "R" renamed, "U" untracked.
+    let status: String
+    var id: String { path }
+}
+
+/// The working copy's review state (GET /api/sessions/:id/git/status).
+struct GitStatus: Codable {
+    let branch: String?
+    let files: [GitFileStatus]
+}
+
 // MARK: - Workspace files (served by the daemon: /api/sessions/:id/files|file)
 
 /// One entry in a workspace directory listing.

@@ -209,6 +209,11 @@ struct SessionView: View {
         model.sessions.first { $0.id == sessionId }?.title ?? "Session"
     }
 
+    /// Live git review runs on the editor's working copy — editor runs only.
+    private var canReviewLive: Bool {
+        model.sessions.first { $0.id == sessionId }?.runner == "editor"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
@@ -258,11 +263,15 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if !transcript.diffs.isEmpty {
+                if !transcript.diffs.isEmpty || canReviewLive {
                     Button { showChanges = true } label: {
-                        Label("\(transcript.diffs.count)", systemImage: "arrow.triangle.branch")
+                        if transcript.diffs.isEmpty {
+                            Image(systemName: "arrow.triangle.branch")
+                        } else {
+                            Label("\(transcript.diffs.count)", systemImage: "arrow.triangle.branch")
+                        }
                     }
-                    .accessibilityLabel("Changes")
+                    .accessibilityLabel("Review changes")
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -273,7 +282,9 @@ struct SessionView: View {
                 }
             }
         }
-        .sheet(isPresented: $showChanges) { ChangesView(title: title, diffs: transcript.diffs) }
+        .sheet(isPresented: $showChanges) {
+            ChangesView(title: title, diffs: transcript.diffs, liveSessionId: canReviewLive ? sessionId : nil)
+        }
         .onAppear {
             #if DEBUG
             if DemoData.isActive { transcript.seedDemo(); return }

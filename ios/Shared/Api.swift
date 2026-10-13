@@ -490,6 +490,48 @@ final class Api {
         )
     }
 
+    // MARK: - Run review (git in the editor's working copy, via the relay)
+
+    /// What the run changed: current branch + changed files, fresh from the
+    /// editor's git (not the possibly-stale diff events in the transcript).
+    func gitStatus(sessionId: String) async throws -> GitStatus {
+        try await request(GitStatus.self, path: "api/sessions/\(sessionId)/git/status")
+    }
+
+    /// Unified diff — one file when `path` is set, the whole working copy otherwise.
+    func gitDiff(sessionId: String, path: String? = nil) async throws -> String {
+        struct Resp: Decodable { let patch: String }
+        return try await request(
+            Resp.self,
+            path: "api/sessions/\(sessionId)/git/diff",
+            query: path.map { [URLQueryItem(name: "path", value: $0)] }
+        ).patch
+    }
+
+    /// Commit the run's changes (all changed files, or just `paths`) with the
+    /// user's own git identity on the Mac. Returns the new commit sha when known.
+    @discardableResult
+    func gitCommit(sessionId: String, message: String, paths: [String]? = nil) async throws -> String? {
+        struct Body: Encodable { let message: String; let paths: [String]? }
+        struct Resp: Decodable { let ok: Bool; let sha: String? }
+        return try await request(
+            Resp.self,
+            path: "api/sessions/\(sessionId)/git/commit",
+            method: "POST",
+            body: Body(message: message, paths: paths)
+        ).sha
+    }
+
+    /// Discard the working-copy changes to `paths` (tracked → checkout, untracked → delete).
+    func gitRevert(sessionId: String, paths: [String]) async throws {
+        _ = try await request(
+            OkEnvelope.self,
+            path: "api/sessions/\(sessionId)/git/revert",
+            method: "POST",
+            body: ["paths": paths]
+        )
+    }
+
     // MARK: - App data (profile + chat history, via the daemon)
 
     private struct ProfileEnvelope: Codable { let profile: Profile }
