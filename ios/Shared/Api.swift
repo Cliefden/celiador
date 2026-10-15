@@ -532,6 +532,24 @@ final class Api {
         )
     }
 
+    /// Push the run's branch to its remote (setting upstream) with the Mac's credentials.
+    @discardableResult
+    func gitPush(sessionId: String) async throws -> GitPushResult {
+        try await request(GitPushResult.self, path: "api/sessions/\(sessionId)/git/push", method: "POST")
+    }
+
+    /// Open the pull request for the run's branch (the editor's GitHub sign-in does it;
+    /// without one you get a compare link instead). `base` defaults to the repo's default branch.
+    func gitOpenPullRequest(sessionId: String, title: String, body: String?, base: String? = nil) async throws -> GitPullRequest {
+        struct Body: Encodable { let title: String; let body: String?; let base: String? }
+        return try await request(
+            GitPullRequest.self,
+            path: "api/sessions/\(sessionId)/git/pr",
+            method: "POST",
+            body: Body(title: title, body: body, base: base)
+        )
+    }
+
     // MARK: - App data (profile + chat history, via the daemon)
 
     private struct ProfileEnvelope: Codable { let profile: Profile }

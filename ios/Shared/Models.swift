@@ -216,6 +216,20 @@ struct GitStatus: Codable {
     let files: [GitFileStatus]
 }
 
+/// Where the run's branch went (POST /api/sessions/:id/git/push).
+struct GitPushResult: Codable {
+    let branch: String?
+    let remote: String?
+}
+
+/// The pull request for the run's branch (POST /api/sessions/:id/git/pr): opened
+/// now (`created`), already open, or — when the editor has no GitHub sign-in — a
+/// compare link to finish it in the browser.
+struct GitPullRequest: Codable {
+    let url: String?
+    let created: Bool
+}
+
 // MARK: - Workspace files (served by the daemon: /api/sessions/:id/files|file)
 
 /// One entry in a workspace directory listing.
