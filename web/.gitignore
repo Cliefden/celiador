@@ -7,3 +7,6 @@ next-env.d.ts
 .DS_Store
 .env*.local
 .vercel
+
+# wb worktrees (one checkout per issue; see github.com/Cliefden/workbench)
+/.claude/worktrees/
