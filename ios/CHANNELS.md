@@ -32,8 +32,9 @@ Regenerate the project after editing `project.yml`/xcconfigs: `xcodegen generate
   it's hardcoded in `Shared/WidgetShared.swift`, and the auth/isolation boundary
   is the daemon's per-env JWT secret, not widget storage. Leave as-is unless we
   want per-channel widget data.
-- **Signing:** the per-channel bundle IDs need matching App IDs / provisioning
-  profiles and an APNs key authorized for each (push topic = the bundle ID).
-  Simulator builds (`CODE_SIGNING_ALLOWED=NO`) don't need them.
+- **Signing:** automatic in every config (Xcode Cloud requires it — see
+  `TESTFLIGHT.md`); the per-channel bundle IDs need matching App IDs and an APNs
+  key authorized for each (push topic = the bundle ID). Simulator builds
+  (`CODE_SIGNING_ALLOWED=NO`) don't need them.
 - **Auth deep link:** each channel's GoTrue redirect allowlist must include its
   scheme (`celiador-staging://…`, `celiador-dev://…`).
