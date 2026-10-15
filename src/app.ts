@@ -12,6 +12,7 @@ import { presenceRoutes } from "./presence/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
 import { meRoutes } from "./me/routes";
 import { accountRoutes } from "./account/routes";
+import { releaseRoutes, updateFeed } from "./releases/routes";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
@@ -84,6 +85,11 @@ export function createApp(): Hono<AppEnv> {
 
   // Account self-service (in-app account deletion — App Store 5.1.1(v)).
   app.route("/api/account", accountRoutes());
+
+  // Editor releases: the built-in updater's feed (no auth — the updater sends
+  // none) and the public artifact downloads the site links to.
+  app.get("/api/update/:platform/:quality/:commit", updateFeed);
+  app.route("/api/releases", releaseRoutes());
 
   app.notFound((c) => c.json({ error: "Unknown endpoint" }, 404));
   // Log the detail server-side; never leak raw (e.g. pg) error text to clients.

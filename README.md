@@ -58,6 +58,10 @@ curl -s localhost:4661/api/config
 | GET/PATCH | `/api/profile` | user | Profile (DB) |
 | GET/PATCH/DELETE | `/api/chats`, `/api/chats/:id` | user | Durable chat history (DB) |
 | DELETE | `/api/account` | user (supabase mode) | Delete the caller's account (GoTrue user + DB rows + relay/push files) |
+| GET | `/api/update/:platform/:quality/:commit` | none | Editor update feed (Squirrel.Mac): 204 = up to date, else the newest build's descriptor |
+| GET | `/api/releases` | none | Every published editor build (newest first) with download URLs |
+| GET | `/api/releases/latest/:platform/:quality[/dmg\|/archive]` | none | Newest build descriptor, or a 302 to its DMG / update archive |
+| GET/HEAD | `/api/releases/:file` | none | The artifact itself (only files `manifest.json` names) |
 
 ## Layout
 
@@ -77,7 +81,19 @@ src/
     apns.ts      ES256 provider JWT + HTTP/2 APNs sender (dependency-free)
     store.ts     per-user device/activity token registry (data/push/<uid>.json)
     routes.ts    /api/push/* endpoints
+  releases/      editor update feed + artifact downloads, read from releases/manifest.json
 ```
+
+## Editor releases
+
+The editor's release script (`celiador-editor/build/celiador/release-macos.sh
+--publish`) rsyncs each build's update archive (`.zip`), DMG and a fresh
+`manifest.json` into `CELIADOR_RELEASES_DIR` (default `<CELIADOR_HOME>/releases`).
+`manifest.json` is `{ "releases": [ { platform, quality, version (commit),
+productVersion, timestamp, archive, archiveSha256, dmg?, dmgSha256?, notes? } ] }`;
+entries are appended, never pruned — only commits the manifest knows are offered an
+update, so a local dev build is never "updated" to an older published release.
+Download URLs are built on `CELIADOR_PUBLIC_URL` (default `https://celiador.ai`).
 
 ## Env
 

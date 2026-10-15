@@ -17,6 +17,8 @@ const HOME = path.join(os.tmpdir(), `celiador-smoke-${process.pid}`);
 process.env.SUPABASE_JWT_SECRET ??= "smoke-secret";
 process.env.ANTHROPIC_API_KEY ??= "sk-smoke";
 process.env.CELIADOR_HOME = HOME;
+process.env.CELIADOR_RELEASES_DIR = path.join(HOME, "releases");
+process.env.CELIADOR_PUBLIC_URL = "https://smoke.test/";
 
 let pass = 0;
 let fail = 0;
@@ -197,6 +199,49 @@ async function main(): Promise<void> {
 	ok("run request with no prompt → 200 (opens an idle chat)", emptyReq.status === 200, `got ${emptyReq.status}`);
 	ok("empty-prompt start-run has an empty prompt", received.length === 2 && received[1].prompt === "");
 	unsub();
+
+	// ── Releases (editor update feed + downloads) ────────────────────────────
+	console.log("\n== releases ==");
+	const relDir = path.join(HOME, "releases");
+	fs.mkdirSync(relDir, { recursive: true });
+	fs.writeFileSync(path.join(relDir, "Celiador-darwin-arm64-1.0.1.zip"), "zip-bytes");
+	fs.writeFileSync(path.join(relDir, "secret.txt"), "nope");
+	const OLD = "0123456789abcdef0123456789abcdef01234567";
+	const NEW = "fedcba9876543210fedcba9876543210fedcba98";
+	const sha = "a".repeat(64);
+	fs.writeFileSync(path.join(relDir, "manifest.json"), JSON.stringify({
+		releases: [
+			{ platform: "darwin-arm64", quality: "stable", version: OLD, productVersion: "1.0.0", timestamp: 1_700_000_000_000, archive: "Celiador-darwin-arm64-1.0.0.zip", archiveSha256: sha, dmg: "Celiador-darwin-arm64-1.0.0.dmg", dmgSha256: sha },
+			{ platform: "darwin-arm64", quality: "stable", version: NEW, productVersion: "1.0.1", timestamp: 1_700_000_001_000, archive: "Celiador-darwin-arm64-1.0.1.zip", archiveSha256: sha, dmg: "Celiador-darwin-arm64-1.0.1.dmg", dmgSha256: sha },
+			{ platform: "darwin-arm64", quality: "stable", version: "bad", archive: "../etc/passwd" }, // invalid → skipped
+		],
+	}));
+	const U = "http://localhost/api/update/darwin-arm64/stable";
+	const upd = await app.request(`${U}/${OLD}`);
+	const updBody = (await upd.json()) as { url?: string; version?: string; productVersion?: string; sha256hash?: string };
+	ok("older known commit → 200 with the newest build", upd.status === 200 && updBody.version === NEW && updBody.productVersion === "1.0.1" && updBody.sha256hash === sha, JSON.stringify(updBody));
+	ok("update url is absolute on CELIADOR_PUBLIC_URL", updBody.url === "https://smoke.test/api/releases/Celiador-darwin-arm64-1.0.1.zip", String(updBody.url));
+	ok("newest commit → 204", (await app.request(`${U}/${NEW}`)).status === 204);
+	ok("unknown (dev) commit → 204", (await app.request(`${U}/${"c".repeat(40)}`)).status === 204);
+	ok("platform without releases → 204", (await app.request(`http://localhost/api/update/linux-x64/stable/${OLD}`)).status === 204);
+	ok("malformed commit → 400", (await app.request(`${U}/not-a-commit`)).status === 400);
+	const R = "http://localhost/api/releases";
+	const listRes = await app.request(R);
+	const listed = ((await listRes.json()) as { releases: Array<{ version: string; dmgUrl?: string }> }).releases;
+	ok("list: valid entries only, newest first, with urls", listRes.status === 200 && listed.length === 2 && listed[0].version === NEW && listed[0].dmgUrl === "https://smoke.test/api/releases/Celiador-darwin-arm64-1.0.1.dmg", JSON.stringify(listed));
+	const latest = (await (await app.request(`${R}/latest/darwin-arm64/stable`)).json()) as { version?: string };
+	ok("latest descriptor", latest.version === NEW, JSON.stringify(latest));
+	const redir = await app.request(`${R}/latest/darwin-arm64/stable/dmg`, { redirect: "manual" });
+	ok("latest/dmg → 302 to the file", redir.status === 302 && redir.headers.get("location") === "https://smoke.test/api/releases/Celiador-darwin-arm64-1.0.1.dmg", `${redir.status} ${redir.headers.get("location")}`);
+	ok("latest for an unpublished platform → 404", (await app.request(`${R}/latest/linux-x64/stable`)).status === 404);
+	const dl = await app.request(`${R}/Celiador-darwin-arm64-1.0.1.zip`);
+	ok("download → 200 with length + zip content-type", dl.status === 200 && dl.headers.get("content-length") === "9" && dl.headers.get("content-type") === "application/zip" && (await dl.text()) === "zip-bytes", `got ${dl.status}`);
+	const head = await app.request(`${R}/Celiador-darwin-arm64-1.0.1.zip`, { method: "HEAD" });
+	ok("HEAD → 200 with length, no body", head.status === 200 && head.headers.get("content-length") === "9" && (await head.text()) === "", `got ${head.status}`);
+	ok("listed but missing on disk → 404", (await app.request(`${R}/Celiador-darwin-arm64-1.0.0.zip`)).status === 404);
+	ok("unlisted file in the dir → 404", (await app.request(`${R}/secret.txt`)).status === 404);
+	ok("manifest itself is not downloadable", (await app.request(`${R}/manifest.json`)).status === 404);
+	ok("path traversal → 404", (await app.request(`${R}/..%2Fmanifest.json`)).status === 404);
 
 	// ── Server runner (offline local repo) ────────────────────────────────────
 	console.log("\n== server runner ==");
