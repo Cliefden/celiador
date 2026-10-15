@@ -22,3 +22,6 @@ signing/
 
 # Build artifacts (archives, IPAs, export logs)
 .asc/artifacts/
+
+# wb worktrees (one checkout per issue; see github.com/Cliefden/workbench)
+/.claude/worktrees/

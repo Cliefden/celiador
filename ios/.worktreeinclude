@@ -1,0 +1,4 @@
+# Gitignored local files every new worktree needs, copied from the main
+# checkout by `wb` (never over a file the worktree already has).
+# Signing assets (signing/, *.p8) are recreated with asc, not copied.
+/.claude/settings.local.json
