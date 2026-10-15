@@ -6,3 +6,6 @@
 .env.*
 !.env.example
 !.env.*.example
+
+# wb worktrees (one checkout per issue; see github.com/Cliefden/workbench)
+/.claude/worktrees/
