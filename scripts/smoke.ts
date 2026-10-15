@@ -91,9 +91,14 @@ async function main(): Promise<void> {
 	ok("commit without a message → 400", noMsg.status === 400, `got ${noMsg.status}`);
 	const noPaths = await app.request(`${G}/revert`, { method: "POST", headers: authH, body: JSON.stringify({}) });
 	ok("revert without paths → 400", noPaths.status === 400, `got ${noPaths.status}`);
+	const noTitle = await app.request(`${G}/pr`, { method: "POST", headers: authH, body: JSON.stringify({ title: " " }) });
+	ok("pr without a title → 400", noTitle.status === 400, `got ${noTitle.status}`);
+	const pushOffline = await app.request(`${G}/push`, { method: "POST", headers: authH });
+	ok("push with runner offline → 409", pushOffline.status === 409, `got ${pushOffline.status}`);
 
 	// Full round-trip: attach a fake runner on the real SSE command channel, let it
-	// answer the relayed git.status with an fs.result, and check the HTTP reply.
+	// answer the relayed git.status / git.push / git.pr with fs.results, and check
+	// the HTTP replies (incl. the compare-URL fallback for a PR without GitHub sign-in).
 	const runnerAbort = new AbortController();
 	const cmdStream = await app.request(`http://localhost/api/sessions/${sid}/commands`, { headers: authH, signal: runnerAbort.signal } as RequestInit);
 	const fakeRunner = (async () => {
@@ -110,22 +115,46 @@ async function main(): Promise<void> {
 				if (!line.startsWith("data:")) continue;
 				const payload = line.slice(5).trim();
 				if (!payload) continue;
-				const cmd = JSON.parse(payload) as { kind?: string; requestId?: string };
-				if (cmd.kind === "git.status" && cmd.requestId) {
-					await app.request(`http://localhost/api/sessions/${sid}/events`, {
-						method: "POST", headers: authH,
-						body: JSON.stringify({ kind: "fs.result", requestId: cmd.requestId, ok: true, branch: "main", files: [{ path: "a.ts", status: "M" }] }),
-					});
-					return;
+				const cmd = JSON.parse(payload) as { kind?: string; requestId?: string; title?: string; body?: string; base?: string };
+				if (!cmd.requestId) continue;
+				const reply = (result: Record<string, unknown>) => app.request(`http://localhost/api/sessions/${sid}/events`, {
+					method: "POST", headers: authH,
+					body: JSON.stringify({ kind: "fs.result", requestId: cmd.requestId, ...result }),
+				});
+				if (cmd.kind === "git.status") {
+					await reply({ ok: true, branch: "main", files: [{ path: "a.ts", status: "M" }] });
+				} else if (cmd.kind === "git.push") {
+					await reply({ ok: true, branch: "feat/x", remote: "origin" });
+				} else if (cmd.kind === "git.pr") {
+					seenPr.push(cmd);
+					if (seenPr.length === 1) {
+						await reply({ ok: true, url: "https://github.com/Cliefden/daemon/pull/99", created: true });
+					} else {
+						// No GitHub sign-in in the editor → compare page, not an error.
+						await reply({ ok: true, url: "https://github.com/Cliefden/daemon/compare/main...feat/x?expand=1", created: false });
+						return;
+					}
 				}
 			}
 		}
 	})();
+	const seenPr: Array<{ title?: string; body?: string; base?: string }> = [];
 	// Give the stream a tick to attach as the runner, then ask for status.
 	await new Promise((r) => setTimeout(r, 50));
 	const statusRes = await app.request(`${G}/status`, { headers: authH });
 	const status = (await statusRes.json()) as { branch?: string; files?: Array<{ path: string; status: string }> };
 	ok("git status round-trip → 200 with payload", statusRes.status === 200 && status.branch === "main" && status.files?.[0]?.path === "a.ts", JSON.stringify(status));
+	const pushRes = await app.request(`${G}/push`, { method: "POST", headers: authH });
+	const pushed = (await pushRes.json()) as { ok?: boolean; branch?: string; remote?: string };
+	ok("git push round-trip → 200 with branch + remote", pushRes.status === 200 && pushed.branch === "feat/x" && pushed.remote === "origin", JSON.stringify(pushed));
+	const prRes = await app.request(`${G}/pr`, { method: "POST", headers: authH, body: JSON.stringify({ title: "  Add x  ", body: "Does x." }) });
+	const pr = (await prRes.json()) as { url?: string; created?: boolean };
+	ok("git pr round-trip → 200 with url", prRes.status === 200 && pr.url === "https://github.com/Cliefden/daemon/pull/99" && pr.created === true, JSON.stringify(pr));
+	ok("git pr relays a trimmed title + body, no base", seenPr[0]?.title === "Add x" && seenPr[0]?.body === "Does x." && seenPr[0]?.base === undefined, JSON.stringify(seenPr[0]));
+	const compareRes = await app.request(`${G}/pr`, { method: "POST", headers: authH, body: JSON.stringify({ title: "Add x", base: " main " }) });
+	const compare = (await compareRes.json()) as { url?: string; created?: boolean };
+	ok("git pr compare-URL fallback → 200 with created:false", compareRes.status === 200 && compare.created === false && compare.url?.includes("/compare/") === true, JSON.stringify(compare));
+	ok("git pr relays a trimmed base", seenPr[1]?.base === "main", JSON.stringify(seenPr[1]));
 	await fakeRunner;
 	runnerAbort.abort();
 

@@ -87,13 +87,15 @@ export type SessionCommand =
   | { kind: "git.status"; requestId: string }
   | { kind: "git.diff"; requestId: string; path?: string }
   | { kind: "git.commit"; requestId: string; message: string; paths?: string[] }
-  | { kind: "git.revert"; requestId: string; paths: string[] };
+  | { kind: "git.revert"; requestId: string; paths: string[] }
+  | { kind: "git.push"; requestId: string }
+  | { kind: "git.pr"; requestId: string; title: string; body?: string; base?: string };
 
 /** Any `fs.*` command the daemon can round-trip to the runner. */
 export type FsCommand = Extract<SessionCommand, { kind: "fs.list" | "fs.read" | "fs.write" }>;
 
 /** Any `git.*` review command the daemon can round-trip to the runner. */
-export type GitCommand = Extract<SessionCommand, { kind: "git.status" | "git.diff" | "git.commit" | "git.revert" }>;
+export type GitCommand = Extract<SessionCommand, { kind: "git.status" | "git.diff" | "git.commit" | "git.revert" | "git.push" | "git.pr" }>;
 
 /** A runner request the daemon awaits an `fs.result` reply for (by requestId). */
 export type RunnerRequest = FsCommand | GitCommand;
@@ -125,6 +127,12 @@ export interface FsResult {
   files?: GitFileStatus[];
   patch?: string;
   sha?: string;
+  /** git.push: the remote the branch went to. */
+  remote?: string;
+  /** git.pr: the pull request's URL — or a compare link when the editor has no GitHub sign-in. */
+  url?: string;
+  /** git.pr: true when the pull request was created by this call (false = already open / compare link). */
+  created?: boolean;
 }
 
 /**

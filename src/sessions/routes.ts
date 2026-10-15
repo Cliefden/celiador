@@ -369,12 +369,15 @@ export function sessionRoutes(): Hono<AppEnv> {
 
   // ---- Watcher: run review (git) -------------------------------------------
   // Review what a run changed in the working copy: status, per-file diff, commit,
-  // revert — round-tripped to the editor runner, which executes them through the
-  // editor's git machinery. Editor runs only in v1 (a server run's clone has no
-  // user git identity or push credentials).
+  // revert — then push the branch and open its pull request — round-tripped to
+  // the editor runner, which executes them through the editor's git machinery
+  // and GitHub sign-in. Editor runs only in v1 (a server run's clone has no user
+  // git identity or push credentials).
 
   /** Commit can run hooks; give review round-trips a longer leash than fs. */
   const GIT_TIMEOUT_MS = 30_000;
+  /** Push talks to the remote and a pull request calls GitHub — longer still. */
+  const GIT_NETWORK_TIMEOUT_MS = 90_000;
 
   app.get("/:id/git/status", (c) => relayGit(c, { kind: "git.status", requestId: randomUUID() }));
 
@@ -397,6 +400,25 @@ export function sessionRoutes(): Hono<AppEnv> {
     return relayGit(c, { kind: "git.revert", requestId: randomUUID(), paths });
   });
 
+  // Push the current branch to origin (sets upstream) and open a pull request —
+  // the last two steps of the phone's review loop. The editor pushes through the
+  // vscode.git API (the user's credentials) and opens the PR with its GitHub
+  // session; without one it returns the compare URL so the user can finish in a
+  // browser (`created: false`).
+  app.post("/:id/git/push", (c) => relayGit(c, { kind: "git.push", requestId: randomUUID() }, GIT_NETWORK_TIMEOUT_MS));
+
+  app.post("/:id/git/pr", async (c) => {
+    const { title, body, base } = await c.req.json().catch(() => ({}));
+    if (!str(title, 500) || !title.trim()) return c.json({ error: "title is required" }, 400);
+    if (!optStr(body, 60_000)) return c.json({ error: "bad body" }, 400);
+    if (base !== undefined && (!str(base, 300) || !base.trim())) return c.json({ error: "bad base" }, 400);
+    return relayGit(
+      c,
+      { kind: "git.pr", requestId: randomUUID(), title: title.trim(), body: body || undefined, base: base?.trim() || undefined },
+      GIT_NETWORK_TIMEOUT_MS,
+    );
+  });
+
   /** paths: an array of ≤1000 non-empty relative paths (optional when `optional`). */
   function validPaths(paths: unknown, optional: boolean): paths is string[] | undefined {
     if (paths === undefined) return optional;
@@ -404,14 +426,14 @@ export function sessionRoutes(): Hono<AppEnv> {
   }
 
   /** Guard (editor runner online) + round-trip a git.* command + shape the reply. */
-  async function relayGit(c: Context<AppEnv>, command: GitCommand) {
+  async function relayGit(c: Context<AppEnv>, command: GitCommand, timeoutMs = GIT_TIMEOUT_MS) {
     const session = stores.for(c.get("user").userId).get(c.req.param("id") ?? "");
     if (!session) return c.json({ error: "not found" }, 404);
     if (session.runner !== "editor") return c.json({ error: "review is only available for editor runs" }, 409);
     if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
     let result: FsResult;
     try {
-      result = await sessionBus.requestFs(session.id, command, GIT_TIMEOUT_MS);
+      result = await sessionBus.requestFs(session.id, command, timeoutMs);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === "timeout") return c.json({ error: "the editor didn't respond" }, 504);
@@ -425,6 +447,12 @@ export function sessionRoutes(): Hono<AppEnv> {
         return c.json({ patch: result.patch ?? "" });
       case "git.commit":
         return c.json({ ok: true, sha: result.sha });
+      case "git.push":
+        return c.json({ ok: true, branch: result.branch ?? null, remote: result.remote });
+      case "git.pr":
+        // `created: false` is a legitimate reply (compare page / already open) — only a missing or non-https URL is an error.
+        if (!str(result.url, 4096) || !/^https:\/\//.test(result.url)) return c.json({ error: "the editor returned no pull request URL" }, 502);
+        return c.json({ url: result.url, created: result.created !== false });
       default:
         return c.json({ ok: true });
     }
