@@ -10,7 +10,8 @@ import UIKit
 /// Two modes:
 /// - **Live review** (`liveSessionId` set, editor run): the file list and diffs come
 ///   fresh from the editor's git over the relay, and you can COMMIT the run or
-///   REVERT individual files from the phone.
+///   REVERT individual files from the phone — and once the tree is clean, PUSH the
+///   branch and OPEN ITS PULL REQUEST.
 /// - **Transcript** (fallback): the diff events the run streamed, read-only — used
 ///   for cloud runs and when the editor is offline.
 struct ChangesView: View {
@@ -29,6 +30,18 @@ struct ChangesView: View {
     @State private var showCommit = false
     @State private var commitMessage = ""
     @State private var committing = false
+    @State private var showPullRequest = false
+    @State private var pullRequestTitle = ""
+    @State private var pullRequestBody = ""
+    @State private var openingPullRequest = false
+    @State private var pullRequest: GitPullRequest?
+
+    /// A pull request from the integration branch itself makes no sense — the
+    /// editor has to be on a feature branch first.
+    private var onIntegrationBranch: Bool {
+        guard let branch = live?.branch?.lowercased() else { return true }
+        return ["main", "master", "develop", "trunk"].contains(branch)
+    }
 
     /// Live file list projected into the shared DiffFile shape (stable index ids).
     private var shownDiffs: [DiffFile] {
@@ -113,6 +126,8 @@ struct ChangesView: View {
             .safeAreaInset(edge: .bottom) {
                 if isLive && !shownDiffs.isEmpty {
                     commitBar
+                } else if isLive && !loadingLive {
+                    pullRequestBar
                 }
             }
             .task { await loadLive() }
@@ -129,6 +144,7 @@ struct ChangesView: View {
                     : "Reverts \(file.path) to its last committed state.")
             }
             .sheet(isPresented: $showCommit) { commitSheet }
+            .sheet(isPresented: $showPullRequest) { pullRequestSheet }
         }
     }
 
@@ -235,6 +251,102 @@ struct ChangesView: View {
                 toast = (error as NSError).localizedDescription
             }
             committing = false
+        }
+    }
+
+    // MARK: - Pull request (push + open, over the relay)
+
+    private var pullRequestBar: some View {
+        HStack(spacing: 10) {
+            if let pullRequest, let url = pullRequest.url.flatMap(URL.init) {
+                Image(systemName: "arrow.triangle.pull").foregroundStyle(Theme.celadonBright)
+                Text(pullRequest.created ? "Pull request opened" : "Pull request ready")
+                    .font(.footnote).foregroundStyle(Theme.ink)
+                Spacer()
+                Link("View", destination: url)
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.celadon)
+            } else if onIntegrationBranch {
+                Image(systemName: "arrow.triangle.branch").foregroundStyle(Theme.dim)
+                Text("On \(live?.branch ?? "the default branch") — switch the editor to a feature branch to open a pull request.")
+                    .font(.footnote).foregroundStyle(Theme.dim)
+            } else {
+                Image(systemName: "arrow.triangle.pull").foregroundStyle(Theme.celadonBright)
+                Text("Committed on \(live?.branch ?? "the branch")")
+                    .font(.footnote).foregroundStyle(Theme.ink).lineLimit(1)
+                Spacer()
+                Button {
+                    Haptics.tap()
+                    if pullRequestTitle.isEmpty { pullRequestTitle = title }
+                    showPullRequest = true
+                } label: {
+                    Text("Open PR…").font(.footnote.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.celadon)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+    }
+
+    private var pullRequestSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Title") {
+                    TextField("What does this change?", text: $pullRequestTitle, axis: .vertical)
+                        .lineLimit(1...3)
+                }
+                Section("Description") {
+                    TextField("Optional", text: $pullRequestBody, axis: .vertical)
+                        .lineLimit(3...8)
+                }
+                Section {
+                    Text("Pushes \(live?.branch.map { "“\($0)”" } ?? "the branch") from your Mac and opens the pull request with the editor's GitHub sign-in. Without one, you get a link to finish it in the browser.")
+                        .font(.footnote).foregroundStyle(Theme.dim)
+                }
+            }
+            .navigationTitle("Pull Request")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showPullRequest = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if openingPullRequest {
+                        ProgressView()
+                    } else {
+                        Button("Open") { openPullRequest() }
+                            .disabled(pullRequestTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private func openPullRequest() {
+        guard let sid = liveSessionId else { return }
+        openingPullRequest = true
+        Task {
+            do {
+                try await Api.shared.gitPush(sessionId: sid)
+                let body = pullRequestBody.trimmingCharacters(in: .whitespacesAndNewlines)
+                let result = try await Api.shared.gitOpenPullRequest(
+                    sessionId: sid,
+                    title: pullRequestTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+                    body: body.isEmpty ? nil : body
+                )
+                pullRequest = result
+                Haptics.success()
+                toast = result.created ? "Pull request opened" : (result.url == nil ? "Pushed" : "Pull request ready")
+                showPullRequest = false
+            } catch {
+                Haptics.error()
+                toast = (error as NSError).localizedDescription
+            }
+            openingPullRequest = false
         }
     }
 
