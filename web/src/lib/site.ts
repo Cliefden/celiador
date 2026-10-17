@@ -58,8 +58,8 @@ export const features: Feature[] = [
     icon: "diff",
   },
   {
-    title: "Your keys, your privacy",
-    body: "Bring your own model access or use ours. Your code isn't training data, and sensitive work can stay on your machine.",
+    title: "Our key, your privacy",
+    body: "The editor never holds a model key. Requests go through our server, which holds the key and meters usage with limits we publish. Your code isn't training data.",
     icon: "shield",
   },
 ];
@@ -90,47 +90,47 @@ export type Tier = {
   perks: string[];
 };
 
+// One pricing truth (see /conduct): what exists today is free early access with
+// published, server-enforced limits. Paid plans are announced with a date before
+// anyone is billed, so nothing here pretends to sell what isn't built.
 export const tiers: Tier[] = [
   {
-    name: "Hobby",
+    name: "Early access",
     price: "$0",
-    cadence: "forever",
-    blurb: "Everything you need to try Celiador on your own projects.",
-    cta: "Download free",
+    cadence: "today",
+    blurb: "The whole product while we're in early access: the editor, the hosted Claude agent on our key, and the iPhone companion.",
+    cta: "Download for Mac",
     href: "/download",
+    featured: true,
     perks: [
-      "Native macOS editor",
-      "AI chat with your codebase",
-      "Bring your own model key",
-      "Community support",
+      "Native macOS editor built on VS Code",
+      "Hosted Claude agent — no key to bring, no card to add",
+      "Daily limits published below and metered server-side",
+      "iPhone companion to watch and steer runs",
+      "Support answered by a person",
     ],
   },
   {
     name: "Pro",
-    price: "$20",
-    cadence: "/ month",
-    blurb: "The full agent, hosted models, and higher limits for daily work.",
-    cta: "Start Pro",
-    href: "/download",
-    featured: true,
+    price: "Not yet",
+    blurb: "When paid plans arrive, the price, the limits and the date appear here and in the changelog before a single invoice. Early-access accounts get the transition terms in writing, with an end date.",
+    cta: "Read the pledge",
+    href: "/conduct",
     perks: [
-      "Everything in Hobby",
-      "Agent that edits across files",
-      "Hosted frontier models included",
-      "Priority previews & support",
+      "Price and limits published before billing starts",
+      "Self-service cancellation; statutory withdrawal rights honored",
+      "No \"unlimited\" unless it is",
     ],
   },
   {
-    name: "Team",
-    price: "Custom",
-    blurb: "Shared billing, admin controls, and security review for your org.",
+    name: "Teams",
+    price: "Later",
+    blurb: "Shared billing, seats and admin controls aren't built yet. If you'd run Celiador for a team, tell us what you'd need and we'll say plainly what exists.",
     cta: "Contact us",
     href: "/contact",
     perks: [
-      "Everything in Pro",
-      "Centralized billing & seats",
-      "SSO & audit logging",
-      "Security & procurement review",
+      "Nothing to buy today",
+      "Your requirements shape what we build first",
     ],
   },
 ];
@@ -153,8 +153,12 @@ export const faqs: { q: string; a: string }[] = [
     a: "macOS on Apple Silicon today, with an iPhone companion for steering runs. Windows and Linux builds are on the roadmap — tell us on the download page which you need.",
   },
   {
+    q: "What does it cost?",
+    a: "Nothing during early access. The hosted agent runs on our key with per-account limits that are published on the pricing page and enforced by the server, and the app shows you the same numbers. Paid plans will be announced with a date before anyone is billed.",
+  },
+  {
     q: "What happens to my code?",
-    a: "Your code stays yours. It is never used to train models. You can bring your own model provider key, and sensitive work can be kept on your machine.",
+    a: "Your code stays yours. It is never used to train models. The editor never holds a model key; requests go through our server, which holds the key, and nothing is indexed server-side.",
   },
   {
     q: "Do I need to learn a new editor?",

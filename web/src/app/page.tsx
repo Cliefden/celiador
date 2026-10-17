@@ -154,8 +154,8 @@ export default function HomePage() {
         <Container>
           <SectionHeading
             eyebrow="Pricing"
-            title="Start free. Upgrade when you're hooked."
-            sub="Use your own model key for free, or let us host the frontier models for you."
+            title="Free while we're in early access."
+            sub="The hosted agent runs on our key, with per-account limits we publish and enforce. Paid plans get a dated announcement before anyone is billed."
           />
           <div className="mt-14 grid gap-4 lg:grid-cols-3">
             {tiers.map((t) => (

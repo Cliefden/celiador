@@ -60,10 +60,12 @@ export default function PrivacyPage() {
         them.
       </p>
 
-      <h2>Bring your own key</h2>
+      <h2>No model key on your machine</h2>
       <p>
-        If you use your own model-provider key, those requests go directly to that provider under
-        their terms, outside our proxy.
+        The editor and the iPhone app never hold a model-provider key. Every model request goes
+        through our server, which holds the key, meters your usage against the published limits,
+        and forwards the request to Anthropic under their API terms. Bringing your own key is not
+        offered today; if that changes, this page will say so before it ships.
       </p>
     </LegalPage>
   );
