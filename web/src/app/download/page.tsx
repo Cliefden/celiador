@@ -1,27 +1,32 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { EmailCapture } from "@/components/EmailCapture";
-import { AppleIcon, CheckIcon } from "@/components/icons";
+import { AppleIcon, CheckIcon, DownloadIcon } from "@/components/icons";
 import { site } from "@/lib/site";
+import { formatReleaseDate, latestMacDmgHref, latestMacRelease, shortCommit } from "@/lib/releases";
 
 export const metadata: Metadata = {
   title: "Download",
-  description: `Download ${site.name} for macOS. Join the private preview.`,
+  description: `Download ${site.name} for macOS — a notarized native app that updates itself.`,
 };
 
-export default function DownloadPage() {
+export default async function DownloadPage() {
+  const release = await latestMacRelease();
+
   return (
     <section className="relative overflow-hidden">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] hero-glow" />
       <Container className="relative py-20 sm:py-28">
         <div className="mx-auto max-w-2xl text-center">
-          <Eyebrow>Private preview</Eyebrow>
+          <Eyebrow>{release ? "Early access" : "Private preview"}</Eyebrow>
           <h1 className="mt-6 text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
             Download Celiador for Mac
           </h1>
           <p className="mt-4 text-lg leading-relaxed text-fog">
-            The macOS app is in private preview. Drop your email and we&apos;ll send you the signed
-            build the moment it&apos;s ready.
+            {release
+              ? "A signed, notarized native app. Install once; it keeps itself up to date."
+              : "The macOS app is in private preview. Leave your email and we'll send you the signed build the moment it's ready."}
           </p>
         </div>
 
@@ -33,29 +38,79 @@ export default function DownloadPage() {
             </div>
             <h2 className="mt-5 text-xl font-semibold">Celiador for macOS</h2>
             <p className="mt-1 font-mono text-xs text-fog-dim">
-              Version {site.macVersion} · {site.minMacOS}
+              {release ? `Version ${release.productVersion} · built ${formatReleaseDate(release)}` : `Version ${site.macVersion}`}
+              {" · "}
+              {site.minMacOS}
             </p>
 
             <div className="mt-6">
-              {/* Placeholder: swap this for the real .dmg link on launch. */}
-              <button
-                disabled
-                className="w-full cursor-not-allowed rounded-xl border border-line bg-white/[0.03] px-5 py-3.5 text-sm font-medium text-fog-dim"
-              >
-                Download .dmg — coming soon
-              </button>
+              {release?.dmgUrl ? (
+                <a
+                  href={latestMacDmgHref}
+                  className="group inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3.5 text-sm font-medium text-white shadow-[0_10px_40px_-12px_rgba(124,107,255,0.9)] transition hover:brightness-110"
+                >
+                  <DownloadIcon className="h-4 w-4" />
+                  Download .dmg
+                </a>
+              ) : (
+                <button
+                  disabled
+                  className="w-full cursor-not-allowed rounded-xl border border-line bg-white/[0.03] px-5 py-3.5 text-sm font-medium text-fog-dim"
+                >
+                  Download .dmg — coming soon
+                </button>
+              )}
             </div>
 
+            {release?.dmgSha256 && (
+              <dl className="mt-5 grid gap-1 text-left font-mono text-[11px] leading-relaxed text-fog-dim">
+                <div className="flex gap-3">
+                  <dt className="shrink-0 w-14">build</dt>
+                  <dd className="truncate">{shortCommit(release)}</dd>
+                </div>
+                <div className="flex gap-3">
+                  <dt className="shrink-0 w-14">sha256</dt>
+                  <dd className="break-all">{release.dmgSha256}</dd>
+                </div>
+              </dl>
+            )}
+
+            {release && (
+              <p className="mt-4 text-xs text-fog-dim">
+                Signed with a Developer ID and notarized by Apple — it opens without any Gatekeeper override.
+                {" "}
+                <Link href="/releases" className="text-brand hover:underline">
+                  All releases
+                </Link>
+              </p>
+            )}
+
             <div className="mt-6 border-t border-line pt-6">
-              <p className="text-sm font-medium text-white">Get notified at launch</p>
+              <p className="text-sm font-medium text-white">
+                {release ? "Windows or Linux? Get notified" : "Get notified at launch"}
+              </p>
               <div className="mt-3">
-                <EmailCapture compact />
+                <EmailCapture
+                  compact
+                  subject={release ? "Celiador for Windows / Linux" : undefined}
+                  hint={release ? "Tell us which platform you need; one email when it ships." : undefined}
+                />
               </div>
             </div>
           </div>
 
-          {/* Other platforms */}
+          {/* Companion + other platforms */}
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <div className="flex items-center justify-between rounded-xl border border-line bg-surface/60 px-4 py-3.5">
+              <span className="text-sm text-white">iPhone companion</span>
+              {site.testflightUrl ? (
+                <a href={site.testflightUrl} className="font-mono text-xs text-brand hover:underline" target="_blank" rel="noreferrer">
+                  Join on TestFlight
+                </a>
+              ) : (
+                <span className="font-mono text-xs text-fog-dim">TestFlight soon</span>
+              )}
+            </div>
             {[
               { os: "Windows", note: "On the roadmap" },
               { os: "Linux", note: "On the roadmap" },
@@ -74,16 +129,16 @@ export default function DownloadPage() {
         {/* What you get */}
         <div className="mx-auto mt-16 max-w-2xl">
           <h3 className="text-center text-sm font-semibold uppercase tracking-wider text-fog-dim">
-            What&apos;s in the preview
+            What&apos;s in the build
           </h3>
           <ul className="mt-6 grid gap-3 sm:grid-cols-2">
             {[
               "Native macOS editor built on VS Code",
-              "AI chat across your whole codebase",
-              "Agent edits with reviewable diffs",
+              "Claude-powered agent across your whole codebase",
+              "Every edit reviewable before it lands",
+              "Steer runs from your iPhone",
               "Your extensions, themes & keybindings",
-              "Bring your own model key",
-              "Automatic preview updates",
+              "Automatic updates",
             ].map((t) => (
               <li key={t} className="flex items-start gap-3 rounded-xl border border-line bg-surface/40 px-4 py-3 text-sm text-fog">
                 <CheckIcon className="mt-0.5 h-5 w-5 shrink-0 text-brand" />

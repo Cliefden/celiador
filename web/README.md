@@ -34,9 +34,11 @@ Edit copy in **`src/lib/site.ts`** — pages read from it, so text stays in one 
 
 ## Before launch — TODO
 
-- **Download link**: `src/app/download/page.tsx` has a disabled "coming soon"
-  button. Point it at the real signed `.dmg` URL. Also update `downloadHref`,
-  `macVersion`, and `minMacOS` in `src/lib/site.ts`.
+- **Download link**: DONE — `/download` and `/releases` read the daemon's release
+  listing (`src/lib/releases.ts`, `https://celiador.ai/api/releases`, revalidated
+  every 5 min; `CELIADOR_RELEASES_API` overrides) and fall back to the notify form
+  when nothing is published. Set `site.testflightUrl` once the public TestFlight
+  link exists.
 - **Email capture**: `src/components/EmailCapture.tsx` and `ContactForm.tsx` are
   UI-only (they show a success state, no request). Wire `submit` to your waitlist
   backend (Supabase, Loops, Resend, etc.).

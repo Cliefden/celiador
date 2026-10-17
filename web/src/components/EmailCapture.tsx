@@ -9,7 +9,18 @@ import { CheckIcon } from "./icons";
 // (Supabase, Loops, …), POST to it in `submit` and only then show "on the list".
 const WAITLIST_ADDRESS = "hello@celiador.ai";
 
-export function EmailCapture({ compact = false }: { compact?: boolean }) {
+export function EmailCapture({
+  compact = false,
+  subject: subjectText = "Celiador early access",
+  cta = "Get notified",
+  hint = "Opens your mail app with a pre-filled request. No spam — one email when there's news.",
+}: {
+  compact?: boolean;
+  /** Subject of the pre-filled mail, e.g. "Celiador for Windows / Linux". */
+  subject?: string;
+  cta?: string;
+  hint?: string;
+}) {
   const [email, setEmail] = useState("");
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
@@ -21,8 +32,8 @@ export function EmailCapture({ compact = false }: { compact?: boolean }) {
       return;
     }
     setError("");
-    const subject = encodeURIComponent("Celiador early access");
-    const body = encodeURIComponent(`Please add ${email} to the Celiador early-access list.`);
+    const subject = encodeURIComponent(subjectText);
+    const body = encodeURIComponent(`Please add ${email} to the list for: ${subjectText}.`);
     window.location.href = `mailto:${WAITLIST_ADDRESS}?subject=${subject}&body=${body}`;
     setDone(true);
   }
@@ -68,13 +79,11 @@ export function EmailCapture({ compact = false }: { compact?: boolean }) {
           type="submit"
           className="shrink-0 rounded-xl bg-brand px-5 py-3 text-sm font-medium text-white transition hover:brightness-110"
         >
-          Get early access
+          {cta}
         </button>
       </div>
       {error && <p className="mt-2 text-xs text-[#ff6b6b]">{error}</p>}
-      <p className="mt-2 text-xs text-fog-dim">
-        Opens your mail app with a pre-filled request. No spam — one email when the preview opens.
-      </p>
+      <p className="mt-2 text-xs text-fog-dim">{hint}</p>
     </form>
   );
 }
