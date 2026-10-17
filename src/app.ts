@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
-import { VERSION } from "./config";
+import { AGENT_MODEL, VERSION } from "./config";
+import { activeLimits } from "./agent/quota";
 import { authMode, requireUser, type AppEnv } from "./auth";
 import { agentProxy } from "./anthropic";
 import { completeHandler } from "./complete/routes";
@@ -41,6 +42,22 @@ export function createApp(): Hono<AppEnv> {
       supabaseUrl: process.env.SUPABASE_URL ?? null,
       supabaseAnonKey: process.env.SUPABASE_ANON_KEY ?? null,
     })
+  );
+
+  // The per-user limits the agent proxy enforces, public: the pricing page
+  // shows these, the signed-in account panel shows the same object via
+  // /api/me — "we publish the numbers we enforce". 0 means unlimited.
+  app.get("/api/limits", (c) =>
+    c.json(
+      {
+        plan: "early-access",
+        model: AGENT_MODEL,
+        limits: activeLimits(),
+        window: "Daily budgets reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
+      },
+      200,
+      { "cache-control": "public, max-age=300" }
+    )
   );
 
   // Anthropic agent proxy (SSE). Auth handled inside (user JWT or shared token).
