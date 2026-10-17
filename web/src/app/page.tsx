@@ -226,10 +226,16 @@ export default function HomePage() {
             Ship your next idea with Celiador.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-lg text-fog">
-            Join the private preview and be first to get the macOS app.
+            The macOS app is here — signed, notarized, and self-updating. Windows and Linux: say
+            the word and we&apos;ll tell you when yours ships.
           </p>
+          <div className="mt-8 flex justify-center">
+            <Button href="/download" variant="primary" icon="download" className="px-6 py-3.5">
+              Download for Mac
+            </Button>
+          </div>
           <div className="mt-8">
-            <EmailCapture />
+            <EmailCapture subject="Celiador for Windows / Linux" hint="Tell us which platform you need; one email when it ships." />
           </div>
         </Container>
       </section>

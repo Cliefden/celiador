@@ -7,10 +7,14 @@ export const site = {
   description:
     "Celiador is an AI code editor for macOS — a native app with an agent that reads, writes, and ships changes across your whole codebase. Built on VS Code.",
   url: "https://celiador.ai",
-  // Swap this for the real signed .dmg URL when the product is released.
+  // The download page reads the live version from the daemon's release
+  // listing (src/lib/releases.ts); this is only the fallback label shown
+  // when no build has been published or the listing is unreachable.
   downloadHref: "/download",
-  macVersion: "0.1.0 (preview)",
+  macVersion: "preview",
   minMacOS: "macOS 13 Ventura or later · Apple Silicon",
+  // Public TestFlight link for the iPhone companion; empty until it exists.
+  testflightUrl: "",
   github: "https://github.com/Cliefden/celiador",
 };
 
@@ -142,11 +146,11 @@ export const faqs: { q: string; a: string }[] = [
   },
   {
     q: "Is it available now?",
-    a: "We're in private preview. Add your email on the download page and we'll send you the macOS build the moment it's ready.",
+    a: "Yes, as early access. The macOS app is a signed, notarized download that updates itself; the iPhone companion follows on TestFlight.",
   },
   {
     q: "Which platforms are supported?",
-    a: "macOS on Apple Silicon is first. Windows and Linux builds are on the roadmap — tell us on the download page which you need.",
+    a: "macOS on Apple Silicon today, with an iPhone companion for steering runs. Windows and Linux builds are on the roadmap — tell us on the download page which you need.",
   },
   {
     q: "What happens to my code?",
@@ -165,6 +169,7 @@ export const footerLinks: { heading: string; links: { label: string; href: strin
       { label: "Features", href: "/features" },
       { label: "Pricing", href: "/pricing" },
       { label: "Download", href: "/download" },
+      { label: "Releases", href: "/releases" },
       { label: "Changelog", href: "/changelog" },
     ],
   },
