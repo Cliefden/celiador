@@ -6,16 +6,40 @@ export const metadata: Metadata = {
   description: "What's new in Celiador.",
 };
 
+// One entry per thing worth knowing about, newest first. Pricing and plan
+// changes always get an entry here, dated, before they take effect (/conduct).
+// Builds themselves are listed on /releases, straight from the update feed.
 const entries = [
   {
+    version: "Pricing",
+    date: "17 Oct 2026",
+    tag: "Pricing",
+    items: [
+      "The pricing page previously described a $20 Pro plan, a Teams tier and bring-your-own-key support that did not exist. It now says what is true: Celiador is free during early access.",
+      "The per-account limits the server enforces (requests per minute and per day, concurrent requests, input and output tokens per day, model) are published on the pricing page, read live from the same endpoint the app's account panel uses.",
+      "Paid plans, when they come, will be announced here with their price, limits and start date before anyone is billed. Early-access accounts will get the transition terms in writing, with an end date.",
+    ],
+  },
+  {
+    version: "1.138.0",
+    date: "17 Oct 2026",
+    tag: "Early access",
+    items: [
+      "First notarized macOS build: signed with a Developer ID, notarized by Apple, and self-updating. Download it from the download page; later builds install themselves.",
+      "iPhone companion: editor-typed turns now appear on the phone; review a run's diff, discard files, commit, push and open a pull request from the phone.",
+      "Agent-writable configuration (.vscode settings and tasks, agent settings, git hooks) always needs your approval, in every permission mode.",
+      "A second build the same day proved the update path end to end.",
+    ],
+  },
+  {
     version: "0.1.0",
-    date: "Private preview",
+    date: "Sept–Oct 2026",
     tag: "Preview",
     items: [
       "First native macOS build, a hard fork of VS Code.",
       "Built-in Celiador agent: chat with your codebase and make multi-file edits.",
       "Reviewable diffs — accept or reject every change.",
-      "Open VSX extension marketplace, bring-your-own-key support.",
+      "Open VSX extension marketplace.",
     ],
   },
 ];
