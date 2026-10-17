@@ -41,6 +41,15 @@ const limits = () => ({
   dailyOutput: limit("CELIADOR_AGENT_DAILY_OUTPUT_TOKENS", 300_000),
 });
 
+/**
+ * The limits currently in force, for the public `/api/limits` endpoint the
+ * pricing page reads — the same object `/api/me` returns to a signed-in
+ * client, so the site and the app show the same figures (0 = unlimited).
+ */
+export function activeLimits(): ReturnType<typeof limits> {
+  return limits();
+}
+
 const SAVE_DEBOUNCE_MS = 2000;
 
 class AgentQuota {
