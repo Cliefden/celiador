@@ -1,5 +1,7 @@
 /node_modules
 /data
+# Editor release artifacts + manifest.json (rsynced in by the editor's release script)
+/releases
 *.tsbuildinfo
 .DS_Store
 .env
