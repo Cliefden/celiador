@@ -1,15 +1,26 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Button, Container, Eyebrow, SectionHeading } from "@/components/ui";
 import { FAQ } from "@/components/FAQ";
 import { CheckIcon } from "@/components/icons";
 import { tiers } from "@/lib/site";
+import { formatLimit, publishedLimits } from "@/lib/limits";
 
 export const metadata: Metadata = {
   title: "Pricing",
-  description: "Start free with your own model key, or go Pro for hosted frontier models.",
+  description: "Free during early access, with the limits we enforce published as numbers.",
 };
 
-export default function PricingPage() {
+export default async function PricingPage() {
+  const published = await publishedLimits();
+  const rows: { label: string; value: string; note: string }[] = [
+    { label: "Agent requests per minute", value: formatLimit(published.limits.rpm), note: "rolling window" },
+    { label: "Concurrent agent requests", value: formatLimit(published.limits.concurrency), note: "at any moment" },
+    { label: "Agent requests per day", value: formatLimit(published.limits.dailyRequests), note: "UTC day" },
+    { label: "Input tokens per day", value: formatLimit(published.limits.dailyInput), note: "UTC day" },
+    { label: "Output tokens per day", value: formatLimit(published.limits.dailyOutput), note: "UTC day" },
+  ];
+
   return (
     <>
       <section className="relative overflow-hidden">
@@ -17,10 +28,11 @@ export default function PricingPage() {
         <Container className="relative py-20 text-center sm:py-24">
           <Eyebrow>Pricing</Eyebrow>
           <h1 className="mx-auto mt-6 max-w-2xl text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
-            Simple pricing that scales with you
+            Free while we&apos;re in early access
           </h1>
           <p className="mx-auto mt-4 max-w-xl text-lg text-fog">
-            The editor is free forever. Pay only when you want us to host the models.
+            No card, no trial clock. The limits below are the ones the server enforces, and the app
+            shows you the same numbers.
           </p>
         </Container>
       </section>
@@ -38,7 +50,7 @@ export default function PricingPage() {
               >
                 {t.featured && (
                   <span className="absolute right-6 top-6 rounded-full bg-brand px-2.5 py-1 text-xs font-medium text-white">
-                    Popular
+                    Today
                   </span>
                 )}
                 <h3 className="text-lg font-semibold">{t.name}</h3>
@@ -67,8 +79,55 @@ export default function PricingPage() {
               </div>
             ))}
           </div>
-          <p className="mt-8 text-center text-sm text-fog-dim">
-            Prices in USD. Team plans are billed annually — talk to us for volume pricing.
+        </Container>
+      </section>
+
+      <section className="border-t border-line py-20">
+        <Container>
+          <SectionHeading
+            eyebrow="The numbers we enforce"
+            title="Early-access limits, per account"
+            sub={
+              <>
+                Read live from the same endpoint the app uses, so this page can&apos;t drift from what
+                you&apos;re actually metered against.{" "}
+                <Link href="/conduct" className="text-brand hover:underline">
+                  Why we publish them.
+                </Link>
+              </>
+            }
+          />
+          <div className="mx-auto mt-10 max-w-2xl overflow-hidden rounded-2xl border border-line bg-surface">
+            <table className="w-full text-sm">
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.label} className="border-b border-line last:border-b-0">
+                    <td className="px-5 py-3.5 text-white">{r.label}</td>
+                    <td className="px-5 py-3.5 text-right font-mono text-white">{r.value}</td>
+                    <td className="hidden px-5 py-3.5 text-right text-xs text-fog-dim sm:table-cell">{r.note}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td className="px-5 py-3.5 text-white">Model</td>
+                  <td className="px-5 py-3.5 text-right font-mono text-white" colSpan={2}>{published.model}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="mx-auto mt-4 max-w-2xl text-center text-xs text-fog-dim">
+            {published.window} The model is chosen server-side; clients can&apos;t pick it.
+            {published.live ? (
+              <>
+                {" "}
+                Source:{" "}
+                <a href="https://celiador.ai/api/limits" className="underline hover:text-fog">
+                  celiador.ai/api/limits
+                </a>
+                .
+              </>
+            ) : (
+              <> Shown: the documented defaults — the live endpoint was unreachable when this page was built.</>
+            )}
           </p>
         </Container>
       </section>
