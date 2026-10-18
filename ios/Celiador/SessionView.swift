@@ -152,12 +152,14 @@ private final class SessionTranscript {
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        Telemetry.signal(.phoneCommand, ["command": "instruct"])
         Task { try? await Api.shared.sendMessage(sessionId, text: trimmed) }
     }
 
     func resolve(_ approve: Bool) {
         guard let p = pendingApproval else { return }
         pendingApproval = nil // optimistic; the runner's next state event confirms
+        Telemetry.signal(.phoneCommand, ["command": approve ? "approve" : "reject"])
         Task { try? await Api.shared.resolveApproval(sessionId, requestId: p.requestId, approve: approve) }
     }
 
@@ -165,10 +167,12 @@ private final class SessionTranscript {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let q = pendingQuestion, !trimmed.isEmpty else { return }
         pendingQuestion = nil
+        Telemetry.signal(.phoneCommand, ["command": "answer"])
         Task { try? await Api.shared.answer(sessionId, requestId: q.requestId, text: trimmed) }
     }
 
     func cancel() {
+        Telemetry.signal(.phoneCommand, ["command": "cancel"])
         Task { try? await Api.shared.cancelSession(sessionId) }
     }
 

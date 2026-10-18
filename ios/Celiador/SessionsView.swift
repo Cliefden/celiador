@@ -454,6 +454,7 @@ private struct NewRunView: View {
         do {
             let before = Set((try? await Api.shared.listSessions())?.map(\.id) ?? [])
             try await Api.shared.requestEditorRun(remoteUrl: ws.remoteUrl, name: ws.name, branch: ws.branch, prompt: msg)
+            Telemetry.signal(.phoneRun, ["seeded": "true"])
             RepoRecents.remember(ws.remoteUrl)
             for _ in 0..<20 {
                 try? await Task.sleep(nanoseconds: 500_000_000)

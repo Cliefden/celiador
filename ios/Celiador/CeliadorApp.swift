@@ -5,6 +5,10 @@ struct CeliadorApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
 
+    init() {
+        Telemetry.configure()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -16,7 +20,10 @@ struct CeliadorApp: App {
                     switch url.host {
                     case "auth-callback":
                         // Magic-link / GitHub OAuth return — tokens in the fragment.
-                        if Api.shared.handleAuthCallback(url) { model.didSignIn() }
+                        if Api.shared.handleAuthCallback(url) {
+                            Telemetry.signal(.signedIn, ["method": "magicLink"])
+                            model.didSignIn()
+                        }
                     case "session":
                         // From widgets, Live Activities, and push taps.
                         let id = url.lastPathComponent

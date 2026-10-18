@@ -339,6 +339,7 @@ struct ChangesView: View {
                     body: body.isEmpty ? nil : body
                 )
                 pullRequest = result
+                Telemetry.signal(.phonePullRequest, ["created": result.created ? "true" : "false"])
                 Haptics.success()
                 toast = result.created ? "Pull request opened" : (result.url == nil ? "Pushed" : "Pull request ready")
                 showPullRequest = false
