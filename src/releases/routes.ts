@@ -44,11 +44,16 @@ export function updateFeed(c: Context<AppEnv>): Response {
     return c.body(null, 204, NO_CACHE);
   }
   // The shape VS Code's update server returns (IUpdate): `url` is what Squirrel
-  // downloads, `version` is the commit the editor records as pending.
+  // downloads, `version` is the commit the editor records as pending. Squirrel.Mac
+  // itself only reads `url`, `name`, `notes` and `pub_date`, and the editor fills
+  // its downloaded-update record from those (`notes` → version, `name` →
+  // productVersion, `pub_date` → timestamp), so the commit goes in `notes` too.
   return c.json(
     {
       url: fileUrl(latest.archive),
       name: latest.productVersion,
+      notes: latest.version,
+      pub_date: new Date(latest.timestamp).toISOString(),
       version: latest.version,
       productVersion: latest.productVersion,
       timestamp: latest.timestamp,
