@@ -222,8 +222,9 @@ async function main(): Promise<void> {
 	}));
 	const U = "http://localhost/api/update/darwin-arm64/stable";
 	const upd = await app.request(`${U}/${OLD}`);
-	const updBody = (await upd.json()) as { url?: string; version?: string; productVersion?: string; sha256hash?: string };
+	const updBody = (await upd.json()) as { url?: string; version?: string; productVersion?: string; sha256hash?: string; notes?: string; pub_date?: string };
 	ok("older known commit → 200 with the newest build", upd.status === 200 && updBody.version === NEW && updBody.productVersion === "1.0.1" && updBody.sha256hash === sha, JSON.stringify(updBody));
+	ok("Squirrel fields: notes = commit, pub_date ISO", updBody.notes === NEW && updBody.pub_date === new Date(1_700_000_001_000).toISOString(), `${updBody.notes} ${updBody.pub_date}`);
 	ok("update url is absolute on CELIADOR_PUBLIC_URL", updBody.url === "https://smoke.test/api/releases/Celiador-darwin-arm64-1.0.1.zip", String(updBody.url));
 	ok("newest commit → 204", (await app.request(`${U}/${NEW}`)).status === 204);
 	ok("unknown (dev) commit → 204", (await app.request(`${U}/${"c".repeat(40)}`)).status === 204);
