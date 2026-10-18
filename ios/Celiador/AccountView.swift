@@ -13,6 +13,7 @@ struct AccountView: View {
     @State private var saving = false
     @State private var confirmingDelete = false
     @State private var deleting = false
+    @AppStorage(Telemetry.enabledKey) private var telemetryEnabled = true
 
     private var initials: String {
         let source = (profile?.displayName?.isEmpty == false ? profile?.displayName : profile?.email) ?? "?"
@@ -91,6 +92,19 @@ struct AccountView: View {
                     } icon: {
                         Image(systemName: "lock.shield").foregroundStyle(Theme.celadonBright)
                     }
+                }
+                .listRowBackground(Theme.panel)
+
+                Section {
+                    Toggle(isOn: $telemetryEnabled) {
+                        Label("Share anonymous usage data", systemImage: "chart.bar")
+                            .foregroundStyle(Theme.ink)
+                    }
+                    .tint(Theme.celadon)
+                    .onChange(of: telemetryEnabled) { _, enabled in Telemetry.isEnabled = enabled }
+                } footer: {
+                    Text("Which features get used and what crashes — never your code, prompts, chat, repository names or email. Details at celiador.ai/privacy.")
+                        .font(.footnote).foregroundStyle(Theme.dim)
                 }
                 .listRowBackground(Theme.panel)
 

@@ -20,6 +20,12 @@ configFiles:
 settings:
   base:
     DEVELOPMENT_TEAM: XPNFDWPFAV
+packages:
+  # Product telemetry (Celiador/Telemetry.swift) — app target only; Shared/
+  # stays dependency-free for the widgets.
+  TelemetryDeck:
+    url: https://github.com/TelemetryDeck/SwiftSDK
+    exactVersion: 2.14.2
 targets:
   Celiador:
     type: application
@@ -27,6 +33,7 @@ targets:
     sources: [Shared, Celiador]
     dependencies:
       - target: CeliadorWidgets
+      - package: TelemetryDeck
       # CeliadorWatch dropped from v1 — re-add to ship the watchOS app.
     info:
       path: Celiador/Info.plist

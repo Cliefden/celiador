@@ -112,6 +112,7 @@ struct LoginView: View {
                 } else {
                     try await Api.shared.signIn(email: email, password: password)
                 }
+                Telemetry.signal(.signedIn, ["method": "password"])
                 model.didSignIn()
             } catch {
                 self.error = error.localizedDescription
@@ -151,6 +152,7 @@ struct LoginView: View {
                     callbackURLScheme: AppScheme.scheme
                 )
                 if Api.shared.handleAuthCallback(callback) {
+                    Telemetry.signal(.signedIn, ["method": "github"])
                     model.didSignIn()
                 } else {
                     self.error = "GitHub sign-in didn't complete."
