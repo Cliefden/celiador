@@ -53,6 +53,24 @@ export default function PrivacyPage() {
         Those numbers are shown back to you, in full, inside the app — the same figures we enforce.
       </p>
 
+      <h2>Product telemetry</h2>
+      <p>
+        The editor can send a small amount of anonymous usage data so we know which features are
+        used and which crash. It goes to TelemetryDeck, a privacy-first analytics service hosted in
+        the EU. What is sent: the event name (for example &ldquo;a run was started from the
+        phone&rdquo;), the app version, your operating system version and CPU architecture, and a
+        one-way hash of a random machine identifier. What is never sent: your code, file names,
+        paths, prompts, chat content, error messages, stack traces, workspace or repository names,
+        your email, or anything that identifies you. Crash reports carry only the error&rsquo;s type
+        and a count.
+      </p>
+      <p>
+        The editor asks on first launch, and the standard <code>telemetry.telemetryLevel</code>
+        setting turns it down or off at any time (<code>&ldquo;off&rdquo;</code> stops every
+        signal). The iPhone app does not send telemetry today; if that changes, this page will say
+        so before it ships.
+      </p>
+
       <h2>Deleting your data</h2>
       <p>
         Deleting your account is self-service and permanent. It removes your account, profile, stored
