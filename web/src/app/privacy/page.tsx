@@ -67,8 +67,11 @@ export default function PrivacyPage() {
       <p>
         The editor asks on first launch, and the standard <code>telemetry.telemetryLevel</code>
         setting turns it down or off at any time (<code>&ldquo;off&rdquo;</code> stops every
-        signal). The iPhone app does not send telemetry today; if that changes, this page will say
-        so before it ships.
+        signal). The iPhone app reports into the same TelemetryDeck app with the same rules: a
+        handful of its own events (a run started from the phone, a steering command by kind, a pull
+        request opened, a sign-in), the app and iOS versions, the device model, and a one-way hash
+        of Apple&rsquo;s per-app vendor identifier. Its &ldquo;Share anonymous usage data&rdquo;
+        switch in Account turns it off.
       </p>
 
       <h2>Deleting your data</h2>
