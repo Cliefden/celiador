@@ -282,6 +282,22 @@ async function main(): Promise<void> {
 	delete process.env.CELIADOR_EXTENSION_CONTROL_UPSTREAM;
 	resetControlCache();
 
+	// ── Cloud-runner sandbox (pure parts; isolation itself: scripts/sandbox-check.ts) ──
+	console.log("\n== sandbox ==");
+	const { streamLineToEvents, streamLineResult, dockerRunArgs } = await import("../src/runner/sandbox.ts");
+	const asst = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Reading the file." }, { type: "tool_use", id: "t1", name: "Read", input: { file_path: "a.ts" } }] } });
+	const toolRes = JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", is_error: true }] } });
+	ok("stream-json: assistant text + tool_use → message + tool", JSON.stringify(streamLineToEvents(asst)) === JSON.stringify([{ kind: "message", role: "assistant", text: "Reading the file." }, { kind: "tool", callId: "t1", name: "Read", input: { file_path: "a.ts" } }]), JSON.stringify(streamLineToEvents(asst)));
+	ok("stream-json: tool_result error → toolResult ok=false", JSON.stringify(streamLineToEvents(toolRes)) === JSON.stringify([{ kind: "toolResult", callId: "t1", ok: false }]));
+	ok("stream-json: junk and system lines → nothing", streamLineToEvents("not json").length === 0 && streamLineToEvents('{"type":"system","subtype":"init"}').length === 0);
+	ok("stream-json: result verdicts", streamLineResult('{"type":"result","subtype":"success","is_error":false,"result":"done"}')?.ok === true && streamLineResult('{"type":"result","subtype":"error_max_turns","is_error":true}')?.ok === false && streamLineResult(asst) === undefined);
+	const dargs = dockerRunArgs({ name: "n", workspaceDir: "/w", gatewayDir: "/g", uid: 1000, gid: 1000, token: "tok", prompt: "fix it" });
+	const flag = (f: string, v?: string) => { const i = dargs.indexOf(f); return i >= 0 && (v === undefined || dargs[i + 1] === v); };
+	ok("docker run: no network, read-only, caps dropped, no-new-privileges, non-root", flag("--network", "none") && flag("--read-only") && flag("--cap-drop", "ALL") && flag("--security-opt", "no-new-privileges") && flag("--user", "1000:1000"), dargs.join(" "));
+	ok("docker run: only the workspace + gateway dir mounted; prompt passed as one argv", dargs.filter((a) => a === "-v").length === 2 && flag("-p", "fix it"));
+	const notActive = await app.request(`http://localhost/api/sessions/${sid}/cancel`, { method: "POST", headers: authH });
+	ok("cancel on an editor session without a runner → 409 (unchanged)", notActive.status === 409, `got ${notActive.status}`);
+
 	// ── Server runner (offline local repo) ────────────────────────────────────
 	console.log("\n== server runner ==");
 	const repo = path.join(HOME, "origin");

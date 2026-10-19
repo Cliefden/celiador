@@ -7,7 +7,7 @@ import { requireUser } from "../auth";
 import { sessionStores } from "./instance";
 import { sessionBus } from "./bus";
 import { publishSessionEvent } from "./publish";
-import { startServerRun } from "../runner/manager";
+import { cancelServerRun, startServerRun } from "../runner/manager";
 import { removeWorkspace, workspaceDir } from "../runner/workspace";
 import { listDir, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
 import type { FsCommand, FsResult, FsResultInput, GitCommand, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
@@ -222,6 +222,10 @@ export function sessionRoutes(): Hono<AppEnv> {
   app.post("/:id/cancel", (c) => {
     const session = stores.for(c.get("user").userId).get(c.req.param("id"));
     if (!session) return c.json({ error: "not found" }, 404);
+    // A cloud run has no command channel: the daemon is its runner, so cancel it here.
+    if (session.runner === "server") {
+      return cancelServerRun(session.id) ? c.json({ ok: true }) : c.json({ error: "run not active" }, 409);
+    }
     if (!sessionBus.hasRunner(session.id)) return c.json({ error: "runner offline" }, 409);
     sessionBus.sendCommand(session.id, { kind: "cancel" });
     return c.json({ ok: true });

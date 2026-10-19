@@ -4,6 +4,12 @@ import type { SessionEventInput } from "../sessions/types";
 
 /** What an agent implementation gets: a cloned workspace, the task, and a relay publisher. */
 export interface IRunnerAgentContext {
+  /** The user the run belongs to (its model usage meters against their quota). */
+  readonly userId: string;
+  /** The run (session) id. */
+  readonly runId: string;
+  /** Aborted when the user cancels the run. */
+  readonly signal: AbortSignal;
   readonly workspaceDir: string;
   readonly prompt: string;
   /** Publish a relay event (activity/tool/toolResult/delta/message/…) to watchers. */
