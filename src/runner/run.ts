@@ -10,6 +10,8 @@ export interface IServerRunOptions {
   readonly prompt: string;
   /** The agent to run (defaults to the Phase 3a placeholder). Injected for tests / 3b. */
   readonly agent?: RunnerAgent;
+  /** Aborted when the user cancels the run. */
+  readonly signal?: AbortSignal;
   /** Publisher override (defaults to the real relay). Injected for tests. */
   readonly publish?: (event: SessionEventInput) => void;
 }
@@ -35,7 +37,7 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<void> {
     await cloneRepo(opts.repo.url, opts.repo.branch, dir);
 
     publish({ kind: "activity", text: "Running the agent…" });
-    await agent({ workspaceDir: dir, prompt: opts.prompt, publish });
+    await agent({ workspaceDir: dir, prompt: opts.prompt, publish, userId: opts.userId, runId: opts.sessionId, signal: opts.signal ?? new AbortController().signal });
 
     const diffs = await computeDiffs(dir);
     for (const d of diffs) {
@@ -49,6 +51,10 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<void> {
     publish({ kind: "done" });
     publish({ kind: "state", state: "done" });
   } catch (err) {
+    if (opts.signal?.aborted) {
+      publish({ kind: "state", state: "cancelled" });
+      return;
+    }
     const raw = err instanceof Error ? err.message : String(err);
     // An anonymous clone of a private repo makes git try to prompt for credentials.
     const message = /could not read Username/i.test(raw)
