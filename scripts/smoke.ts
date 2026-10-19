@@ -262,6 +262,26 @@ async function main(): Promise<void> {
 	ok("manifest itself is not downloadable", (await app.request(`${R}/manifest.json`)).status === 404);
 	ok("path traversal → 404", (await app.request(`${R}/..%2Fmanifest.json`)).status === 404);
 
+	// ── Extension control manifest (offline: upstream is a data: URL) ─────────
+	console.log("\n== extension control ==");
+	const { resetControlCache } = await import("../src/extensions/control.ts");
+	const EC = "http://localhost/api/extensions/control";
+	const upstreamJson = JSON.stringify({ malicious: ["evil.ext"], deprecated: { "old.ext": true, "codeium.codeium": { disallowInstall: true } }, search: [], migrateToPreRelease: {} });
+	process.env.CELIADOR_EXTENSION_CONTROL_UPSTREAM = `data:application/json,${encodeURIComponent(upstreamJson)}`;
+	resetControlCache();
+	const ec = (await (await app.request(EC)).json()) as { malicious: string[]; deprecated: Record<string, unknown>; migrateToPreRelease?: unknown };
+	ok("upstream malicious list passes through", ec.malicious.length === 1 && ec.malicious[0] === "evil.ext", JSON.stringify(ec.malicious));
+	ok("upstream deprecations and other keys kept", ec.deprecated["old.ext"] === true && ec.migrateToPreRelease !== undefined, JSON.stringify(ec.deprecated["old.ext"]));
+	const codeium = ec.deprecated["codeium.codeium"] as { disallowInstall?: boolean; additionalInfo?: string };
+	ok("Celiador entry overrides upstream: a second AI layer is a warning, not a block", !codeium.disallowInstall && !!codeium.additionalInfo, JSON.stringify(codeium));
+	const cursorOnly = ec.deprecated["anysphere.cursorpyright"] as { disallowInstall?: boolean };
+	ok("Cursor-only extension is blocked", cursorOnly.disallowInstall === true, JSON.stringify(cursorOnly));
+	process.env.CELIADOR_EXTENSION_CONTROL_UPSTREAM = "data:application/json,%7Bnot-json";
+	const fallback = (await (await app.request(EC)).json()) as { malicious: string[]; deprecated: Record<string, unknown> };
+	ok("upstream broken before any good fetch → Celiador entries only", fallback.malicious.length === 0 && !!fallback.deprecated["github.copilot"], JSON.stringify(fallback.malicious));
+	delete process.env.CELIADOR_EXTENSION_CONTROL_UPSTREAM;
+	resetControlCache();
+
 	// ── Server runner (offline local repo) ────────────────────────────────────
 	console.log("\n== server runner ==");
 	const repo = path.join(HOME, "origin");

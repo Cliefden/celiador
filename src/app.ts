@@ -14,6 +14,7 @@ import { chatRoutes, profileRoutes } from "./data/routes";
 import { meRoutes } from "./me/routes";
 import { accountRoutes } from "./account/routes";
 import { releaseRoutes, updateFeed } from "./releases/routes";
+import { extensionControl } from "./extensions/control";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
@@ -107,6 +108,10 @@ export function createApp(): Hono<AppEnv> {
   // none) and the public artifact downloads the site links to.
   app.get("/api/update/:platform/:quality/:commit", updateFeed);
   app.route("/api/releases", releaseRoutes());
+
+  // Extension control manifest (product.json extensionsGallery.controlUrl):
+  // Open VSX's malicious list + Celiador's own warnings. No auth.
+  app.get("/api/extensions/control", extensionControl);
 
   app.notFound((c) => c.json({ error: "Unknown endpoint" }, 404));
   // Log the detail server-side; never leak raw (e.g. pg) error text to clients.
