@@ -20,15 +20,23 @@ export type Release = {
   archiveSha256: string;
   dmg?: string;
   dmgSha256?: string;
+  /** Further files by kind (deb, rpm, setup-user, …) — see the daemon's ReleaseEntry. */
+  assets?: Record<string, { file: string; sha256: string }>;
   notes?: string;
   archiveUrl: string;
   dmgUrl?: string;
+  assetUrls?: Record<string, string>;
 };
 
 const API = (process.env.CELIADOR_RELEASES_API ?? "https://celiador.ai/api/releases").replace(/\/+$/, "");
 
+/** Stable link that always resolves to the newest file of a kind for a platform (302 → the file). */
+export function latestHref(platform: string, kind: string): string {
+  return `${API}/latest/${platform}/stable/${kind}`;
+}
+
 /** Stable link that always resolves to the newest macOS DMG (302 → the file). */
-export const latestMacDmgHref = `${API}/latest/darwin-arm64/stable/dmg`;
+export const latestMacDmgHref = latestHref("darwin-arm64", "dmg");
 
 /** Seconds the site keeps a fetched listing before asking the daemon again. */
 const REVALIDATE_SECONDS = 300;
@@ -49,9 +57,14 @@ export async function listReleases(): Promise<Release[]> {
   return Array.isArray(data?.releases) ? data!.releases : [];
 }
 
+/** The newest build for a platform id (e.g. `linux-x64`), or undefined before its first release. */
+export async function latestRelease(platform: string): Promise<Release | undefined> {
+  return getJson<Release>(`/latest/${platform}/stable`);
+}
+
 /** The newest macOS (Apple Silicon) build, or undefined before the first release. */
 export async function latestMacRelease(): Promise<Release | undefined> {
-  return getJson<Release>("/latest/darwin-arm64/stable");
+  return latestRelease("darwin-arm64");
 }
 
 export function shortCommit(release: Pick<Release, "version">): string {
