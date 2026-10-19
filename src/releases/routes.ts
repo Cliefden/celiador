@@ -8,6 +8,7 @@ import {
   COMMIT,
   FILE_NAME,
   ID,
+  PUBLIC_URL,
   RELEASES_DIR,
   fileUrl,
   isKnownRelease,
@@ -15,9 +16,18 @@ import {
   latestRelease,
   publicEntry,
   readManifest,
+  releaseFile,
 } from "./manifest";
 
 const NO_CACHE = { "cache-control": "no-cache" };
+
+/**
+ * Where a Linux editor sends the user when it notices a newer build: there is no
+ * in-place updater on Linux (`updateService.linux` opens `url` in the browser), so
+ * point at the download page, where they pick .deb/.rpm/.tar.gz, rather than at a
+ * bare archive. macOS (Squirrel) and Windows (inno updater) download `url` itself.
+ */
+const DOWNLOAD_PAGE_URL = (process.env.CELIADOR_DOWNLOAD_URL ?? `${PUBLIC_URL}/download`).replace(/\/+$/, "");
 
 /**
  * Update feed for the editor's built-in updater (Electron autoUpdater /
@@ -50,7 +60,7 @@ export function updateFeed(c: Context<AppEnv>): Response {
   // productVersion, `pub_date` → timestamp), so the commit goes in `notes` too.
   return c.json(
     {
-      url: fileUrl(latest.archive),
+      url: latest.platform.startsWith("linux") ? DOWNLOAD_PAGE_URL : fileUrl(latest.archive),
       name: latest.productVersion,
       notes: latest.version,
       pub_date: new Date(latest.timestamp).toISOString(),
@@ -67,6 +77,10 @@ export function updateFeed(c: Context<AppEnv>): Response {
 const CONTENT_TYPES: Record<string, string> = {
   ".zip": "application/zip",
   ".dmg": "application/x-apple-diskimage",
+  ".gz": "application/gzip",
+  ".deb": "application/vnd.debian.binary-package",
+  ".rpm": "application/x-rpm",
+  ".exe": "application/vnd.microsoft.portable-executable",
 };
 
 /**
@@ -91,16 +105,17 @@ export function releaseRoutes(): Hono<AppEnv> {
     return latest ? c.json(publicEntry(latest), 200, NO_CACHE) : c.json({ error: "No release" }, 404);
   });
 
-  // Stable links that always resolve to the newest artifact (302 → the file).
-  app.get("/latest/:platform/:quality/:kind{dmg|archive}", (c) => {
+  // Stable links that always resolve to the newest artifact of a kind (302 → the
+  // file): `archive`, `dmg`, or any `assets` key the entry carries (deb, rpm, …).
+  app.get("/latest/:platform/:quality/:kind", (c) => {
     const platform = c.req.param("platform");
     const quality = c.req.param("quality");
     const kind = c.req.param("kind");
-    if (!ID.test(platform) || !ID.test(quality)) {
-      return c.json({ error: "platform and quality are required" }, 400);
+    if (!ID.test(platform) || !ID.test(quality) || !ID.test(kind)) {
+      return c.json({ error: "platform, quality and kind are required" }, 400);
     }
     const latest = latestRelease(platform, quality);
-    const file = kind === "dmg" ? latest?.dmg : latest?.archive;
+    const file = latest ? releaseFile(latest, kind) : undefined;
     if (!file) return c.json({ error: "No release" }, 404);
     return c.redirect(fileUrl(file), 302);
   });
