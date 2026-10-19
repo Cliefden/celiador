@@ -174,6 +174,7 @@ export const footerLinks: { heading: string; links: { label: string; href: strin
       { label: "Features", href: "/features" },
       { label: "Pricing", href: "/pricing" },
       { label: "Download", href: "/download" },
+      { label: "Switch from Cursor", href: "/switch" },
       { label: "Releases", href: "/releases" },
       { label: "Docs", href: "/docs" },
       { label: "Changelog", href: "/changelog" },
