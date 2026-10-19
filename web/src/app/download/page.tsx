@@ -4,7 +4,7 @@ import { Container, Eyebrow } from "@/components/ui";
 import { EmailCapture } from "@/components/EmailCapture";
 import { AppleIcon, CheckIcon, DownloadIcon } from "@/components/icons";
 import { site } from "@/lib/site";
-import { formatReleaseDate, latestMacDmgHref, latestMacRelease, shortCommit } from "@/lib/releases";
+import { formatReleaseDate, latestHref, latestMacDmgHref, latestMacRelease, latestRelease, shortCommit } from "@/lib/releases";
 
 export const metadata: Metadata = {
   title: "Download",
@@ -12,7 +12,15 @@ export const metadata: Metadata = {
 };
 
 export default async function DownloadPage() {
-  const release = await latestMacRelease();
+  const [release, linux] = await Promise.all([latestMacRelease(), latestRelease("linux-x64")]);
+  // Linux has no in-place updater, so the page is the update path: list every package kind.
+  const linuxLinks = linux
+    ? [
+        { label: ".deb", href: latestHref("linux-x64", "deb"), available: !!linux.assetUrls?.deb },
+        { label: ".rpm", href: latestHref("linux-x64", "rpm"), available: !!linux.assetUrls?.rpm },
+        { label: ".tar.gz", href: latestHref("linux-x64", "archive"), available: true },
+      ].filter((l) => l.available)
+    : [];
 
   return (
     <section className="relative overflow-hidden">
@@ -87,13 +95,13 @@ export default async function DownloadPage() {
 
             <div className="mt-6 border-t border-line pt-6">
               <p className="text-sm font-medium text-white">
-                {release ? "Windows or Linux? Get notified" : "Get notified at launch"}
+                {release ? (linux ? "Windows? Get notified" : "Windows or Linux? Get notified") : "Get notified at launch"}
               </p>
               <div className="mt-3">
                 <EmailCapture
                   compact
-                  subject={release ? "Celiador for Windows / Linux" : undefined}
-                  hint={release ? "Tell us which platform you need; one email when it ships." : undefined}
+                  subject={release ? (linux ? "Celiador for Windows" : "Celiador for Windows / Linux") : undefined}
+                  hint={release ? (linux ? "One email when the Windows build ships." : "Tell us which platform you need; one email when it ships.") : undefined}
                 />
               </div>
             </div>
@@ -111,18 +119,27 @@ export default async function DownloadPage() {
                 <span className="font-mono text-xs text-fog-dim">TestFlight soon</span>
               )}
             </div>
-            {[
-              { os: "Windows", note: "On the roadmap" },
-              { os: "Linux", note: "On the roadmap" },
-            ].map((p) => (
-              <div
-                key={p.os}
-                className="flex items-center justify-between rounded-xl border border-line bg-surface/60 px-4 py-3.5"
-              >
-                <span className="text-sm text-white">{p.os}</span>
-                <span className="font-mono text-xs text-fog-dim">{p.note}</span>
-              </div>
-            ))}
+            <div className="flex items-center justify-between rounded-xl border border-line bg-surface/60 px-4 py-3.5">
+              <span className="text-sm text-white">Windows</span>
+              <span className="font-mono text-xs text-fog-dim">On the roadmap</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface/60 px-4 py-3.5">
+              <span className="text-sm text-white">
+                Linux
+                {linux && <span className="ml-2 font-mono text-[11px] text-fog-dim">x64 · {linux.productVersion}</span>}
+              </span>
+              {linuxLinks.length > 0 ? (
+                <span className="flex items-center gap-3 font-mono text-xs">
+                  {linuxLinks.map((l) => (
+                    <a key={l.label} href={l.href} className="text-brand hover:underline">
+                      {l.label}
+                    </a>
+                  ))}
+                </span>
+              ) : (
+                <span className="font-mono text-xs text-fog-dim">On the roadmap</span>
+              )}
+            </div>
           </div>
         </div>
 

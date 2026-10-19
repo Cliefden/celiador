@@ -6,7 +6,7 @@ import { formatReleaseDate, listReleases, shortCommit } from "@/lib/releases";
 
 export const metadata: Metadata = {
   title: "Releases",
-  description: "Every published Celiador build for macOS, with checksums.",
+  description: "Every published Celiador build for macOS and Linux, with checksums.",
 };
 
 export default async function ReleasesPage() {
@@ -23,8 +23,9 @@ export default async function ReleasesPage() {
               Every build we shipped
             </h1>
             <p className="mt-4 text-lg text-fog">
-              One entry per published macOS build, straight from the update feed the app itself
-              uses. Installed apps update to the newest one on their own.{" "}
+              One entry per published build, straight from the update feed the app itself
+              uses. Installed Macs update to the newest one on their own; Linux installs are told
+              when a newer package is here.{" "}
               <Link href="/changelog" className="text-brand hover:underline">
                 Read the changelog
               </Link>{" "}
@@ -69,6 +70,16 @@ export default async function ReleasesPage() {
                         {r.dmg}
                       </a>
                     )}
+                    {Object.entries(r.assetUrls ?? {}).map(([kind, url]) => (
+                      <a
+                        key={kind}
+                        href={url}
+                        className="inline-flex items-center gap-2 rounded-lg border border-line bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/[0.07]"
+                      >
+                        <DownloadIcon className="h-3.5 w-3.5" />
+                        {r.assets?.[kind]?.file ?? kind}
+                      </a>
+                    ))}
                     <a
                       href={r.archiveUrl}
                       className="inline-flex items-center gap-2 rounded-lg border border-line bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-fog transition hover:bg-white/[0.07]"
@@ -84,8 +95,14 @@ export default async function ReleasesPage() {
                         <dd className="break-all">{r.dmgSha256}</dd>
                       </div>
                     )}
+                    {Object.entries(r.assets ?? {}).map(([kind, asset]) => (
+                      <div key={kind} className="flex gap-3">
+                        <dt className="w-16 shrink-0">{kind}</dt>
+                        <dd className="break-all">{asset.sha256}</dd>
+                      </div>
+                    ))}
                     <div className="flex gap-3">
-                      <dt className="w-16 shrink-0">zip</dt>
+                      <dt className="w-16 shrink-0">{r.archive.endsWith(".tar.gz") ? "tar.gz" : "zip"}</dt>
                       <dd className="break-all">{r.archiveSha256}</dd>
                     </div>
                   </dl>
