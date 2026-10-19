@@ -209,6 +209,7 @@ async function main(): Promise<void> {
 	const relDir = path.join(HOME, "releases");
 	fs.mkdirSync(relDir, { recursive: true });
 	fs.writeFileSync(path.join(relDir, "Celiador-darwin-arm64-1.0.1.zip"), "zip-bytes");
+	fs.writeFileSync(path.join(relDir, "Celiador-linux-x64-1.0.1.deb"), "deb-bytes");
 	fs.writeFileSync(path.join(relDir, "secret.txt"), "nope");
 	const OLD = "0123456789abcdef0123456789abcdef01234567";
 	const NEW = "fedcba9876543210fedcba9876543210fedcba98";
@@ -217,6 +218,10 @@ async function main(): Promise<void> {
 		releases: [
 			{ platform: "darwin-arm64", quality: "stable", version: OLD, productVersion: "1.0.0", timestamp: 1_700_000_000_000, archive: "Celiador-darwin-arm64-1.0.0.zip", archiveSha256: sha, dmg: "Celiador-darwin-arm64-1.0.0.dmg", dmgSha256: sha },
 			{ platform: "darwin-arm64", quality: "stable", version: NEW, productVersion: "1.0.1", timestamp: 1_700_000_001_000, archive: "Celiador-darwin-arm64-1.0.1.zip", archiveSha256: sha, dmg: "Celiador-darwin-arm64-1.0.1.dmg", dmgSha256: sha },
+			// Linux: no dmg; deb/rpm ride `assets`. Timestamps sit between the mac ones so ordering stays deterministic.
+			{ platform: "linux-x64", quality: "stable", version: OLD, productVersion: "1.0.0", timestamp: 1_700_000_000_400, archive: "Celiador-linux-x64-1.0.0.tar.gz", archiveSha256: sha },
+			{ platform: "linux-x64", quality: "stable", version: NEW, productVersion: "1.0.1", timestamp: 1_700_000_000_500, archive: "Celiador-linux-x64-1.0.1.tar.gz", archiveSha256: sha, assets: { deb: { file: "Celiador-linux-x64-1.0.1.deb", sha256: sha }, rpm: { file: "Celiador-linux-x64-1.0.1.rpm", sha256: sha } } },
+			{ platform: "linux-x64", quality: "stable", version: NEW, productVersion: "1.0.2", timestamp: 1_700_000_000_600, archive: "x.tar.gz", archiveSha256: sha, assets: { archive: { file: "y", sha256: sha } } }, // invalid: reserved asset kind → skipped
 			{ platform: "darwin-arm64", quality: "stable", version: "bad", archive: "../etc/passwd" }, // invalid → skipped
 		],
 	}));
@@ -228,17 +233,26 @@ async function main(): Promise<void> {
 	ok("update url is absolute on CELIADOR_PUBLIC_URL", updBody.url === "https://smoke.test/api/releases/Celiador-darwin-arm64-1.0.1.zip", String(updBody.url));
 	ok("newest commit → 204", (await app.request(`${U}/${NEW}`)).status === 204);
 	ok("unknown (dev) commit → 204", (await app.request(`${U}/${"c".repeat(40)}`)).status === 204);
-	ok("platform without releases → 204", (await app.request(`http://localhost/api/update/linux-x64/stable/${OLD}`)).status === 204);
+	ok("platform without releases → 204", (await app.request(`http://localhost/api/update/win32-x64/stable/${OLD}`)).status === 204);
 	ok("malformed commit → 400", (await app.request(`${U}/not-a-commit`)).status === 400);
+	const linUpd = (await (await app.request(`http://localhost/api/update/linux-x64/stable/${OLD}`)).json()) as { url?: string; version?: string };
+	ok("linux update → newest build, url is the download page (no in-place updater)", linUpd.version === NEW && linUpd.url === "https://smoke.test/download", JSON.stringify(linUpd));
 	const R = "http://localhost/api/releases";
 	const listRes = await app.request(R);
-	const listed = ((await listRes.json()) as { releases: Array<{ version: string; dmgUrl?: string }> }).releases;
-	ok("list: valid entries only, newest first, with urls", listRes.status === 200 && listed.length === 2 && listed[0].version === NEW && listed[0].dmgUrl === "https://smoke.test/api/releases/Celiador-darwin-arm64-1.0.1.dmg", JSON.stringify(listed));
+	const listed = ((await listRes.json()) as { releases: Array<{ platform: string; version: string; dmgUrl?: string; assetUrls?: Record<string, string> }> }).releases;
+	ok("list: valid entries only, newest first, with urls", listRes.status === 200 && listed.length === 4 && listed[0].version === NEW && listed[0].dmgUrl === "https://smoke.test/api/releases/Celiador-darwin-arm64-1.0.1.dmg", JSON.stringify(listed));
+	ok("list: linux entry carries per-asset urls", listed.find((e) => e.platform === "linux-x64")?.assetUrls?.deb === "https://smoke.test/api/releases/Celiador-linux-x64-1.0.1.deb", JSON.stringify(listed[1]));
 	const latest = (await (await app.request(`${R}/latest/darwin-arm64/stable`)).json()) as { version?: string };
 	ok("latest descriptor", latest.version === NEW, JSON.stringify(latest));
 	const redir = await app.request(`${R}/latest/darwin-arm64/stable/dmg`, { redirect: "manual" });
 	ok("latest/dmg → 302 to the file", redir.status === 302 && redir.headers.get("location") === "https://smoke.test/api/releases/Celiador-darwin-arm64-1.0.1.dmg", `${redir.status} ${redir.headers.get("location")}`);
-	ok("latest for an unpublished platform → 404", (await app.request(`${R}/latest/linux-x64/stable`)).status === 404);
+	const debRedir = await app.request(`${R}/latest/linux-x64/stable/deb`, { redirect: "manual" });
+	ok("latest/deb → 302 to the asset", debRedir.status === 302 && debRedir.headers.get("location") === "https://smoke.test/api/releases/Celiador-linux-x64-1.0.1.deb", `${debRedir.status} ${debRedir.headers.get("location")}`);
+	ok("latest/unknown kind → 404", (await app.request(`${R}/latest/linux-x64/stable/snap`, { redirect: "manual" })).status === 404);
+	ok("latest/dmg for a platform without one → 404", (await app.request(`${R}/latest/linux-x64/stable/dmg`, { redirect: "manual" })).status === 404);
+	ok("latest for an unpublished platform → 404", (await app.request(`${R}/latest/win32-x64/stable`)).status === 404);
+	const deb = await app.request(`${R}/Celiador-linux-x64-1.0.1.deb`);
+	ok("asset download → 200 with deb content-type", deb.status === 200 && deb.headers.get("content-type") === "application/vnd.debian.binary-package" && (await deb.text()) === "deb-bytes", `got ${deb.status}`);
 	const dl = await app.request(`${R}/Celiador-darwin-arm64-1.0.1.zip`);
 	ok("download → 200 with length + zip content-type", dl.status === 200 && dl.headers.get("content-length") === "9" && dl.headers.get("content-type") === "application/zip" && (await dl.text()) === "zip-bytes", `got ${dl.status}`);
 	const head = await app.request(`${R}/Celiador-darwin-arm64-1.0.1.zip`, { method: "HEAD" });
