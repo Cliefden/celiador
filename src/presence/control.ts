@@ -25,7 +25,27 @@ export interface EditorRunRequest {
   readonly prompt: string;
 }
 
-type Send = (command: EditorRunRequest) => void;
+/**
+ * Run a queued agent task in its own worktree (the agent-first queue, tasks/).
+ * A separate kind so an editor that predates it ignores it rather than running
+ * the task in the user's working copy.
+ */
+export interface EditorTaskRequest {
+  readonly kind: "start-task";
+  readonly taskId: string;
+  readonly remoteUrl: string;
+  readonly name?: string;
+  /** The new branch (and worktree) the run works on. */
+  readonly branch: string;
+  readonly prompt: string;
+  readonly title: string;
+  /** Set when the task came from a GitHub issue: the PR closes it. */
+  readonly issue?: { readonly number: number; readonly url: string };
+}
+
+export type EditorCommand = EditorRunRequest | EditorTaskRequest;
+
+type Send = (command: EditorCommand) => void;
 
 class EditorControl {
   private readonly byUser = new Map<string, Set<Send>>();
@@ -44,7 +64,7 @@ class EditorControl {
   }
 
   /** Fan a run request out to the user's connected editor(s). Returns how many got it. */
-  request(userId: string, req: EditorRunRequest): number {
+  request(userId: string, req: EditorCommand): number {
     const set = this.byUser.get(userId);
     if (!set || set.size === 0) return 0;
     for (const send of set) {

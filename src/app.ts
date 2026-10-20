@@ -15,6 +15,8 @@ import { meRoutes } from "./me/routes";
 import { accountRoutes } from "./account/routes";
 import { releaseRoutes, updateFeed } from "./releases/routes";
 import { extensionControl } from "./extensions/control";
+import { taskRoutes } from "./tasks/routes";
+import { githubWebhook } from "./tasks/github";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
@@ -112,6 +114,11 @@ export function createApp(): Hono<AppEnv> {
   // Extension control manifest (product.json extensionsGallery.controlUrl):
   // Open VSX's malicious list + Celiador's own warnings. No auth.
   app.get("/api/extensions/control", extensionControl);
+
+  // Agent task queue (agent-first plan, phase 1) + the GitHub webhook that feeds it.
+  // The webhook is signed (CELIADOR_GITHUB_WEBHOOK_SECRET) and carries no user auth.
+  app.route("/api/tasks", taskRoutes());
+  app.post("/api/github/webhook", githubWebhook);
 
   app.notFound((c) => c.json({ error: "Unknown endpoint" }, 404));
   // Log the detail server-side; never leak raw (e.g. pg) error text to clients.

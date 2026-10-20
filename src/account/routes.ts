@@ -8,6 +8,7 @@ import { sessionStores } from "../sessions/instance";
 import { workspacePresence } from "../presence/workspaces";
 import { editorControl } from "../presence/control";
 import { purgeUserRuns } from "../runner/workspace";
+import { taskStores } from "../tasks/dispatch";
 import { deletedUsers } from "../deleted-users";
 
 /**
@@ -50,6 +51,7 @@ export function accountRoutes(): Hono<AppEnv> {
     pushStores.purge(userId);
     workspacePresence.clear(userId);
     editorControl.clear(userId);
+    taskStores.purge(userId);
     await purgeUserRuns(userId); // server-run workspaces (best-effort)
     return c.json({ ok: true });
   });

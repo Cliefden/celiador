@@ -282,6 +282,83 @@ async function main(): Promise<void> {
 	delete process.env.CELIADOR_EXTENSION_CONTROL_UPSTREAM;
 	resetControlCache();
 
+	// ── Agent task queue: GitHub webhook → task → editor dispatch → PR ─────────
+	console.log("\n== tasks ==");
+	const crypto = await import("node:crypto");
+	const T = "http://localhost/api/tasks";
+	const WH = "http://localhost/api/github/webhook";
+	const REPO = "https://github.com/Cliefden/smoke-repo.git";
+	const ghRepo = { name: "smoke-repo", owner: { login: "Cliefden" }, clone_url: REPO };
+	const hook = (event: string, payload: unknown, secret = "whsec") => {
+		const body = JSON.stringify(payload);
+		const sig = `sha256=${crypto.createHmac("sha256", secret).update(body).digest("hex")}`;
+		return app.request(WH, { method: "POST", headers: { "content-type": "application/json", "x-github-event": event, "x-hub-signature-256": sig }, body });
+	};
+	const labeled = (n: number, label = "celiador") => ({ action: "labeled", label: { name: label }, repository: ghRepo, issue: { number: n, title: `Fix the thing ${n}`, body: "It breaks.", html_url: `https://github.com/Cliefden/smoke-repo/issues/${n}` } });
+	delete process.env.CELIADOR_GITHUB_WEBHOOK_SECRET;
+	ok("webhook without a configured secret → 503", (await hook("ping", {})).status === 503);
+	process.env.CELIADOR_GITHUB_WEBHOOK_SECRET = "whsec";
+	process.env.CELIADOR_TASK_CONCURRENCY = "1";
+	ok("bad signature → 401", (await hook("ping", {}, "wrong")).status === 401);
+	ok("ping → 200", (await hook("ping", {})).status === 200);
+	const unlinked = (await (await hook("issues", labeled(41))).json()) as { ignored?: string };
+	ok("label on an unlinked repo is ignored", /not linked/.test(unlinked.ignored ?? ""), JSON.stringify(unlinked));
+	const link = await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: "https://github.com/Cliefden/smoke-repo" }) });
+	ok("link a repo", link.status === 200 && ((await link.json()) as { repos: string[] }).repos.includes(REPO));
+	ok("another label is ignored", /another label/.test(((await (await hook("issues", labeled(42, "bug"))).json()) as { ignored?: string }).ignored ?? ""));
+	const created = await hook("issues", labeled(42));
+	const createdBody = (await created.json()) as { taskId?: string; state?: string };
+	ok("celiador label → task queued (no editor online)", created.status === 201 && createdBody.state === "queued", JSON.stringify(createdBody));
+	ok("same issue again → deduped", /already queued/.test(((await (await hook("issues", labeled(42))).json()) as { ignored?: string }).ignored ?? ""));
+	const comment = (n: number, assoc: string, body = "@celiador please fix") => ({ action: "created", repository: ghRepo, comment: { body, author_association: assoc }, issue: { number: n, title: `Comment task ${n}`, body: "", html_url: `https://github.com/Cliefden/smoke-repo/issues/${n}` } });
+	ok("@celiador from an outsider is ignored", /not a collaborator/.test(((await (await hook("issue_comment", comment(43, "NONE"))).json()) as { ignored?: string }).ignored ?? ""));
+	ok("comment without the mention is ignored", /no @celiador/.test(((await (await hook("issue_comment", comment(43, "OWNER", "looks good"))).json()) as { ignored?: string }).ignored ?? ""));
+	ok("@celiador from a collaborator → task", (await hook("issue_comment", comment(43, "COLLABORATOR"))).status === 201);
+
+	// An editor comes online with the repo open: the oldest task is dispatched, the limit (1) holds the second.
+	const edAbort = new AbortController();
+	const edStream = await app.request("http://localhost/api/presence/commands", { headers: authH, signal: edAbort.signal } as RequestInit);
+	const taskCmds: Array<{ kind?: string; taskId?: string; branch?: string; prompt?: string; issue?: { number: number } }> = [];
+	const edReader = (async () => {
+		const reader = edStream.body!.getReader();
+		const decoder = new TextDecoder();
+		let buf = "";
+		for (;;) {
+			const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
+			if (done) return;
+			buf += decoder.decode(value, { stream: true });
+			const lines = buf.split("\n");
+			buf = lines.pop() ?? "";
+			for (const line of lines) {
+				if (line.startsWith("data:") && line.slice(5).trim()) taskCmds.push(JSON.parse(line.slice(5)));
+			}
+		}
+	})();
+	await new Promise((r) => setTimeout(r, 30));
+	await app.request("http://localhost/api/presence/workspaces", { method: "PUT", headers: authH, body: JSON.stringify({ clientId: "ed-task", workspaces: [{ name: "smoke-repo", remoteUrl: REPO }] }) });
+	await new Promise((r) => setTimeout(r, 50));
+	const first = taskCmds.filter((r) => r.kind === "start-task");
+	ok("editor online → one start-task (limit 1), oldest first, own branch", first.length === 1 && first[0].issue?.number === 42 && first[0].branch === "42-fix-the-thing-42", JSON.stringify(first));
+	ok("prompt names the issue and asks for a referencing commit", /issue #42/.test(first[0]?.prompt ?? "") && /references #42/.test(first[0]?.prompt ?? ""));
+	const tid = first[0]?.taskId ?? "";
+	ok("status: pr-open without prUrl → 400", (await app.request(`${T}/${tid}/status`, { method: "POST", headers: authH, body: JSON.stringify({ state: "pr-open" }) })).status === 400);
+	await app.request(`${T}/${tid}/status`, { method: "POST", headers: authH, body: JSON.stringify({ state: "running", sessionId: "sess-1" }) });
+	const taskPr = await app.request(`${T}/${tid}/status`, { method: "POST", headers: authH, body: JSON.stringify({ state: "pr-open", prUrl: "https://github.com/Cliefden/smoke-repo/pull/7" }) });
+	ok("status: pr-open with prUrl → recorded", ((await taskPr.json()) as { task?: { state: string; prUrl?: string; sessionId?: string } }).task?.prUrl === "https://github.com/Cliefden/smoke-repo/pull/7");
+	await new Promise((r) => setTimeout(r, 50));
+	const second = taskCmds.filter((r) => r.kind === "start-task");
+	ok("a finished task frees the slot → the next one is dispatched", second.length === 2 && second[1].issue?.number === 43, JSON.stringify(second.map((r) => r.issue?.number)));
+	const manual = await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: REPO, title: "Tidy the README" }) });
+	const manualTask = ((await manual.json()) as { task?: { id: string; state: string; branch: string } }).task;
+	ok("manual task → queued behind the running one, celiador-* branch", manual.status === 201 && manualTask?.state === "queued" && /^celiador-[0-9a-f]{6}-tidy-the-readme$/.test(manualTask.branch), JSON.stringify(manualTask));
+	ok("cancel a queued task", ((await (await app.request(`${T}/${manualTask?.id}/cancel`, { method: "POST", headers: authH })).json()) as { task?: { state: string } }).task?.state === "cancelled");
+	ok("cancel again → 409", (await app.request(`${T}/${manualTask?.id}/cancel`, { method: "POST", headers: authH })).status === 409);
+	const taskList = (await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ state: string }>; concurrency: number };
+	ok("list: all tasks, concurrency published", taskList.tasks.length === 3 && taskList.concurrency === 1, JSON.stringify(taskList.tasks.map((t) => t.state)));
+	edAbort.abort();
+	await edReader;
+	delete process.env.CELIADOR_TASK_CONCURRENCY;
+
 	// ── Cloud-runner sandbox (pure parts; isolation itself: scripts/sandbox-check.ts) ──
 	console.log("\n== sandbox ==");
 	const { streamLineToEvents, streamLineResult, dockerRunArgs } = await import("../src/runner/sandbox.ts");
