@@ -48,6 +48,12 @@ curl -s localhost:4661/api/config
 | GET | `/api/health` | none | Liveness + version |
 | GET | `/api/config` | none | `authMode` + Supabase client config |
 | GET | `/api/limits` | none | The per-user agent limits in force (same object `/api/me` returns) — what the pricing page shows |
+| GET | `/api/tasks` | user | The agent task queue (+ concurrency, linked repos); `GET /api/tasks/stream` = live changes (SSE) |
+| POST | `/api/tasks` | user | A task by hand: `{remoteUrl, title, details?}` (github.com repos) |
+| POST | `/api/tasks/:id/cancel` | user | Cancel a queued or running task |
+| POST | `/api/tasks/:id/status` | user (editor) | The editor reports `running` / `pr-open` (+`prUrl`) / `merged` / `failed` |
+| POST/DELETE | `/api/tasks/repos` | user | Link / unlink a repo whose GitHub issues become tasks (one owner per repo) |
+| POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET`) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) within `CELIADOR_TASK_CONCURRENCY` (default 3) |
 | POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Locked Claude proxy, daemon-owned 3-tool set (SSE) |
 | POST | `/api/anthropic/v1/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | First-party gateway: forwards caller's own system + tools; daemon keeps key/model/caps/quota (SSE) |
 | GET | `/api/anthropic/v1/models` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Model list (proxied) |

@@ -4,7 +4,8 @@ import { streamSSE } from "hono/streaming";
 import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
 import { workspacePresence, type WorkspaceEntry } from "./workspaces";
-import { editorControl, type EditorRunRequest } from "./control";
+import { editorControl, type EditorCommand, type EditorRunRequest } from "./control";
+import { dispatchTasks } from "../tasks/dispatch";
 
 /** SSE heartbeat so proxies/clients keep the editor control stream open. */
 const HEARTBEAT_MS = 25_000;
@@ -55,6 +56,8 @@ export function presenceRoutes(): Hono<AppEnv> {
     }
     const items = raw.filter(validEntry);
     workspacePresence.publish(userId, clientId, items);
+    // An editor that just came online (or opened a repo) may unblock queued tasks.
+    dispatchTasks(userId);
     return c.json({ ok: true, count: items.length });
   });
 
@@ -74,11 +77,12 @@ export function presenceRoutes(): Hono<AppEnv> {
 
       let close: () => void = () => {};
       const closed = new Promise<void>((resolve) => (close = resolve));
-      const send = (command: EditorRunRequest) => {
+      const send = (command: EditorCommand) => {
         void serial(() => stream.writeSSE({ data: JSON.stringify(command) })).catch(() => close());
       };
 
       const unsubscribe = editorControl.subscribe(userId, send);
+      dispatchTasks(userId);
       const heartbeat = setInterval(() => {
         void serial(() => stream.writeSSE({ event: "ping", data: "" })).catch(() => close());
       }, HEARTBEAT_MS);
