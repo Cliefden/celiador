@@ -8,6 +8,8 @@ import { sessionStores } from "./instance";
 import { sessionBus } from "./bus";
 import { publishSessionEvent } from "./publish";
 import { cancelServerRun, startServerRun } from "../runner/manager";
+import { taskStores } from "../tasks/dispatch";
+import { publishTaskChange } from "../tasks/events";
 import { removeWorkspace, workspaceDir } from "../runner/workspace";
 import { listDir, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
 import type { FsCommand, FsResult, FsResultInput, GitCommand, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
@@ -96,7 +98,7 @@ export function sessionRoutes(): Hono<AppEnv> {
   // ---- Watcher: session CRUD ------------------------------------------------
 
   app.post("/", async (c) => {
-    const { title, origin, runner, repo, prompt } = await c.req.json().catch(() => ({}));
+    const { title, origin, runner, repo, prompt, taskId } = await c.req.json().catch(() => ({}));
     const userId = c.get("user").userId;
     const isServer = runner === "server";
 
@@ -121,6 +123,12 @@ export function sessionRoutes(): Hono<AppEnv> {
         repo: { url: repoUrl as string, branch: typeof repo?.branch === "string" ? repo.branch : undefined },
         prompt: prompt as string,
       }).catch((err) => console.error("[runner] start failed:", err instanceof Error ? err.message : err));
+    }
+    // An editor run of an agent task: link the task to this session so the phone's
+    // queue can open the live transcript.
+    if (typeof taskId === "string" && taskId.length <= 100) {
+      const task = taskStores.for(userId).update(taskId, { sessionId: session.id });
+      if (task) publishTaskChange(userId, task);
     }
     return c.json({ session });
   });

@@ -353,6 +353,10 @@ async function main(): Promise<void> {
 	ok("manual task → queued behind the running one, celiador-* branch", manual.status === 201 && manualTask?.state === "queued" && /^celiador-[0-9a-f]{6}-tidy-the-readme$/.test(manualTask.branch), JSON.stringify(manualTask));
 	ok("cancel a queued task", ((await (await app.request(`${T}/${manualTask?.id}/cancel`, { method: "POST", headers: authH })).json()) as { task?: { state: string } }).task?.state === "cancelled");
 	ok("cancel again → 409", (await app.request(`${T}/${manualTask?.id}/cancel`, { method: "POST", headers: authH })).status === 409);
+	const linkedRun = await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ title: "Comment task 43", origin: "editor", runner: "editor", taskId: second[1]?.taskId }) });
+	const linkedSession = ((await linkedRun.json()) as { session?: { id: string } }).session;
+	const afterLink = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; sessionId?: string }> }).tasks.find((t) => t.id === second[1]?.taskId);
+	ok("an editor run's relay session is linked to its task", !!linkedSession && afterLink?.sessionId === linkedSession.id, JSON.stringify(afterLink));
 	const taskList = (await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ state: string }>; concurrency: number };
 	ok("list: all tasks, concurrency published", taskList.tasks.length === 3 && taskList.concurrency === 1, JSON.stringify(taskList.tasks.map((t) => t.state)));
 	edAbort.abort();
