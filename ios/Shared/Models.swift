@@ -249,3 +249,35 @@ struct FileContent: Codable {
     let encoding: String
     let truncated: Bool
 }
+
+// MARK: - Agent tasks (the queue: GET /api/tasks)
+
+/// One unit of agent work that ends in a pull request: from a GitHub issue
+/// (label `celiador` / `@celiador`) or started by hand. The daemon queues it,
+/// hands it to the editor (its own worktree + branch) and records the PR.
+struct AgentTask: Codable, Identifiable, Hashable {
+    struct Repo: Codable, Hashable { let owner: String; let name: String; let url: String }
+    struct Issue: Codable, Hashable { let number: Int; let title: String; let url: String }
+
+    let id: String
+    let repo: Repo
+    let issue: Issue?
+    let title: String
+    let branch: String
+    let source: String
+    let state: String
+    let sessionId: String?
+    let prUrl: String?
+    let error: String?
+    let createdAt: String
+    let updatedAt: String
+
+    /// queued / dispatched / running hold work; the rest are finished.
+    var isActive: Bool { ["queued", "dispatched", "running"].contains(state) }
+}
+
+struct TaskList: Codable {
+    let tasks: [AgentTask]
+    let concurrency: Int
+    let repos: [String]
+}

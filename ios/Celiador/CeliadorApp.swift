@@ -128,12 +128,19 @@ struct TabShell: View {
     var body: some View {
         @Bindable var model = model
         TabView(selection: $model.selectedTab) {
+            NavigationStack(path: $model.queuePath) {
+                QueueView()
+                    .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
+            }
+            .tabItem { Label("Queue", systemImage: "tray.full.fill") }
+            .badge(model.needsYouCount)
+            .tag(AppModel.Tab.queue)
+
             NavigationStack(path: $model.agentsPath) {
                 SessionsView()
                     .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
             }
             .tabItem { Label("Agents", systemImage: "square.stack.3d.up.fill") }
-            .badge(model.needsYouCount)
             .tag(AppModel.Tab.agents)
 
             NavigationStack { ExplorerView() }
