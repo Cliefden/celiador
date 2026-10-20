@@ -13,13 +13,14 @@ final class AppModel {
     }
 
     /// The IDE shell's bottom tabs.
-    enum Tab: Hashable { case agents, explorer, activity }
+    enum Tab: Hashable { case queue, agents, explorer, activity }
 
     var phase: Phase = .booting
     var email: String?
     var sessions: [Session] = []
-    var selectedTab: Tab = .agents
+    var selectedTab: Tab = .queue
     var agentsPath: [String] = [] // Agents-tab navigation: session ids
+    var queuePath: [String] = [] // Queue-tab navigation: session ids
     /// The session whose workspace the Explorer tab is browsing (defaults to newest active).
     var focusedSessionId: String?
 

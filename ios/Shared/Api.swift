@@ -362,6 +362,33 @@ final class Api {
         try await request(Me.self, path: "api/me")
     }
 
+    // MARK: - Agent tasks (the queue)
+
+    private struct TaskEnvelope: Codable { let task: AgentTask }
+    private struct ReposEnvelope: Codable { let repos: [String] }
+
+    /// Every task, newest first, plus the parallel limit and the repos whose issues become tasks.
+    func listTasks() async throws -> TaskList {
+        try await request(TaskList.self, path: "api/tasks")
+    }
+
+    /// Queue a task by hand on a github.com repo; the editor runs it in its own worktree.
+    @discardableResult
+    func createTask(remoteUrl: String, title: String, details: String?) async throws -> AgentTask {
+        struct Body: Encodable { let remoteUrl: String; let title: String; let details: String? }
+        return try await request(TaskEnvelope.self, path: "api/tasks", method: "POST", body: Body(remoteUrl: remoteUrl, title: title, details: details)).task
+    }
+
+    func cancelTask(_ id: String) async throws {
+        _ = try await request(TaskEnvelope.self, path: "api/tasks/\(id)/cancel", method: "POST")
+    }
+
+    /// Make (or stop making) this repo's GitHub issues labelled `celiador` into tasks for you.
+    @discardableResult
+    func setRepoWatched(_ remoteUrl: String, watched: Bool) async throws -> [String] {
+        try await request(ReposEnvelope.self, path: "api/tasks/repos", method: watched ? "POST" : "DELETE", body: ["remoteUrl": remoteUrl]).repos
+    }
+
     /// Repos currently open in the user's editor(s), for the "from your editor"
     /// repo picker. Best-effort presence — empty when no editor is connected.
     func editorWorkspaces() async throws -> [EditorWorkspace] {
