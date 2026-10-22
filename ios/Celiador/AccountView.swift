@@ -83,6 +83,19 @@ struct AccountView: View {
                         Text(resetsFooter)
                     }
                     .listRowBackground(Theme.panel)
+
+                    if let tasks = me.tasks {
+                        Section {
+                            LabeledContent("Merged, last 7 days", value: "\(tasks.mergedLast7Days)")
+                            LabeledContent("Waiting for review", value: "\(tasks.prOpen)")
+                            LabeledContent("Running now", value: "\(tasks.running) of \(tasks.concurrency)")
+                        } header: {
+                            Text("Agent pull requests")
+                        } footer: {
+                            Text("Queued issues become pull requests; the merged count is the one number Celiador steers by.")
+                        }
+                        .listRowBackground(Theme.panel)
+                    }
                 }
 
                 Section {
@@ -189,7 +202,8 @@ struct AccountView: View {
                 userId: "u1", email: DemoData.profile.email, plan: DemoData.profile.plan,
                 usage: AgentUsage(requests: 128, inputTokens: 2_100_000, outputTokens: 142_000),
                 limits: AgentLimits(rpm: 30, concurrency: 2, dailyRequests: 500, dailyInput: 5_000_000, dailyOutput: 300_000),
-                resetsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7 * 3600))
+                resetsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7 * 3600)),
+                tasks: AgentTaskSummary(running: 1, prOpen: 2, mergedLast7Days: 5, concurrency: 3)
             )
             return
         }
