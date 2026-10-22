@@ -142,6 +142,18 @@ struct Me: Codable {
     let limits: AgentLimits
     /// ISO timestamp when the daily counters reset (next UTC midnight).
     let resetsAt: String
+    /// Agent task counts (absent on an older daemon).
+    let tasks: AgentTaskSummary?
+}
+
+/// The account's agent tasks: what runs now, what waits for review, and the
+/// pull requests merged in the last seven days — the number Celiador steers by.
+struct AgentTaskSummary: Codable {
+    let running: Int
+    let prOpen: Int
+    let mergedLast7Days: Int
+    /// Tasks allowed to run at once (published like the other limits).
+    let concurrency: Int
 }
 
 /// Today's agent usage (UTC day), as metered by the daemon's quota tracker.
