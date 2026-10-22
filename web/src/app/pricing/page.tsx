@@ -16,6 +16,7 @@ export default async function PricingPage() {
   const rows: { label: string; value: string; note: string }[] = [
     { label: "Agent requests per minute", value: formatLimit(published.limits.rpm), note: "rolling window" },
     { label: "Concurrent agent requests", value: formatLimit(published.limits.concurrency), note: "at any moment" },
+    { label: "Agent tasks running at once", value: formatLimit(published.tasks.concurrency), note: "queued issues, each in its own worktree" },
     { label: "Agent requests per day", value: formatLimit(published.limits.dailyRequests), note: "UTC day" },
     { label: "Input tokens per day", value: formatLimit(published.limits.dailyInput), note: "UTC day" },
     { label: "Output tokens per day", value: formatLimit(published.limits.dailyOutput), note: "UTC day" },

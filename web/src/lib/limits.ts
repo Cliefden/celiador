@@ -21,6 +21,8 @@ export type PublishedLimits = {
   plan: string;
   model: string;
   limits: AgentLimits;
+  /** Agent tasks (queued GitHub issues) running at once per user. */
+  tasks: { concurrency: number };
   window: string;
   /** False when the live endpoint was unreachable and the documented defaults are shown instead. */
   live: boolean;
@@ -36,6 +38,7 @@ const DOCUMENTED_DEFAULTS: PublishedLimits = {
   plan: "early-access",
   model: "claude-opus-4-8",
   limits: { rpm: 30, concurrency: 2, dailyRequests: 500, dailyInput: 5_000_000, dailyOutput: 300_000 },
+  tasks: { concurrency: 3 },
   window: "Daily budgets reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
   live: false,
 };
@@ -50,6 +53,7 @@ export async function publishedLimits(): Promise<PublishedLimits> {
       plan: data.plan ?? DOCUMENTED_DEFAULTS.plan,
       model: data.model ?? DOCUMENTED_DEFAULTS.model,
       limits: { ...DOCUMENTED_DEFAULTS.limits, ...data.limits },
+      tasks: { ...DOCUMENTED_DEFAULTS.tasks, ...(data.tasks ?? {}) },
       window: data.window ?? DOCUMENTED_DEFAULTS.window,
       live: true,
     };
