@@ -431,6 +431,16 @@ export function sessionRoutes(): Hono<AppEnv> {
     );
   });
 
+  // Merge the run's open pull request — the phone's "Approve and merge". The
+  // editor does it with its GitHub sign-in (or the gh CLI's), so the daemon
+  // never holds a GitHub credential; when the run belongs to an agent task the
+  // task moves to `merged`, the state the plan's north-star metric counts.
+  app.post("/:id/git/merge", async (c) => {
+    const { method } = await c.req.json().catch(() => ({}));
+    if (method !== undefined && method !== "merge" && method !== "squash" && method !== "rebase") return c.json({ error: "bad method" }, 400);
+    return relayGit(c, { kind: "git.merge", requestId: randomUUID(), method }, GIT_NETWORK_TIMEOUT_MS);
+  });
+
   /** paths: an array of ≤1000 non-empty relative paths (optional when `optional`). */
   function validPaths(paths: unknown, optional: boolean): paths is string[] | undefined {
     if (paths === undefined) return optional;
@@ -451,6 +461,9 @@ export function sessionRoutes(): Hono<AppEnv> {
       if (msg === "timeout") return c.json({ error: "the editor didn't respond" }, 504);
       return c.json({ error: msg }, 502);
     }
+    // A merge the editor could not perform (checks failing, conflicts, no GitHub
+    // sign-in) is a state of the pull request, not a bad request: 409 + reason.
+    if (!result.ok && command.kind === "git.merge") return c.json({ error: result.error ?? "the pull request was not merged" }, 409);
     if (!result.ok) return c.json({ error: result.error ?? "failed" }, 400);
     switch (command.kind) {
       case "git.status":
@@ -465,6 +478,16 @@ export function sessionRoutes(): Hono<AppEnv> {
         // `created: false` is a legitimate reply (compare page / already open) — only a missing or non-https URL is an error.
         if (!str(result.url, 4096) || !/^https:\/\//.test(result.url)) return c.json({ error: "the editor returned no pull request URL" }, 502);
         return c.json({ url: result.url, created: result.created !== false });
+      case "git.merge": {
+        if (result.merged !== true) return c.json({ error: result.error ?? "the pull request was not merged" }, 409);
+        const userId = c.get("user").userId;
+        const task = taskStores.for(userId).forSession(session.id);
+        if (task && task.state !== "merged") {
+          const updated = taskStores.for(userId).update(task.id, { state: "merged" });
+          if (updated) publishTaskChange(userId, updated);
+        }
+        return c.json({ ok: true, merged: true, sha: result.sha, url: result.url, taskId: task?.id });
+      }
       default:
         return c.json({ ok: true });
     }

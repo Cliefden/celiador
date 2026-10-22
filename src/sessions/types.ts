@@ -89,13 +89,14 @@ export type SessionCommand =
   | { kind: "git.commit"; requestId: string; message: string; paths?: string[] }
   | { kind: "git.revert"; requestId: string; paths: string[] }
   | { kind: "git.push"; requestId: string }
-  | { kind: "git.pr"; requestId: string; title: string; body?: string; base?: string };
+  | { kind: "git.pr"; requestId: string; title: string; body?: string; base?: string }
+  | { kind: "git.merge"; requestId: string; method?: "merge" | "squash" | "rebase" };
 
 /** Any `fs.*` command the daemon can round-trip to the runner. */
 export type FsCommand = Extract<SessionCommand, { kind: "fs.list" | "fs.read" | "fs.write" }>;
 
 /** Any `git.*` review command the daemon can round-trip to the runner. */
-export type GitCommand = Extract<SessionCommand, { kind: "git.status" | "git.diff" | "git.commit" | "git.revert" | "git.push" | "git.pr" }>;
+export type GitCommand = Extract<SessionCommand, { kind: "git.status" | "git.diff" | "git.commit" | "git.revert" | "git.push" | "git.pr" | "git.merge" }>;
 
 /** A runner request the daemon awaits an `fs.result` reply for (by requestId). */
 export type RunnerRequest = FsCommand | GitCommand;
@@ -133,6 +134,8 @@ export interface FsResult {
   url?: string;
   /** git.pr: true when the pull request was created by this call (false = already open / compare link). */
   created?: boolean;
+  /** git.merge: true once GitHub reports the pull request merged (`sha` = the merge commit). */
+  merged?: boolean;
 }
 
 /**
