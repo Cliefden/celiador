@@ -60,8 +60,9 @@ async function main(): Promise<void> {
 	ok("no auth → 401", noAuth.status === 401, `got ${noAuth.status}`);
 	// The published limits are public and are the same object /api/me returns.
 	const limitsRes = await app.request("http://localhost/api/limits");
-	const published = (await limitsRes.json()) as { model?: string; limits?: Record<string, number> };
+	const published = (await limitsRes.json()) as { model?: string; limits?: Record<string, number>; tasks?: { concurrency?: number } };
 	ok("GET /api/limits is public with the enforced numbers", limitsRes.status === 200 && published.model === AGENT_MODEL && typeof published.limits?.dailyRequests === "number" && typeof published.limits?.rpm === "number", JSON.stringify(published));
+	ok("GET /api/limits publishes the agent task concurrency", typeof published.tasks?.concurrency === "number", JSON.stringify(published.tasks));
 	const body = JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 999999, stream: true, system: "test", tools: [{ name: "bash", input_schema: { type: "object" } }], messages: [{ role: "user", content: "hi" }] });
 	const gw = await app.request(GW, { method: "POST", headers: authH, body });
 	ok("valid request → 200", gw.status === 200, `got ${gw.status}`);
