@@ -41,6 +41,8 @@ export interface EditorTaskRequest {
   readonly title: string;
   /** Set when the task came from a GitHub issue: the PR closes it. */
   readonly issue?: { readonly number: number; readonly url: string };
+  /** The daemon already posted the "picked up" comment (as the GitHub App); the editor must not. */
+  readonly commented?: boolean;
 }
 
 export type EditorCommand = EditorRunRequest | EditorTaskRequest;

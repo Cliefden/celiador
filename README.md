@@ -53,7 +53,8 @@ curl -s localhost:4661/api/config
 | POST | `/api/tasks/:id/cancel` | user | Cancel a queued or running task |
 | POST | `/api/tasks/:id/status` | user (editor) | The editor reports `running` / `pr-open` (+`prUrl`) / `merged` / `failed` |
 | POST/DELETE | `/api/tasks/repos` | user | Link / unlink a repo whose GitHub issues become tasks (one owner per repo) |
-| POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET`) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) within `CELIADOR_TASK_CONCURRENCY` (default 3) |
+| POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET` or the GitHub App's secret) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) within `CELIADOR_TASK_CONCURRENCY` (default 3); a merged `pull_request` on a task's branch → the task is `merged` |
+| GET | `/api/github/app/new`, `/api/github/app/setup` | none (GitHub enforces org ownership) | One-time creation of the Celiador GitHub App via GitHub's manifest flow; credentials land in `data/github-app.json`. With the app installed the daemon comments on issues as Celiador and clones private repos for cloud runs |
 | POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Locked Claude proxy, daemon-owned 3-tool set (SSE) |
 | POST | `/api/anthropic/v1/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | First-party gateway: forwards caller's own system + tools; daemon keeps key/model/caps/quota (SSE) |
 | GET | `/api/anthropic/v1/models` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Model list (proxied) |

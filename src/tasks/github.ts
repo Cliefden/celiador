@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import type { Context } from "hono";
 import type { AppEnv } from "../auth";
+import { githubApp } from "../github/app";
 import { dispatchTasks, taskStores } from "./dispatch";
 import { publishTaskChange } from "./events";
-import type { TaskRepo } from "./store";
+import { repoKey, type TaskRepo } from "./store";
 
 /**
  * GitHub webhook → agent tasks. A repo (or, later, the Celiador GitHub App)
@@ -38,6 +39,7 @@ interface GhPayload {
   issue?: GhIssue;
   label?: { name?: string };
   comment?: { body?: string; author_association?: string };
+  pull_request?: { merged?: boolean; html_url?: string; head?: { ref?: string } };
 }
 
 function repoOf(r: GhRepository | undefined): TaskRepo | undefined {
@@ -60,10 +62,13 @@ export function triggerOf(event: string, p: GhPayload): { source: "issue-label" 
 }
 
 export async function githubWebhook(c: Context<AppEnv>): Promise<Response> {
-  const secret = process.env.CELIADOR_GITHUB_WEBHOOK_SECRET;
-  if (!secret) return c.json({ error: "webhook not configured" }, 503);
+  // Two senders share this endpoint: the per-repo webhooks (CELIADOR_GITHUB_WEBHOOK_SECRET)
+  // and the Celiador GitHub App (its own secret, stored at setup). Either signature is good.
+  const secrets = [process.env.CELIADOR_GITHUB_WEBHOOK_SECRET, githubApp()?.webhookSecret].filter((s): s is string => !!s);
+  if (secrets.length === 0) return c.json({ error: "webhook not configured" }, 503);
   const body = await c.req.text();
-  if (!validSignature(secret, body, c.req.header("x-hub-signature-256"))) {
+  const signature = c.req.header("x-hub-signature-256");
+  if (!secrets.some((secret) => validSignature(secret, body, signature))) {
     return c.json({ error: "bad signature" }, 401);
   }
   const event = c.req.header("x-github-event") ?? "";
@@ -75,6 +80,7 @@ export async function githubWebhook(c: Context<AppEnv>): Promise<Response> {
   } catch {
     return c.json({ error: "bad payload" }, 400);
   }
+  if (event === "pull_request") return pullRequestEvent(c, payload);
   const trigger = triggerOf(event, payload);
   if ("ignore" in trigger) return c.json({ ok: true, ignored: trigger.ignore });
 
@@ -100,4 +106,25 @@ export async function githubWebhook(c: Context<AppEnv>): Promise<Response> {
   publishTaskChange(userId, task);
   dispatchTasks(userId);
   return c.json({ ok: true, taskId: task.id, state: store.get(task.id)?.state }, 201);
+}
+
+/**
+ * A pull request merged on GitHub itself (the web UI, a teammate, anywhere but
+ * the phone) still counts: the task whose branch it is moves to `merged`, so the
+ * north-star number is right however the PR was merged.
+ */
+function pullRequestEvent(c: Context<AppEnv>, p: GhPayload): Response {
+  if (p.action !== "closed" || p.pull_request?.merged !== true) return c.json({ ok: true, ignored: `pull_request/${p.action ?? "-"}` });
+  const repo = repoOf(p.repository);
+  const head = p.pull_request.head?.ref;
+  if (!repo || !head) return c.json({ ok: true, ignored: "incomplete payload" });
+  const userId = taskStores.links.owner(repo.url);
+  if (!userId) return c.json({ ok: true, ignored: "repo is not linked to a Celiador account" });
+  const store = taskStores.for(userId);
+  const task = store.list().find((t) => repoKey(t.repo.url) === repoKey(repo.url) && t.branch === head && t.state !== "merged");
+  if (!task) return c.json({ ok: true, ignored: "no task for this branch" });
+  const updated = store.update(task.id, { state: "merged", ...(p.pull_request.html_url ? { prUrl: p.pull_request.html_url } : {}) })!;
+  publishTaskChange(userId, updated);
+  dispatchTasks(userId);
+  return c.json({ ok: true, taskId: task.id, state: "merged" });
 }
