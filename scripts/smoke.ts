@@ -138,6 +138,13 @@ async function main(): Promise<void> {
 					} else {
 						// No GitHub sign-in in the editor → compare page, not an error.
 						await reply({ ok: true, url: "https://github.com/Cliefden/daemon/compare/main...feat/x?expand=1", created: false });
+					}
+				} else if (cmd.kind === "git.merge") {
+					seenMerge.push(cmd);
+					if (seenMerge.length === 1) {
+						await reply({ ok: true, merged: true, sha: "abc123", url: "https://github.com/Cliefden/daemon/pull/99" });
+					} else {
+						await reply({ ok: false, merged: false, error: "Pull Request is not mergeable" });
 						return;
 					}
 				}
@@ -145,6 +152,7 @@ async function main(): Promise<void> {
 		}
 	})();
 	const seenPr: Array<{ title?: string; body?: string; base?: string }> = [];
+	const seenMerge: Array<{ method?: string }> = [];
 	// Give the stream a tick to attach as the runner, then ask for status.
 	await new Promise((r) => setTimeout(r, 50));
 	const statusRes = await app.request(`${G}/status`, { headers: authH });
@@ -161,6 +169,14 @@ async function main(): Promise<void> {
 	const compare = (await compareRes.json()) as { url?: string; created?: boolean };
 	ok("git pr compare-URL fallback → 200 with created:false", compareRes.status === 200 && compare.created === false && compare.url?.includes("/compare/") === true, JSON.stringify(compare));
 	ok("git pr relays a trimmed base", seenPr[1]?.base === "main", JSON.stringify(seenPr[1]));
+	const badMethod = await app.request(`${G}/merge`, { method: "POST", headers: authH, body: JSON.stringify({ method: "fast-forward" }) });
+	ok("git merge with a bad method → 400", badMethod.status === 400, `got ${badMethod.status}`);
+	const mergeRes = await app.request(`${G}/merge`, { method: "POST", headers: authH, body: JSON.stringify({ method: "squash" }) });
+	const merge = (await mergeRes.json()) as { merged?: boolean; sha?: string };
+	ok("git merge round-trip → 200 with merged + sha", mergeRes.status === 200 && merge.merged === true && merge.sha === "abc123", JSON.stringify(merge));
+	ok("git merge relays the method", seenMerge[0]?.method === "squash", JSON.stringify(seenMerge[0]));
+	const notMerged = await app.request(`${G}/merge`, { method: "POST", headers: authH, body: "{}" });
+	ok("git merge the editor couldn't do → 409 with its reason", notMerged.status === 409 && ((await notMerged.json()) as { error?: string }).error === "Pull Request is not mergeable", `got ${notMerged.status}`);
 	await fakeRunner;
 	runnerAbort.abort();
 

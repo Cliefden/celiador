@@ -119,6 +119,11 @@ export class TaskStore {
     return this.tasks.find((t) => t.id === id);
   }
 
+  /** The task whose editor run is relay session `sessionId`, if any. */
+  forSession(sessionId: string): Task | undefined {
+    return this.tasks.find((t) => t.sessionId === sessionId);
+  }
+
   /** An unfinished task for the same repo + issue, if any (dedupe for webhooks). */
   openForIssue(repo: TaskRepo, issueNumber: number): Task | undefined {
     const key = repoKey(repo.url);
