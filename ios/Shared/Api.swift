@@ -577,6 +577,18 @@ final class Api {
         )
     }
 
+    /// Merge the run's open pull request ("Approve and merge"). The editor does it
+    /// with its GitHub sign-in (or the gh CLI's); the daemon marks the task merged.
+    /// A pull request GitHub refuses to merge comes back as a 409 with the reason.
+    func gitMergePullRequest(sessionId: String, method: String = "merge") async throws -> GitMergeResult {
+        try await request(
+            GitMergeResult.self,
+            path: "api/sessions/\(sessionId)/git/merge",
+            method: "POST",
+            body: ["method": method]
+        )
+    }
+
     // MARK: - App data (profile + chat history, via the daemon)
 
     private struct ProfileEnvelope: Codable { let profile: Profile }
