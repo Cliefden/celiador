@@ -175,6 +175,12 @@ export default async function DocsPage() {
             and requests are welcome on{" "}
             <a href="https://github.com/Cliefden/celiador/issues" className="text-brand hover:underline">GitHub</a>.
           </p>
+
+          <p>
+            For crawlers: the site publishes a{" "}
+            <a href="/sitemap.xml" className="text-brand hover:underline">/sitemap.xml</a> and a{" "}
+            <a href="/robots.txt" className="text-brand hover:underline">/robots.txt</a>.
+          </p>
         </div>
       </div>
     </Container>
