@@ -230,6 +230,15 @@ struct GitPullRequest: Codable {
     let created: Bool
 }
 
+/// The outcome of merging the run's pull request (POST /api/sessions/:id/git/merge).
+struct GitMergeResult: Codable {
+    let merged: Bool
+    let sha: String?
+    let url: String?
+    /// The agent task that moved to `merged`, when the run belonged to one.
+    let taskId: String?
+}
+
 // MARK: - Workspace files (served by the daemon: /api/sessions/:id/files|file)
 
 /// One entry in a workspace directory listing.

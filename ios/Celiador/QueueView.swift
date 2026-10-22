@@ -53,8 +53,9 @@ struct QueueView: View {
                                 Button {
                                     if let url = task.prUrl.flatMap(URL.init) { openURL(url) }
                                 } label: {
-                                    row(title: task.title, detail: "\(repoLine(task)) · pull request ready", color: Theme.celadonBright)
+                                    row(title: task.title, detail: "\(repoLine(task)) · pull request ready · swipe to merge", color: Theme.celadonBright)
                                 }
+                                .swipeActions(edge: .leading) { mergeButton(task) }
                                 .swipeActions { sessionLink(task) }
                             }
                         } header: { header("Ready for review", review.count, Theme.celadonBright) }
@@ -170,6 +171,29 @@ struct QueueView: View {
     private func sessionLink(_ task: AgentTask) -> some View {
         if let sid = task.sessionId {
             Button { model.queuePath.append(sid) } label: { Label("Transcript", systemImage: "text.bubble") }.tint(Theme.celadon)
+        }
+    }
+
+    /// "Approve and merge": the editor merges the run's pull request with its
+    /// GitHub sign-in and the daemon moves the task to merged.
+    @ViewBuilder
+    private func mergeButton(_ task: AgentTask) -> some View {
+        if let sid = task.sessionId {
+            Button {
+                Haptics.tap()
+                Task {
+                    do {
+                        let result = try await Api.shared.gitMergePullRequest(sessionId: sid)
+                        Haptics.success()
+                        toast = result.merged ? "Merged" : "Not merged"
+                        await load()
+                    } catch {
+                        Haptics.error()
+                        toast = (error as NSError).localizedDescription
+                    }
+                }
+            } label: { Label("Merge", systemImage: "arrow.triangle.merge") }
+            .tint(Theme.celadon)
         }
     }
 
