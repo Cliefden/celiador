@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { AGENT_MODEL, VERSION } from "./config";
 import { activeLimits } from "./agent/quota";
+import { taskConcurrency } from "./tasks/dispatch";
 import { authMode, requireUser, type AppEnv } from "./auth";
 import { agentProxy } from "./anthropic";
 import { completeHandler } from "./complete/routes";
@@ -56,6 +57,8 @@ export function createApp(): Hono<AppEnv> {
         plan: "early-access",
         model: AGENT_MODEL,
         limits: activeLimits(),
+        // Agent tasks (queued GitHub issues) running at once per user — published like the rest.
+        tasks: { concurrency: taskConcurrency() },
         window: "Daily budgets reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
       },
       200,
