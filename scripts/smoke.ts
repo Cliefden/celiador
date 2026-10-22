@@ -380,6 +380,32 @@ async function main(): Promise<void> {
 	await edReader;
 	delete process.env.CELIADOR_TASK_CONCURRENCY;
 
+	// ── GitHub App: app JWT, manifest, its webhook secret, merged-PR webhook ──
+	console.log("\n== github app ==");
+	const { appJwt, appManifest, resetGitHubAppForTests } = await import("../src/github/app.ts");
+	const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+	const pem = privateKey.export({ type: "pkcs1", format: "pem" }) as string;
+	const smokeApp = { id: 4242, slug: "celiador-smoke", name: "Celiador", htmlUrl: "https://github.com/apps/celiador-smoke", pem, webhookSecret: "appsec", clientId: "cid", clientSecret: "cs", createdAt: new Date().toISOString() };
+	resetGitHubAppForTests(smokeApp);
+	const jwt = appJwt(smokeApp, 1_800_000_000);
+	const [h, p, s] = jwt.split(".");
+	const jwtOk = crypto.verify("RSA-SHA256", Buffer.from(`${h}.${p}`), publicKey, Buffer.from(s!, "base64url"));
+	const claims = JSON.parse(Buffer.from(p!, "base64url").toString()) as { iss: number; iat: number; exp: number };
+	ok("app JWT: RS256 over the stored key, iss = app id, 10-minute window", jwtOk && claims.iss === 4242 && claims.exp - claims.iat === 600, JSON.stringify(claims));
+	const manifest = appManifest() as { hook_attributes: { url: string }; redirect_url: string; default_events: string[]; default_permissions: Record<string, string> };
+	ok("manifest: webhook + redirect on the public URL, the three events, write on issues/PRs/contents", /\/api\/github\/webhook$/.test(manifest.hook_attributes.url) && /\/api\/github\/app\/setup$/.test(manifest.redirect_url) && manifest.default_events.includes("pull_request") && manifest.default_permissions.contents === "write", JSON.stringify(manifest));
+	ok("webhook signed with the app's secret is accepted", (await hook("ping", {}, "appsec")).status === 200);
+	ok("webhook signed with a third secret is still refused", (await hook("ping", {}, "nope")).status === 401);
+	const prMerged = { action: "closed", repository: ghRepo, pull_request: { merged: true, html_url: "https://github.com/Cliefden/smoke-repo/pull/7", head: { ref: "42-fix-the-thing-42" } } };
+	const mergedRes = (await (await hook("pull_request", prMerged, "appsec")).json()) as { taskId?: string; state?: string };
+	const mergedTask = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; state: string }> }).tasks.find((t) => t.id === tid);
+	ok("a pull_request merged on GitHub moves the task to merged", mergedRes.taskId === tid && mergedTask?.state === "merged", JSON.stringify(mergedRes));
+	ok("a closed-unmerged pull_request is ignored", /pull_request\/closed/.test(((await (await hook("pull_request", { ...prMerged, pull_request: { ...prMerged.pull_request, merged: false } }, "appsec")).json()) as { ignored?: string }).ignored ?? ""));
+	resetGitHubAppForTests();
+	const newPage = await app.request("http://localhost/api/github/app/new");
+	ok("setup page renders the manifest form when no app is stored", newPage.status === 200 && /organizations\/Cliefden\/settings\/apps\/new\?state=/.test(await newPage.text()));
+	ok("setup callback without a known state → 400", (await app.request("http://localhost/api/github/app/setup?code=x&state=unknown")).status === 400);
+
 	// ── Cloud-runner sandbox (pure parts; isolation itself: scripts/sandbox-check.ts) ──
 	console.log("\n== sandbox ==");
 	const { streamLineToEvents, streamLineResult, dockerRunArgs } = await import("../src/runner/sandbox.ts");

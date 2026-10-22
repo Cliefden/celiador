@@ -17,16 +17,23 @@ export function workspaceDir(userId: string, runId: string): string {
 }
 
 /**
- * Shallow-clone a public repo into `dir`. Phase 3a is public-repo only (no
- * credentials); private repos + auth come with 3b. Times out so a hanging clone
+ * Shallow-clone a repo into `dir`. With `token` (a GitHub App installation
+ * token) private repositories clone too; the token rides in the URL for this
+ * one command and is scrubbed from any error. Times out so a hanging clone
  * can't wedge a run.
  */
-export async function cloneRepo(url: string, branch: string | undefined, dir: string): Promise<void> {
+export async function cloneRepo(url: string, branch: string | undefined, dir: string, token?: string): Promise<void> {
   await fs.promises.mkdir(path.dirname(dir), { recursive: true });
   const args = ["clone", "--depth=1", "--single-branch"];
   if (branch) args.push("--branch", branch);
-  args.push(url, dir);
-  await run("git", args, { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
+  const cloneUrl = token && /^https:\/\/github\.com\//i.test(url) ? url.replace(/^https:\/\//i, `https://x-access-token:${token}@`) : url;
+  args.push(cloneUrl, dir);
+  try {
+    await run("git", args, { timeout: 120_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  } catch (err) {
+    const message = (err instanceof Error ? err.message : String(err)).split(token ?? "\u0000").join("***");
+    throw new Error(message);
+  }
 }
 
 /** One changed file's patch. */

@@ -2,6 +2,13 @@ import { publishSessionEvent } from "../sessions/publish";
 import type { SessionEventInput } from "../sessions/types";
 import { cloneRepo, computeDiffs, workspaceDir } from "./workspace";
 import { placeholderAgent, type RunnerAgent } from "./agent";
+import { installationToken } from "../github/app";
+
+/** `owner` + `name` of a github.com https URL, else undefined. */
+function parseGitHubUrl(url: string): { owner: string; name: string } | undefined {
+  const m = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(url);
+  return m?.[1] && m[2] ? { owner: m[1], name: m[2] } : undefined;
+}
 
 export interface IServerRunOptions {
   readonly userId: string;
@@ -34,7 +41,11 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<void> {
   try {
     publish({ kind: "state", state: "running" });
     publish({ kind: "activity", text: `Cloning ${opts.repo.url}…` });
-    await cloneRepo(opts.repo.url, opts.repo.branch, dir);
+    // A GitHub App installation token (when the app is set up and installed on
+    // the repo) lets private repositories clone; public ones work without it.
+    const gh = parseGitHubUrl(opts.repo.url);
+    const token = gh ? await installationToken(gh).catch(() => null) : null;
+    await cloneRepo(opts.repo.url, opts.repo.branch, dir, token ?? undefined);
 
     publish({ kind: "activity", text: "Running the agent…" });
     await agent({ workspaceDir: dir, prompt: opts.prompt, publish, userId: opts.userId, runId: opts.sessionId, signal: opts.signal ?? new AbortController().signal });
