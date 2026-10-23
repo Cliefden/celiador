@@ -11,6 +11,18 @@ export const metadata: Metadata = {
 // Builds themselves are listed on /releases, straight from the update feed.
 const entries = [
   {
+    version: "1.143.0",
+    date: "20 Oct 2026",
+    tag: "Early access",
+    items: [
+      "Linux builds: .deb, .rpm and .tar.gz for x86_64 on the download page, with sha256 sums on the releases page. Linux has no in-place updater, so the update check points at the download page.",
+      "Import Settings from Another Editor: a command, and a one-time offer on first launch, that brings your settings, keybindings and extension recommendations over from Cursor or VS Code.",
+      "Help menu links — documentation, release notes, feature requests and privacy — now go to celiador.ai.",
+      "Anonymous product telemetry via TelemetryDeck, limited to a handful of Celiador events and unhandled-error counts, controlled by the standard telemetry setting and described on the privacy page.",
+      "The editor core caught up with upstream VS Code, about five weeks of changes.",
+    ],
+  },
+  {
     version: "Pricing",
     date: "17 Oct 2026",
     tag: "Pricing",
