@@ -70,6 +70,15 @@ async function main(): Promise<void> {
 	ok("model forced to AGENT_MODEL", gwBody?.model === AGENT_MODEL, `got ${String(gwBody?.model)}`);
 	ok("max_tokens capped", typeof gwBody?.max_tokens === "number" && (gwBody.max_tokens as number) <= 32000);
 	ok("caller system + tools forwarded", gwBody?.system === "test" && Array.isArray(gwBody?.tools));
+	// A per-turn effort chosen for the caller's model is dropped when the daemon
+	// substitutes its own (Anthropic rejects effort on models without it); the
+	// rest of output_config survives, and a request for AGENT_MODEL itself keeps it.
+	const effortBody = (model: string) => JSON.stringify({ model, max_tokens: 10, stream: true, output_config: { effort: "high", format: { type: "json_schema" } }, messages: [{ role: "user", content: "hi" }] });
+	await (await app.request(GW, { method: "POST", headers: authH, body: effortBody("claude-opus-5-5") })).text();
+	const cfg = gwBody?.output_config as Record<string, unknown> | undefined;
+	ok("effort dropped (format kept) when the model is overridden", cfg !== undefined && !("effort" in cfg) && typeof cfg.format === "object", JSON.stringify(gwBody?.output_config));
+	await (await app.request(GW, { method: "POST", headers: authH, body: effortBody(AGENT_MODEL) })).text();
+	ok("effort kept for the daemon's own model", (gwBody?.output_config as { effort?: string } | undefined)?.effort === "high", JSON.stringify(gwBody?.output_config));
 
 	// ── Relay ────────────────────────────────────────────────────────────────
 	console.log("\n== relay ==");
