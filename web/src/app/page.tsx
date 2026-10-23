@@ -41,6 +41,12 @@ export default function HomePage() {
           <p className="mt-4 font-mono text-xs text-fog-dim">
             {site.minMacOS} · Free to start
           </p>
+          <p className="mt-4 text-sm text-fog">
+            Coming from Cursor or VS Code?{" "}
+            <Link href="/switch" className="text-brand hover:underline">
+              Here&apos;s what changes.
+            </Link>
+          </p>
 
           <div className="animate-float mx-auto mt-16 max-w-4xl text-left">
             <EditorMock />
