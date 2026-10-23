@@ -4,6 +4,7 @@ const baseUrl = "https://celiador.ai";
 
 const routes = [
   "/",
+  "/start",
   "/features",
   "/download",
   "/pricing",
