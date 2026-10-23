@@ -59,7 +59,7 @@ const entries = [
 
 export default function ChangelogPage() {
   return (
-    <section className="relative overflow-hidden">
+    <section id="top" className="relative overflow-hidden">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[300px] hero-glow" />
       <Container className="relative py-20 sm:py-24">
         <div className="mx-auto max-w-3xl">
@@ -106,6 +106,12 @@ export default function ChangelogPage() {
                 </ul>
               </div>
             ))}
+          </div>
+
+          <div className="mt-14 text-center">
+            <Link href="#top" className="text-sm text-fog-dim hover:text-fog">
+              Back to top ↑
+            </Link>
           </div>
         </div>
       </Container>
