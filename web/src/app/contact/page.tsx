@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { ContactForm } from "@/components/ContactForm";
 
@@ -41,8 +42,17 @@ export default function ContactPage() {
             </div>
           </div>
 
-          <div className="card rounded-2xl p-7 sm:p-8">
-            <ContactForm />
+          <div>
+            <div className="card rounded-2xl p-7 sm:p-8">
+              <ContactForm />
+            </div>
+            <p className="mt-4 text-sm text-fog">
+              What we do with what you send is on the{" "}
+              <Link href="/privacy" className="text-brand hover:underline">
+                privacy
+              </Link>{" "}
+              page.
+            </p>
           </div>
         </div>
       </Container>
