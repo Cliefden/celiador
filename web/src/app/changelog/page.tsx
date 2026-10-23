@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 
 export const metadata: Metadata = {
@@ -85,7 +86,13 @@ export default function ChangelogPage() {
               <div key={e.version} className="relative border-l border-line pl-8">
                 <span className="absolute -left-2 top-1.5 h-4 w-4 rounded-full border-2 border-brand bg-ink" />
                 <div className="flex flex-wrap items-center gap-3">
-                  <h2 className="text-xl font-semibold tracking-tight">v{e.version}</h2>
+                  {/^[\d.]+$/.test(e.version) ? (
+                    <Link href="/releases" className="text-xl font-semibold tracking-tight">
+                      v{e.version}
+                    </Link>
+                  ) : (
+                    <h2 className="text-xl font-semibold tracking-tight">v{e.version}</h2>
+                  )}
                   <span className="rounded-full border border-line bg-brand/10 px-2.5 py-0.5 text-xs text-brand">
                     {e.tag}
                   </span>
