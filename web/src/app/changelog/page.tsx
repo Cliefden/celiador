@@ -1,6 +1,5 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 
 export const metadata: Metadata = {
