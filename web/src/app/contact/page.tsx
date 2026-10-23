@@ -53,6 +53,15 @@ export default function ContactPage() {
               </Link>{" "}
               page.
             </p>
+            <p className="mt-4 text-sm text-fog-dim">
+              Service{" "}
+              <a
+                href="https://celiador.ai/api/health"
+                className="text-brand hover:underline"
+              >
+                status
+              </a>
+            </p>
           </div>
         </div>
       </Container>
