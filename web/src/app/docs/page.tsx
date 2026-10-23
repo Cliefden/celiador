@@ -34,9 +34,11 @@ export default async function DocsPage() {
         <h1 className="mt-6 text-4xl font-semibold tracking-tight sm:text-5xl">Getting started</h1>
         <p className="mt-4 text-lg text-fog">
           Everything you need for the first hour with Celiador. Short on purpose; the editor itself
-          is VS Code, so what you already know still applies. New here? The{" "}
-          <Link href="/start" className="text-brand hover:underline">start page</Link> walks you to your
-          first agent pull request in about ten minutes.
+          is VS Code, so what you already know still applies.
+        </p>
+        <p className="mt-4 text-fog">
+          New here? Follow the{" "}
+          <Link href="/start" className="text-brand hover:underline">start guide</Link>.
         </p>
 
         <nav className="mt-8 flex flex-wrap gap-2">
