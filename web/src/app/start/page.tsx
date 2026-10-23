@@ -71,6 +71,13 @@ export default async function StartPage() {
             and extensions; the <Link href="/switch" className="text-brand hover:underline">switching page</Link>{" "}
             says what carries over.
           </p>
+          <p>
+            Want to keep VS Code or Cursor? Install{" "}
+            <a href="https://github.com/Cliefden/celiador-remote/releases/latest" className="text-brand hover:underline">Celiador Remote</a>{" "}
+            instead (a VSIX; run <strong className="text-white">Extensions: Install from VSIX…</strong>), sign in
+            from its status bar item, and follow the same steps 2 to 6. Runs happen on your machine in a git
+            worktree, the same way; the extension uses the Claude Code CLI you have installed, or downloads it once.
+          </p>
 
           <h2 id="github">2. Connect GitHub</h2>
           <p>
