@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Metadata } from "next";
 import { Container, Eyebrow } from "@/components/ui";
 
@@ -69,6 +70,13 @@ export default function ChangelogPage() {
             </h1>
             <p className="mt-4 text-lg text-fog">
               Follow along as Celiador ships. Big things are coming fast.
+            </p>
+            <p className="mt-2 text-sm text-fog">
+              Every build, with checksums, is on the{" "}
+              <Link href="/releases" className="text-brand hover:underline">
+                releases page
+              </Link>
+              .
             </p>
           </div>
 
