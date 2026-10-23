@@ -120,11 +120,11 @@ export default async function PricingPage() {
             {published.live ? (
               <>
                 {" "}
-                Source:{" "}
+                The numbers above are read live from{" "}
                 <a href="https://celiador.ai/api/limits" className="underline hover:text-fog">
                   celiador.ai/api/limits
-                </a>
-                .
+                </a>{" "}
+                and are the ones the server enforces.
               </>
             ) : (
               <> Shown: the documented defaults — the live endpoint was unreachable when this page was built.</>
