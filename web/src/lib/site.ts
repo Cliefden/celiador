@@ -19,6 +19,7 @@ export const site = {
 };
 
 export const nav: { label: string; href: string }[] = [
+  { label: "Start", href: "/start" },
   { label: "Features", href: "/features" },
   { label: "Pricing", href: "/pricing" },
   { label: "Docs", href: "/docs" },
@@ -171,6 +172,7 @@ export const footerLinks: { heading: string; links: { label: string; href: strin
   {
     heading: "Product",
     links: [
+      { label: "Start here", href: "/start" },
       { label: "Features", href: "/features" },
       { label: "Pricing", href: "/pricing" },
       { label: "Download", href: "/download" },

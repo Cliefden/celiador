@@ -1,0 +1,167 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { Container, Eyebrow } from "@/components/ui";
+import { publishedLimits } from "@/lib/limits";
+import { latestMacDmgHref, latestMacRelease } from "@/lib/releases";
+
+export const metadata: Metadata = {
+  title: "Your first agent pull request",
+  description:
+    "From download to a merged agent pull request in about ten minutes: install Celiador, sign in, connect GitHub, label an issue, review and merge from your phone.",
+};
+
+// The page an outside developer gets sent. Every step below was exercised on a
+// clean profile in the loop tests (Oct 2026); the two preconditions people miss
+// — a GitHub sign-in for the pull request and a repository linked from the phone
+// — are called out as steps of their own, not footnotes. Keep it to one screen
+// per step and say what the person will see.
+const steps: { id: string; title: string; minutes: number }[] = [
+  { id: "install", title: "Install and sign in", minutes: 2 },
+  { id: "github", title: "Connect GitHub", minutes: 2 },
+  { id: "phone", title: "Put the queue on your phone", minutes: 2 },
+  { id: "repo", title: "Open the repository and watch it", minutes: 1 },
+  { id: "issue", title: "Label an issue", minutes: 1 },
+  { id: "review", title: "Review and merge from the phone", minutes: 2 },
+];
+
+export default async function StartPage() {
+  const [release, limits] = await Promise.all([latestMacRelease(), publishedLimits()]);
+
+  return (
+    <Container className="py-20 sm:py-24">
+      <div className="mx-auto max-w-3xl">
+        <Eyebrow>Start here</Eyebrow>
+        <h1 className="mt-6 text-4xl font-semibold tracking-tight sm:text-5xl">
+          Your first agent pull request, in about ten minutes
+        </h1>
+        <p className="mt-4 text-lg leading-relaxed text-fog">
+          Celiador turns a GitHub issue into a pull request while you are away from the keyboard:
+          you label the issue, an agent runs it on your Mac in its own git worktree, and you review and
+          merge from your phone. This page gets you from nothing to that first merge.
+        </p>
+
+        <ol className="mt-8 grid gap-2 sm:grid-cols-2">
+          {steps.map((s, i) => (
+            <li key={s.id}>
+              <a href={`#${s.id}`} className="flex items-center justify-between rounded-xl border border-line bg-white/[0.02] px-4 py-3 text-sm text-fog hover:text-white">
+                <span>
+                  <span className="mr-2 font-mono text-xs text-fog-dim">{i + 1}</span>
+                  {s.title}
+                </span>
+                <span className="font-mono text-xs text-fog-dim">{s.minutes} min</span>
+              </a>
+            </li>
+          ))}
+        </ol>
+
+        <div className="mt-10 space-y-6 text-sm leading-relaxed text-fog [&_h2]:mt-12 [&_h2]:scroll-mt-24 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_code]:rounded [&_code]:bg-white/[0.06] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_code]:text-white [&_li]:ml-5 [&_li]:list-decimal">
+          <h2 id="install">1. Install and sign in</h2>
+          <p>
+            You need an Apple Silicon Mac (macOS 13 or later) or Linux x86_64.{" "}
+            <a href={latestMacDmgHref} className="text-brand hover:underline">Download the macOS DMG</a>
+            {release ? ` (version ${release.productVersion})` : ""} or pick a Linux package on the{" "}
+            <Link href="/download" className="text-brand hover:underline">download page</Link>. Open it, drag
+            Celiador to Applications, and start it from there. On first launch, click{" "}
+            <strong className="text-white">Sign in</strong> on the welcome view (or the account item in the
+            status bar) and create an account with an email and password. That one account is shared by the
+            editor, the phone app and the hosted agent; there is no API key to paste.
+          </p>
+          <p>
+            Coming from Cursor or VS Code? The first launch offers to import your settings, keybindings
+            and extensions; the <Link href="/switch" className="text-brand hover:underline">switching page</Link>{" "}
+            says what carries over.
+          </p>
+
+          <h2 id="github">2. Connect GitHub</h2>
+          <p>
+            Two things talk to GitHub on your behalf, and both need a sign-in that most developers already
+            have:
+          </p>
+          <ol className="space-y-2">
+            <li>
+              <strong className="text-white">The editor</strong> pushes the agent&apos;s branch and opens the
+              pull request. It uses your git credentials for the push and, for the pull request, either the
+              editor&apos;s GitHub sign-in (the Accounts menu in the activity bar) or the GitHub CLI if you
+              have run <code>gh auth login</code> on that Mac. Without either you get a compare link instead
+              of a pull request, so do this before the first run.
+            </li>
+            <li>
+              <strong className="text-white">The Celiador GitHub App</strong> hears about labelled issues,
+              comments on them as <code>celiador</code> when a run starts, and notices when the pull request
+              is merged. Install it on the repositories you want agents to work on:{" "}
+              <a href="https://github.com/apps/celiador/installations/new" className="text-brand hover:underline" target="_blank" rel="noreferrer">
+                github.com/apps/celiador
+              </a>
+              . It asks for issues, pull requests and contents on those repositories, nothing else.
+            </li>
+          </ol>
+
+          <h2 id="phone">3. Put the queue on your phone</h2>
+          <p>
+            The iPhone app is the review surface: what needs you, what is running, the pull requests
+            waiting, and a merge button. It is distributed through TestFlight. Until the public link is on
+            the download page, ask for an invite from the{" "}
+            <Link href="/contact" className="text-brand hover:underline">contact page</Link> and mention your
+            Apple ID email. Install it, sign in with the same account as the editor, and you are on the{" "}
+            <strong className="text-white">Queue</strong> tab.
+          </p>
+          <p>
+            No phone yet? Everything on the phone is also in the editor&apos;s Agents window (<code>Open Agents
+            Window</code> from the Command Palette); you only lose the away-from-desk part.
+          </p>
+
+          <h2 id="repo">4. Open the repository and watch it</h2>
+          <p>
+            On the Mac, open the repository folder in Celiador (a normal clone with a GitHub remote) and
+            trust it when asked. The editor tells the queue which repositories it has open. On the phone,
+            tap the eye on the Queue tab and switch the repository on under{" "}
+            <strong className="text-white">Watched repos</strong>. That link is what routes issues from that
+            repository to your account; one account per repository.
+          </p>
+
+          <h2 id="issue">5. Label an issue</h2>
+          <p>
+            Write an issue the way you would brief a colleague for a small change: what to change, where,
+            what not to touch. Create a label named <code>celiador</code> if the repository does not have one,
+            and add it to the issue (or comment <code>@celiador</code> as a collaborator). Within a minute or
+            two:
+          </p>
+          <ol className="space-y-2">
+            <li>the issue gets a comment from <code>celiador</code> saying it was picked up and on which branch;</li>
+            <li>the run appears under <strong className="text-white">Running</strong> on the phone, and in the editor&apos;s Agents window, in its own worktree so your working copy is untouched;</li>
+            <li>the agent reads, edits, runs lint and tests, and commits. Routine commands run on their own; a risky one shows up under <strong className="text-white">Needs you</strong> with Allow and Deny;</li>
+            <li>when it finishes, the editor pushes the branch and opens a pull request that closes the issue.</li>
+          </ol>
+          <p>
+            Re-adding a label the issue already has does nothing; remove it and add it again to re-run.
+            Up to {limits.tasks.concurrency} runs go at once per account; the rest wait in the queue.
+          </p>
+
+          <h2 id="review">6. Review and merge from the phone</h2>
+          <p>
+            The pull request shows under <strong className="text-white">Ready for review</strong>. Tap it to
+            read the diff, discard a file, or send a follow-up that starts another turn on the same branch.
+            Swipe the row to <strong className="text-white">Merge</strong>: the editor merges it with your
+            GitHub sign-in and the task moves to merged. That is the loop. The account panel keeps count of
+            pull requests merged in the last seven days; it is the one number we steer the product by.
+          </p>
+
+          <h2 id="after">When something goes wrong</h2>
+          <ol className="space-y-2">
+            <li><strong className="text-white">The pull request is a compare link.</strong> The editor had no GitHub sign-in; see step 2.</li>
+            <li><strong className="text-white">Nothing happens after the label.</strong> The app is not installed on that repository (step 2) or the repository is not watched from the phone (step 4). The editor must also be running with the folder open.</li>
+            <li><strong className="text-white">The run failed.</strong> The task shows the error on the phone. Our limits are published and enforced per account; the current ones are on the <Link href="/pricing" className="text-brand hover:underline">pricing page</Link>.</li>
+            <li><strong className="text-white">Anything else.</strong> <a href="https://github.com/Cliefden/celiador-editor/issues/new" className="text-brand hover:underline" target="_blank" rel="noreferrer">Open an issue</a> or write to the <Link href="/contact" className="text-brand hover:underline">contact page</Link>; a person answers.</li>
+          </ol>
+          <p className="text-xs text-fog-dim">
+            The code is open source (Apache-2.0): the{" "}
+            <a href="https://github.com/Cliefden/celiador-editor" className="underline hover:text-fog" target="_blank" rel="noreferrer">editor</a>,{" "}
+            the <a href="https://github.com/Cliefden/daemon" className="underline hover:text-fog" target="_blank" rel="noreferrer">server</a> and{" "}
+            the <a href="https://github.com/Cliefden/celiador-ios" className="underline hover:text-fog" target="_blank" rel="noreferrer">iPhone app</a>. What we do with your code and data is on the{" "}
+            <Link href="/privacy" className="underline hover:text-fog">privacy page</Link>.
+          </p>
+        </div>
+      </div>
+    </Container>
+  );
+}
