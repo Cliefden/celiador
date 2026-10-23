@@ -61,6 +61,18 @@ function upstreamHeaders(c: Context): Record<string, string> {
   return headers;
 }
 
+/**
+ * A per-turn `output_config.effort` is chosen for the model the caller asked
+ * for. When the daemon substitutes its own model, that effort may not exist
+ * on it (Anthropic answers 400 "requires a model that supports per-turn
+ * effort"), so it is dropped; the rest of output_config stays. Exported for the smoke test.
+ */
+export function withoutEffort(outputConfig: unknown): Record<string, unknown> | undefined {
+  if (!outputConfig || typeof outputConfig !== "object") return undefined;
+  const { effort: _effort, ...rest } = outputConfig as Record<string, unknown>;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
 export async function anthropicGateway(c: Context) {
   let body: Record<string, unknown>;
   try {
@@ -90,6 +102,9 @@ export async function anthropicGateway(c: Context) {
     model: modelFor(body.model),
     max_tokens: Math.min(Number(body.max_tokens) || AGENT_MAX_TOKENS, AGENT_MAX_TOKENS),
   };
+  if (forwarded.model !== body.model) {
+    forwarded.output_config = withoutEffort(body.output_config);
+  }
   const streaming = forwarded.stream === true;
 
   const ac = new AbortController();
