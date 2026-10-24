@@ -33,6 +33,7 @@ enum Haptics {
 // MARK: - Brand
 
 /// The Celiador wordmark: serif-italic, accent-gradient fill, optional glow halo.
+/// Used on the boot and sign-in screens only; everywhere else the app reads as native.
 struct Wordmark: View {
     var size: CGFloat = 34
     var glow: Bool = true
@@ -50,18 +51,54 @@ struct Wordmark: View {
     }
 }
 
-/// Signature backdrop: vertical charcoal gradient with a soft celadon glow up top.
+/// The app backdrop: the system grouped background (follows light/dark).
 struct CeliadorBackground: View {
     var body: some View {
-        ZStack {
-            Theme.backgroundGradient
-            Theme.glow
-                .frame(height: 420)
-                .offset(y: -220)
-                .opacity(0.7)
-                .blur(radius: 30)
+        Theme.bg.ignoresSafeArea()
+    }
+}
+
+// MARK: - Glass
+
+extension View {
+    /// Liquid Glass on iOS 26, a material on earlier systems. For floating panels
+    /// (approval card, composer, toasts), not for list rows.
+    @ViewBuilder
+    func glassPanel(cornerRadius: CGFloat = Theme.Radius.lg) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            self.background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         }
-        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    func glassCapsule() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: .capsule)
+        } else {
+            self.background(.regularMaterial, in: Capsule())
+        }
+    }
+
+    /// The one filled call-to-action on a screen: glass-prominent on iOS 26, bordered-prominent before.
+    @ViewBuilder
+    func primaryButton() -> some View {
+        if #available(iOS 26.0, *) {
+            self.buttonStyle(.glassProminent).controlSize(.large).tint(Theme.celadon)
+        } else {
+            self.buttonStyle(.borderedProminent).controlSize(.large).tint(Theme.celadon)
+        }
+    }
+
+    /// A quiet secondary action beside a primary one.
+    @ViewBuilder
+    func secondaryButton() -> some View {
+        if #available(iOS 26.0, *) {
+            self.buttonStyle(.glass).controlSize(.large)
+        } else {
+            self.buttonStyle(.bordered).controlSize(.large)
+        }
     }
 }
 
@@ -86,14 +123,13 @@ struct StatusDot: View {
             Circle()
                 .fill(color)
                 .frame(width: size, height: size)
-                .shadow(color: color.opacity(pulsing ? 0.8 : 0), radius: 4)
         }
         .frame(width: size, height: size)
         .onAppear { if pulsing { withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { animate = true } } }
     }
 }
 
-/// Compact capsule label for state / metadata.
+/// Compact capsule label for state / metadata: sentence case, tinted fill, no border.
 struct StatusPill: View {
     var text: String
     var color: Color
@@ -101,91 +137,52 @@ struct StatusPill: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            if let icon { Image(systemName: icon).font(.system(size: 9, weight: .bold)) }
-            Text(text.uppercased())
-                .font(.system(size: 10, weight: .bold)).kerning(0.6)
+            if let icon { Image(systemName: icon).font(.caption2.weight(.semibold)) }
+            Text(text).font(.caption.weight(.semibold))
         }
         .foregroundStyle(color)
-        .padding(.horizontal, 8).padding(.vertical, 3)
+        .padding(.horizontal, 9).padding(.vertical, 4)
         .background(color.opacity(0.14), in: Capsule())
-        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 1))
     }
 }
 
-// MARK: - Buttons
+/// The Settings-style leading icon for a list row: a symbol on a tinted rounded square.
+struct IconBadge: View {
+    var systemName: String
+    var color: Color
+    var pulsing: Bool = false
 
-struct PrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.headline)
-            .foregroundStyle(Color(red: 0.04, green: 0.09, blue: 0.07))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 1))
-            .shadow(color: Theme.celadon.opacity(configuration.isPressed ? 0.15 : 0.4),
-                    radius: configuration.isPressed ? 3 : 12, x: 0, y: configuration.isPressed ? 1 : 6)
-            .scaleEffect(configuration.isPressed ? 0.975 : 1)
-            .animation(Theme.snappy, value: configuration.isPressed)
-    }
-}
-
-struct GhostButtonStyle: ButtonStyle {
-    var tint: Color = Theme.ink
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.headline)
-            .foregroundStyle(tint)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(Theme.panel.opacity(0.7), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
-            .scaleEffect(configuration.isPressed ? 0.975 : 1)
-            .animation(Theme.snappy, value: configuration.isPressed)
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(width: 32, height: 32)
+            .background(color, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .symbolEffect(.pulse, isActive: pulsing)
     }
 }
 
 // MARK: - Empty state
 
+/// The system's empty-state layout, with an optional primary action.
 struct EmptyStateView: View {
     var icon: String
     var title: String
     var message: String
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
-    @State private var appear = false
 
     var body: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                Circle().fill(Theme.celadon.opacity(0.12)).frame(width: 92, height: 92)
-                Circle().stroke(Theme.celadon.opacity(0.25), lineWidth: 1).frame(width: 92, height: 92)
-                Image(systemName: icon)
-                    .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(Theme.accentGradient)
-            }
-            .scaleEffect(appear ? 1 : 0.8)
-            .opacity(appear ? 1 : 0)
-
-            Text(title)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Theme.ink)
+        ContentUnavailableView {
+            Label(title, systemImage: icon)
+        } description: {
             Text(message)
-                .font(.subheadline)
-                .foregroundStyle(Theme.dim)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-
+        } actions: {
             if let actionTitle, let action {
                 Button(actionTitle) { Haptics.tap(); action() }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .padding(.top, 4)
-                    .frame(maxWidth: 240)
+                    .primaryButton()
             }
         }
-        .padding(28)
-        .frame(maxWidth: .infinity)
-        .onAppear { withAnimation(Theme.spring.delay(0.05)) { appear = true } }
     }
 }
 
@@ -203,7 +200,7 @@ struct SkeletonBar: View {
             .frame(width: width, height: height)
             .overlay(
                 GeometryReader { geo in
-                    LinearGradient(colors: [.clear, Theme.ink.opacity(0.08), .clear],
+                    LinearGradient(colors: [.clear, Color.primary.opacity(0.06), .clear],
                                    startPoint: .leading, endPoint: .trailing)
                         .frame(width: geo.size.width * 0.6)
                         .offset(x: phase * geo.size.width)
@@ -217,14 +214,14 @@ struct SkeletonBar: View {
 struct SkeletonRow: View {
     var body: some View {
         HStack(spacing: 12) {
-            Circle().fill(Theme.panelHi).frame(width: 9, height: 9)
+            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.panelHi).frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 6) {
                 SkeletonBar(width: 170, height: 13)
                 SkeletonBar(width: 110, height: 10)
             }
             Spacer()
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
     }
 }
 
@@ -240,12 +237,10 @@ private struct ToastModifier: ViewModifier {
             if let message {
                 HStack(spacing: 8) {
                     Image(systemName: icon).foregroundStyle(tint)
-                    Text(message).font(.subheadline.weight(.medium)).foregroundStyle(Theme.ink)
+                    Text(message).font(.subheadline.weight(.medium))
                 }
                 .padding(.horizontal, 16).padding(.vertical, 11)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 14, y: 8)
+                .glassCapsule()
                 .padding(.bottom, 24)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .task(id: message) {
@@ -260,7 +255,7 @@ private struct ToastModifier: ViewModifier {
 
 extension View {
     /// Transient bottom toast. Set `message` to show; it clears itself.
-    func toast(_ message: Binding<String?>, icon: String = "checkmark.circle.fill", tint: Color = Theme.celadonBright) -> some View {
+    func toast(_ message: Binding<String?>, icon: String = "checkmark.circle.fill", tint: Color = Theme.celadon) -> some View {
         modifier(ToastModifier(message: message, icon: icon, tint: tint))
     }
 }

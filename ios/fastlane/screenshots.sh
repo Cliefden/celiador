@@ -8,12 +8,13 @@
 #
 #   ./fastlane/screenshots.sh            # all screens
 #   ./fastlane/screenshots.sh session    # one screen
+#   APPEARANCE=light SCREENSHOT_OUT=build/light ./fastlane/screenshots.sh   # light-mode check
 set -eu
 
 cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 DEVICE="${SCREENSHOT_DEVICE:-iPhone 16 Pro Max}"
-OUT="fastlane/screenshots/en-US"
+OUT="${SCREENSHOT_OUT:-fastlane/screenshots/en-US}"
 BUNDLE_ID="ai.celiador.companion.dev"        # the Dev configuration (the scheme's debug build) = Dev channel
 SCREENS="${1:-queue session changes explorer code account}"
 
@@ -36,7 +37,7 @@ APP=$(find build/screenshots/Build/Products/Dev-iphonesimulator -maxdepth 1 -nam
 echo "→ booting $DEVICE"
 xcrun simctl boot "$UDID" 2>/dev/null || true
 xcrun simctl bootstatus "$UDID" -b >/dev/null
-xcrun simctl ui "$UDID" appearance dark
+xcrun simctl ui "$UDID" appearance "${APPEARANCE:-dark}"
 xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
 xcrun simctl install "$UDID" "$APP"
 

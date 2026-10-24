@@ -225,8 +225,8 @@ struct SessionView: View {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         if transcript.truncated {
                             Text("Earlier history isn't available.")
-                                .font(.caption2)
-                                .foregroundStyle(Theme.dim)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity)
                         }
                         ForEach(transcript.items) { item in
@@ -236,8 +236,8 @@ struct SessionView: View {
                             HStack(spacing: 8) {
                                 TypingDots()
                                 Text(transcript.liveLine.isEmpty ? "Working…" : transcript.liveLine)
-                                    .font(.caption)
-                                    .foregroundStyle(Theme.dim)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
@@ -253,15 +253,21 @@ struct SessionView: View {
                 }
             }
 
-            if let approval = transcript.pendingApproval {
-                approvalCard(approval)
-            }
-            if let question = transcript.pendingQuestion {
-                questionCard(question)
-            }
-            composerBar
         }
         .background(CeliadorBackground())
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 10) {
+                if let approval = transcript.pendingApproval {
+                    approvalCard(approval)
+                }
+                if let question = transcript.pendingQuestion {
+                    questionCard(question)
+                }
+                composerBar
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
         .toast($toast)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -305,53 +311,49 @@ struct SessionView: View {
         switch item.role {
         case .user:
             Text(item.text)
-                .font(.callout)
-                .foregroundStyle(Theme.ink)
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .background(
-                    LinearGradient(colors: [Theme.celadon.opacity(0.28), Theme.celadon.opacity(0.18)],
-                                   startPoint: .top, endPoint: .bottom),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                )
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.celadon.opacity(0.35), lineWidth: 1))
+                .font(.body)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Theme.celadon, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.leading, 40)
+                .padding(.leading, 48)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
         case .assistant:
             Text(item.text)
-                .font(.callout)
-                .foregroundStyle(Theme.ink)
+                .font(.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, 24)
         case .tool:
             HStack(spacing: 6) {
-                Image(systemName: "wrench.and.screwdriver.fill").font(.system(size: 9))
-                Text(item.text.replacingOccurrences(of: "→ ", with: ""))
-                    .font(.caption.monospaced())
+                Image(systemName: item.text.hasSuffix("✓") ? "checkmark.circle.fill" : item.text.hasSuffix("✗") ? "xmark.circle.fill" : "circle.dotted")
+                    .font(.caption)
+                    .foregroundStyle(item.text.hasSuffix("✗") ? Theme.red : .secondary)
+                Text(item.text.replacingOccurrences(of: "→ ", with: "").replacingOccurrences(of: "  ✓", with: "").replacingOccurrences(of: "  ✗", with: ""))
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
             }
-            .foregroundStyle(Theme.celadonBright)
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Theme.celadon.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Theme.panel, in: Capsule())
             .frame(maxWidth: .infinity, alignment: .leading)
         case .note:
             Label(item.text, systemImage: "hand.raised.fill")
-                .font(.caption.weight(.medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(Theme.attention)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .diff:
             Text(item.text)
-                .font(.caption2.monospaced())
-                .foregroundStyle(Theme.dim)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .elevatedCard(cornerRadius: 10, padding: 10)
+                .elevatedCard(cornerRadius: Theme.Radius.sm, padding: 12)
         case .error:
             Label(item.text, systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote)
                 .foregroundStyle(Theme.red)
-                .padding(10)
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.red.opacity(0.3), lineWidth: 1))
+                .background(Theme.red.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
         }
     }
 
@@ -359,91 +361,80 @@ struct SessionView: View {
 
     private func approvalCard(_ approval: PendingApproval) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                StatusPill(text: approval.kind.replacingOccurrences(of: "_", with: " "),
-                           color: Theme.attention, icon: "hand.raised.fill")
-                Text("needs your approval")
-                    .font(.caption).foregroundStyle(Theme.dim)
+            HStack(spacing: 10) {
+                IconBadge(systemName: "hand.raised.fill", color: Theme.attention)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Needs your approval").font(.subheadline.weight(.semibold))
+                    Text(approval.label).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+                }
             }
-            Text(approval.label)
-                .font(.caption.monospaced())
-                .foregroundStyle(Theme.ink)
             if let preview = approval.preview, !preview.isEmpty {
                 Text(preview)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(Theme.dim)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
                     .lineLimit(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
-                    .background(Theme.bgDeep, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
             }
             HStack(spacing: 10) {
                 Button {
                     Haptics.success(); transcript.resolve(true); toast = "Approved"
                 } label: {
-                    Label("Allow", systemImage: "checkmark")
+                    Label("Allow", systemImage: "checkmark").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(PrimaryButtonStyle())
-                Button {
+                .primaryButton()
+                Button(role: .destructive) {
                     Haptics.warning(); transcript.resolve(false); toast = "Denied"
                 } label: {
-                    Label("Deny", systemImage: "xmark")
+                    Label("Deny", systemImage: "xmark").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(GhostButtonStyle(tint: Theme.red))
+                .secondaryButton()
+                .tint(Theme.red)
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial)
-        .overlay(LinearGradient(colors: [Theme.attention, Theme.attention.opacity(0.4)], startPoint: .leading, endPoint: .trailing)
-            .frame(height: 2), alignment: .top)
+        .glassPanel()
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func questionCard(_ question: PendingQuestion) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("The agent is asking", systemImage: "questionmark.bubble.fill")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.attention)
-            Text(question.prompt)
-                .font(.subheadline)
-                .foregroundStyle(Theme.ink)
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
+                IconBadge(systemName: "questionmark", color: Theme.attention)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("The agent is asking").font(.subheadline.weight(.semibold))
+                    Text(question.prompt).font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            HStack(alignment: .bottom, spacing: 8) {
                 TextField("Answer…", text: $answerText, axis: .vertical)
                     .lineLimit(1...4)
-                    .padding(.horizontal, 12).padding(.vertical, 9)
-                    .background(Theme.bgDeep, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(Theme.panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 SendButton(enabled: !answerText.trimmingCharacters(in: .whitespaces).isEmpty) {
                     Haptics.tap(); transcript.answer(answerText); answerText = ""
                 }
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial)
-        .overlay(LinearGradient(colors: [Theme.attention, Theme.attention.opacity(0.4)], startPoint: .leading, endPoint: .trailing)
-            .frame(height: 2), alignment: .top)
+        .glassPanel()
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private var composerBar: some View {
         let offline = !transcript.runnerConnected
         return HStack(alignment: .bottom, spacing: 8) {
-            HStack(spacing: 8) {
-                if offline { Image(systemName: "bolt.slash.fill").font(.caption).foregroundStyle(Theme.dim) }
-                TextField(offline ? "Editor offline…" : "Send a follow-up…", text: $composer, axis: .vertical)
-                    .lineLimit(1...4)
-                    .disabled(offline)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
-
+            if offline { Image(systemName: "bolt.slash.fill").font(.caption).foregroundStyle(.secondary) }
+            TextField(offline ? "Editor offline…" : "Send a follow-up…", text: $composer, axis: .vertical)
+                .lineLimit(1...4)
+                .disabled(offline)
             SendButton(enabled: !offline && !composer.trimmingCharacters(in: .whitespaces).isEmpty) {
                 Haptics.tap(); transcript.send(composer); composer = ""
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial)
+        .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 6)
+        .glassCapsule()
     }
 }
 
@@ -455,10 +446,10 @@ struct SendButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(Color(red: 0.04, green: 0.09, blue: 0.07))
-                .frame(width: 38, height: 38)
-                .background(enabled ? AnyShapeStyle(Theme.accentGradient) : AnyShapeStyle(Theme.panelHi), in: Circle())
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(enabled ? AnyShapeStyle(Theme.celadon) : AnyShapeStyle(Color.gray.opacity(0.5)), in: Circle())
         }
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.5)
@@ -472,7 +463,7 @@ private struct TypingDots: View {
     var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<3, id: \.self) { i in
-                Circle().fill(Theme.celadonBright)
+                Circle().fill(Theme.celadon)
                     .frame(width: 5, height: 5)
                     .opacity(t ? 1 : 0.3)
                     .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(i) * 0.2), value: t)

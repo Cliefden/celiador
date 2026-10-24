@@ -34,7 +34,7 @@ struct CodeFileView: View {
     @ViewBuilder private var fileBody: some View {
         switch phase {
         case .loading:
-            ProgressView().tint(Theme.celadon).frame(maxWidth: .infinity, maxHeight: .infinity)
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         case .offline:
             EmptyStateView(icon: "bolt.slash", title: "Editor offline",
                            message: "Open the Celiador desktop app to read this file.")
@@ -47,17 +47,15 @@ struct CodeFileView: View {
             VStack(spacing: 0) {
                 if truncated {
                     Label("Large file — showing the first part. Editing is disabled.", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2)
+                        .font(.footnote)
                         .foregroundStyle(Theme.attention)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Theme.attention.opacity(0.1))
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .background(Theme.attention.opacity(0.12))
                 }
                 if editing {
                     TextEditor(text: $text)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(Theme.ink)
-                        .tint(Theme.celadonBright)
+                        .font(.footnote.monospaced())
                         .scrollContentBackground(.hidden)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)

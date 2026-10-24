@@ -13,8 +13,7 @@ struct CeliadorApp: App {
         WindowGroup {
             ContentView()
                 .environment(model)
-                .preferredColorScheme(.dark)
-                .tint(Theme.celadonBright)
+                .tint(Theme.celadon)
                 .onOpenURL { url in
                     guard url.scheme == AppScheme.scheme else { return }
                     switch url.host {
@@ -90,6 +89,8 @@ struct ContentView: View {
     private var signedInRoot: some View {
         #if DEBUG
         switch DemoData.mode {
+        case "login":
+            LoginView()
         case "session":
             NavigationStack { SessionView(sessionId: "s1") }
         case "changes":
@@ -121,37 +122,48 @@ struct ContentView: View {
     }
 }
 
-/// The signed-in IDE shell: Agents (cockpit) · Explorer (files) · Activity (history).
+/// The signed-in shell: Queue (home) · Agents (live runs) · Explorer (files) · Activity (history).
 struct TabShell: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         @Bindable var model = model
         TabView(selection: $model.selectedTab) {
-            NavigationStack(path: $model.queuePath) {
-                QueueView()
-                    .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
+            Tab("Queue", systemImage: "tray.full", value: AppModel.Tab.queue) {
+                NavigationStack(path: $model.queuePath) {
+                    QueueView()
+                        .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
+                }
             }
-            .tabItem { Label("Queue", systemImage: "tray.full.fill") }
             .badge(model.needsYouCount)
-            .tag(AppModel.Tab.queue)
 
-            NavigationStack(path: $model.agentsPath) {
-                SessionsView()
-                    .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
+            Tab("Agents", systemImage: "sparkles", value: AppModel.Tab.agents) {
+                NavigationStack(path: $model.agentsPath) {
+                    SessionsView()
+                        .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
+                }
             }
-            .tabItem { Label("Agents", systemImage: "square.stack.3d.up.fill") }
-            .tag(AppModel.Tab.agents)
 
-            NavigationStack { ExplorerView() }
-                .tabItem { Label("Explorer", systemImage: "folder.fill") }
-                .tag(AppModel.Tab.explorer)
+            Tab("Explorer", systemImage: "folder", value: AppModel.Tab.explorer) {
+                NavigationStack { ExplorerView() }
+            }
 
-            NavigationStack { HistoryView() }
-                .tabItem { Label("Activity", systemImage: "clock.fill") }
-                .tag(AppModel.Tab.activity)
+            Tab("Activity", systemImage: "clock", value: AppModel.Tab.activity) {
+                NavigationStack { HistoryView() }
+            }
         }
-        .tint(Theme.celadonBright)
+        .modifier(TabBarBehaviour())
+    }
+}
+
+/// iOS 26: the glass tab bar tucks away while scrolling down and returns on scroll up.
+private struct TabBarBehaviour: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            content
+        }
     }
 }
 
@@ -185,14 +197,12 @@ private struct UnreachableView: View {
                 .padding(.top, 4)
             Text("Can't reach Celiador")
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(Theme.ink)
             Text(message)
                 .font(.subheadline)
-                .foregroundStyle(Theme.dim)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("Try again") { Haptics.tap(); retry() }
-                .buttonStyle(PrimaryButtonStyle())
-                .frame(maxWidth: 220)
+                .primaryButton()
                 .padding(.top, 8)
         }
         .padding(32)

@@ -111,7 +111,7 @@ platform :ios do
       distribute_only: true,
       distribute_external: false,
       build_number: ENV.fetch("BUILD", "10"),
-      app_version: "0.1.1",
+      app_version: "0.2.0",
       # Apple requires a contact phone for Beta App Review; without REVIEW_PHONE only the localized info is pushed.
       beta_app_review_info: ENV.fetch("REVIEW_PHONE", "").empty? ? nil : beta_review_info,
       localized_app_info: {
@@ -151,7 +151,7 @@ platform :ios do
     api_key
     pilot(
       app_identifier: "ai.celiador.companion",
-      app_version: ENV.fetch("VERSION", "0.1.1"),
+      app_version: ENV.fetch("VERSION", "0.2.0"),
       build_number: ENV.fetch("BUILD"),
       skip_waiting_for_build_processing: true,
       distribute_only: true,

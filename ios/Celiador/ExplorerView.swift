@@ -18,8 +18,7 @@ struct ExplorerView: View {
     }
 
     var body: some View {
-        ZStack {
-            CeliadorBackground()
+        Group {
             if let session = focused {
                 DirectoryView(sessionId: session.id, path: "", title: session.title)
             } else {
@@ -30,8 +29,8 @@ struct ExplorerView: View {
                 )
             }
         }
+        .background(CeliadorBackground())
         .navigationTitle("Explorer")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !model.sessions.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) { sessionPicker }
@@ -91,9 +90,9 @@ struct DirectoryView: View {
         switch phase {
         case .loading:
             List {
-                ForEach(0..<6, id: \.self) { _ in SkeletonRow().listRowBackground(Theme.panel) }
+                ForEach(0..<6, id: \.self) { _ in SkeletonRow() }
             }
-            .listStyle(.plain).scrollContentBackground(.hidden)
+            .listStyle(.insetGrouped)
         case .empty:
             EmptyStateView(icon: "folder", title: "Empty folder", message: "There's nothing in this folder yet.")
         case .offline:
@@ -105,10 +104,9 @@ struct DirectoryView: View {
             List {
                 ForEach(entries) { entry in
                     NavigationLink(value: route(for: entry)) { FileRow(entry: entry) }
-                        .listRowBackground(Theme.panel)
                 }
             }
-            .listStyle(.plain).scrollContentBackground(.hidden)
+            .listStyle(.insetGrouped)
         }
     }
 
@@ -143,18 +141,17 @@ private struct FileRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: entry.isDir ? "folder.fill" : SyntaxHighlighter.icon(forPath: entry.name))
-                .foregroundStyle(entry.isDir ? Theme.celadonBright : Theme.dim)
-                .frame(width: 20)
+                .foregroundStyle(entry.isDir ? Theme.celadon : Color.secondary)
+                .frame(width: 24)
             Text(entry.name)
-                .font(.callout)
-                .foregroundStyle(Theme.ink)
+                .font(.body)
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 6)
             if let size = entry.size, !entry.isDir {
-                Text(byteString(size)).font(.caption2.monospaced()).foregroundStyle(Theme.faint)
+                Text(byteString(size)).font(.subheadline).foregroundStyle(.tertiary)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
     }
 
     private func byteString(_ n: Int) -> String {

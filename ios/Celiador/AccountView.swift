@@ -36,20 +36,18 @@ struct AccountView: View {
                                     .foregroundStyle(Color(red: 0.04, green: 0.09, blue: 0.07))
                             }
                             Text(profile.displayName?.isEmpty == false ? profile.displayName! : (profile.email ?? "Your account"))
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(Theme.ink)
+                                .font(.title2.weight(.semibold))
                             if let email = profile.email {
-                                Text(email).font(.caption).foregroundStyle(Theme.dim)
+                                Text(email).font(.subheadline).foregroundStyle(.secondary)
                             }
-                            StatusPill(text: "\(profile.plan) plan", color: Theme.celadonBright, icon: "sparkles")
+                            StatusPill(text: "\(profile.plan.capitalized) plan", color: Theme.celadon, icon: "sparkles")
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                         .listRowBackground(Color.clear)
                     } else if let error {
                         Text(error).font(.footnote).foregroundStyle(Theme.red)
-                            .listRowBackground(Theme.panel)
-                    } else {
+                            } else {
                         HStack { Spacer(); ProgressView(); Spacer() }
                             .listRowBackground(Color.clear)
                     }
@@ -58,18 +56,17 @@ struct AccountView: View {
                 if profile != nil {
                     Section {
                         HStack {
-                            Text("Display name").foregroundStyle(Theme.ink)
+                            Text("Display name")
                             Spacer()
                             TextField("Your name", text: $name)
                                 .multilineTextAlignment(.trailing)
-                                .foregroundStyle(Theme.dim)
+                                .foregroundStyle(.secondary)
                                 .submitLabel(.done)
                                 .onSubmit(save)
                         }
                     } header: {
                         Text("Profile")
                     }
-                    .listRowBackground(Theme.panel)
                 }
 
                 if let me {
@@ -82,7 +79,6 @@ struct AccountView: View {
                     } footer: {
                         Text(resetsFooter)
                     }
-                    .listRowBackground(Theme.panel)
 
                     if let tasks = me.tasks {
                         Section {
@@ -94,42 +90,35 @@ struct AccountView: View {
                         } footer: {
                             Text("Queued issues become pull requests; the merged count is the one number Celiador steers by.")
                         }
-                        .listRowBackground(Theme.panel)
-                    }
+                        }
                 }
 
                 Section {
                     Label {
                         Text("Your code stays on your machine. Agents run locally; the daemon only relays what you send and never trains on your code.")
-                            .font(.footnote).foregroundStyle(Theme.dim)
+                            .font(.footnote).foregroundStyle(.secondary)
                     } icon: {
-                        Image(systemName: "lock.shield").foregroundStyle(Theme.celadonBright)
+                        Image(systemName: "lock.shield").foregroundStyle(Theme.celadon)
                     }
                 }
-                .listRowBackground(Theme.panel)
 
                 Section {
                     Toggle(isOn: $telemetryEnabled) {
                         Label("Share anonymous usage data", systemImage: "chart.bar")
-                            .foregroundStyle(Theme.ink)
                     }
                     .tint(Theme.celadon)
                     .onChange(of: telemetryEnabled) { _, enabled in Telemetry.isEnabled = enabled }
                 } footer: {
                     Text("Which features get used and what crashes — never your code, prompts, chat, repository names or email. Details at celiador.ai/privacy.")
-                        .font(.footnote).foregroundStyle(Theme.dim)
                 }
-                .listRowBackground(Theme.panel)
 
                 Section {
                     Button {
                         Haptics.warning(); model.signOut(); dismiss()
                     } label: {
                         Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
-                            .foregroundStyle(Theme.ink)
                     }
                 }
-                .listRowBackground(Theme.panel)
 
                 Section {
                     Button(role: .destructive) {
@@ -148,11 +137,8 @@ struct AccountView: View {
                 } footer: {
                     Text("Permanently deletes your Celiador account, profile, chat history and push registrations. This can't be undone.")
                 }
-                .listRowBackground(Theme.panel)
             }
             .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(CeliadorBackground())
             .navigationTitle("Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -259,23 +245,18 @@ private struct UsageMeter: View {
     let limit: Int
 
     private var fraction: Double { limit > 0 ? min(1, Double(used) / Double(limit)) : 0 }
-    private var fillColor: Color { fraction >= 0.8 ? Theme.attention : Theme.celadonBright }
+    private var fillColor: Color { fraction >= 0.8 ? Theme.attention : Theme.celadon }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(label).foregroundStyle(Theme.ink)
+                Text(label)
                 Spacer()
                 Text(limit > 0 ? "\(Self.compact(used)) / \(Self.compact(limit))" : "\(Self.compact(used)) · unlimited")
-                    .font(.caption.monospacedDigit()).foregroundStyle(Theme.dim)
+                    .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
             }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.panelHi).frame(height: 6)
-                    Capsule().fill(fillColor).frame(width: geo.size.width * fraction, height: 6)
-                }
-            }
-            .frame(height: 6)
+            ProgressView(value: fraction)
+                .tint(fillColor)
         }
         .padding(.vertical, 4)
     }

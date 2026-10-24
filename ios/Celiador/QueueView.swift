@@ -25,8 +25,7 @@ struct QueueView: View {
     private var finished: [AgentTask] { tasks.filter { ["merged", "failed", "cancelled"].contains($0.state) }.prefix(6).map { $0 } }
 
     var body: some View {
-        ZStack {
-            CeliadorBackground()
+        Group {
             if loaded && tasks.isEmpty && needsYou.isEmpty {
                 EmptyStateView(
                     icon: "tray",
@@ -42,10 +41,10 @@ struct QueueView: View {
                         Section {
                             ForEach(needsYou) { session in
                                 NavigationLink(value: session.id) {
-                                    row(title: session.title, detail: "Waiting for your answer", color: Theme.attention, pulsing: true)
+                                    row(title: session.title, detail: "Waiting for your answer", icon: "hand.raised.fill", color: Theme.attention, pulsing: true)
                                 }
                             }
-                        } header: { header("Needs you", needsYou.count, Theme.attention) }
+                        } header: { header("Needs you", needsYou.count) }
                     }
                     if !review.isEmpty {
                         Section {
@@ -53,47 +52,48 @@ struct QueueView: View {
                                 Button {
                                     if let url = task.prUrl.flatMap(URL.init) { openURL(url) }
                                 } label: {
-                                    row(title: task.title, detail: "\(repoLine(task)) · pull request ready · swipe to merge", color: Theme.celadonBright)
+                                    row(title: task.title, detail: "\(repoLine(task)) · pull request ready · swipe to merge", icon: "arrow.triangle.pull", color: Theme.celadon)
                                 }
+                                .tint(.primary)
                                 .swipeActions(edge: .leading) { mergeButton(task) }
                                 .swipeActions { sessionLink(task) }
                             }
-                        } header: { header("Ready for review", review.count, Theme.celadonBright) }
+                        } header: { header("Ready for review", review.count) }
                     }
                     if !running.isEmpty || !waiting.isEmpty {
                         Section {
                             ForEach(running) { task in
                                 Group {
                                     if let sid = task.sessionId {
-                                        NavigationLink(value: sid) { row(title: task.title, detail: "\(repoLine(task)) · running on your Mac", color: Theme.ink, pulsing: true) }
+                                        NavigationLink(value: sid) { row(title: task.title, detail: "\(repoLine(task)) · running on your Mac", icon: "bolt.fill", color: .blue, pulsing: true) }
                                     } else {
-                                        row(title: task.title, detail: "\(repoLine(task)) · starting on your Mac", color: Theme.ink, pulsing: true)
+                                        row(title: task.title, detail: "\(repoLine(task)) · starting on your Mac", icon: "bolt.fill", color: .blue, pulsing: true)
                                     }
                                 }
                                 .swipeActions { cancelButton(task) }
                             }
                             ForEach(waiting) { task in
-                                row(title: task.title, detail: "\(repoLine(task)) · \(waitReason)", color: Theme.dim)
+                                row(title: task.title, detail: "\(repoLine(task)) · \(waitReason)", icon: "clock", color: .gray)
                                     .swipeActions { cancelButton(task) }
                             }
-                        } header: { header("Running", running.count + waiting.count, Theme.dim, note: concurrency > 0 ? "\(running.count) of \(concurrency) slots" : nil) }
+                        } header: { header("Running", running.count + waiting.count, note: concurrency > 0 ? "\(running.count) of \(concurrency) slots" : nil) }
                     }
                     if !finished.isEmpty {
                         Section {
                             ForEach(finished) { task in
-                                row(title: task.title, detail: "\(repoLine(task)) · \(finishedLine(task))", color: task.state == "failed" ? Theme.red : Theme.dim)
+                                row(title: task.title, detail: "\(repoLine(task)) · \(finishedLine(task))", icon: task.state == "merged" ? "checkmark" : task.state == "failed" ? "xmark" : "minus", color: task.state == "merged" ? Theme.celadon : task.state == "failed" ? Theme.red : .gray)
                             }
-                        } header: { header("Recently finished", finished.count, Theme.dim) }
+                        } header: { header("Recently finished", finished.count) }
                     }
                     if let error {
                         Text(error).font(.footnote).foregroundStyle(Theme.red).listRowBackground(Color.clear)
                     }
                 }
                 .listStyle(.insetGrouped)
-                .scrollContentBackground(.hidden)
                 .refreshable { await load() }
             }
         }
+        .background(CeliadorBackground())
         .navigationTitle("Queue")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -155,31 +155,29 @@ struct QueueView: View {
         }
     }
 
-    private func header(_ title: String, _ count: Int, _ color: Color, note: String? = nil) -> some View {
-        HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text("\(title) · \(count)").font(.caption.weight(.semibold)).foregroundStyle(color)
+    private func header(_ title: String, _ count: Int, note: String? = nil) -> some View {
+        HStack {
+            Text(title)
             Spacer()
-            if let note { Text(note).font(.caption2).foregroundStyle(Theme.dim) }
+            Text(note ?? "\(count)").monospacedDigit()
         }
     }
 
-    private func row(title: String, detail: String, color: Color, pulsing: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            StatusDot(color: color, pulsing: pulsing).padding(.top, 6)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.body.weight(.medium)).foregroundStyle(Theme.ink).lineLimit(2)
-                Text(detail).font(.caption.monospaced()).foregroundStyle(Theme.dim).lineLimit(1)
+    private func row(title: String, detail: String, icon: String, color: Color, pulsing: Bool = false) -> some View {
+        HStack(spacing: 12) {
+            IconBadge(systemName: icon, color: color, pulsing: pulsing)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body).lineLimit(2)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .padding(.vertical, 2)
-        .listRowBackground(Theme.panel)
     }
 
     @ViewBuilder
     private func sessionLink(_ task: AgentTask) -> some View {
         if let sid = task.sessionId {
-            Button { model.queuePath.append(sid) } label: { Label("Transcript", systemImage: "text.bubble") }.tint(Theme.celadon)
+            Button { model.queuePath.append(sid) } label: { Label("Transcript", systemImage: "text.bubble") }.tint(.blue)
         }
     }
 
@@ -237,7 +235,7 @@ private struct NewTaskSheet: View {
             Form {
                 Section("Repository") {
                     if repos.isEmpty {
-                        Text("Open the repo in Celiador on your Mac first.").font(.footnote).foregroundStyle(Theme.dim)
+                        Text("Open the repo in Celiador on your Mac first.").font(.footnote).foregroundStyle(.secondary)
                     } else {
                         Picker("Repo", selection: $repo) {
                             ForEach(repos) { ws in Text(ws.name).tag(ws.remoteUrl) }
@@ -250,7 +248,7 @@ private struct NewTaskSheet: View {
                 }
                 Section {
                     Text("Runs on your Mac in its own worktree and branch, and ends in a pull request.")
-                        .font(.footnote).foregroundStyle(Theme.dim)
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error { Text(error).font(.footnote).foregroundStyle(Theme.red) }
             }
@@ -307,7 +305,7 @@ private struct WatchedReposSheet: View {
             Form {
                 Section {
                     if repos.isEmpty {
-                        Text("Repos open in Celiador on your Mac show up here.").font(.footnote).foregroundStyle(Theme.dim)
+                        Text("Repos open in Celiador on your Mac show up here.").font(.footnote).foregroundStyle(.secondary)
                     }
                     ForEach(repos) { ws in
                         Toggle(ws.name, isOn: Binding(

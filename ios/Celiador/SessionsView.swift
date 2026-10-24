@@ -28,12 +28,10 @@ struct SessionsView: View {
     private var noMatches: Bool { !isEmpty && needsYou.isEmpty && working.isEmpty && recent.isEmpty }
 
     var body: some View {
-        ZStack {
-            CeliadorBackground()
-            content
-        }
+        content
+        .background(CeliadorBackground())
+        .navigationTitle("Agents")
         .toolbar {
-            ToolbarItem(placement: .principal) { Wordmark(size: 19, glow: false) }
             ToolbarItem(placement: .topBarLeading) {
                 Button { Haptics.tap(); showAccount = true } label: { Image(systemName: "person.circle") }
                     .accessibilityLabel("Account")
@@ -105,7 +103,6 @@ struct SessionsView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
         .animation(Theme.spring, value: model.sessions.map(\.id))
         .refreshable { await model.refresh() }
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search runs")
@@ -115,7 +112,7 @@ struct SessionsView: View {
         List {
             Section {
                 ForEach(0..<4, id: \.self) { _ in
-                    SkeletonRow().listRowBackground(Theme.panel)
+                    SkeletonRow()
                 }
             } header: {
                 SkeletonBar(width: 90, height: 10)
@@ -133,7 +130,6 @@ struct SessionsView: View {
                     NavigationLink(value: session.id) {
                         SessionRow(session: session, liveLine: model.activity[session.id])
                     }
-                    .listRowBackground(Theme.panel)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) { delete(session) } label: {
                             Label("Delete", systemImage: "trash")
@@ -141,17 +137,10 @@ struct SessionsView: View {
                     }
                 }
             } header: {
-                HStack(spacing: 8) {
-                    Circle().fill(accent).frame(width: 6, height: 6)
-                    Text(title.uppercased())
-                        .font(.caption2.weight(.bold)).kerning(1)
-                        .foregroundStyle(accent)
+                HStack {
+                    Text(title)
                     Spacer()
-                    Text("\(items.count)")
-                        .font(.caption2.monospaced().weight(.semibold))
-                        .foregroundStyle(Theme.dim)
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Theme.panelHi, in: Capsule())
+                    Text("\(items.count)").monospacedDigit()
                 }
             }
         }
@@ -177,12 +166,13 @@ struct SessionRow: View {
     let session: Session
     var liveLine: String?
 
-    private var dotColor: Color {
+    private var badge: (icon: String, color: Color) {
         switch session.state {
-        case .running: return Theme.celadonBright
-        case .awaiting: return Theme.attention
-        case .error: return Theme.red
-        default: return Theme.faint
+        case .running: return ("bolt.fill", .blue)
+        case .awaiting: return ("hand.raised.fill", Theme.attention)
+        case .error: return ("xmark", Theme.red)
+        case .done: return ("checkmark", Theme.celadon)
+        default: return ("minus", .gray)
         }
     }
 
@@ -198,22 +188,20 @@ struct SessionRow: View {
     private var editorOffline: Bool { !session.runnerConnected && session.state.isActive }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            StatusDot(color: dotColor, pulsing: session.state == .running, size: 10)
-                .padding(.top, 5)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 12) {
+            IconBadge(systemName: badge.icon, color: badge.color, pulsing: session.state == .running)
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(session.title)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
+                        .font(.body)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     Text(RelativeTime.short(session.updatedAt))
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(Theme.faint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
                 Text(subtitle)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(subtitleColor)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -233,7 +221,7 @@ struct SessionRow: View {
                 }
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 2)
     }
 }
 
@@ -286,7 +274,7 @@ private struct NewRunView: View {
                     }
                 }
                 ToolbarItem(placement: .principal) {
-                    Text(composing?.name ?? "New Run").font(.headline).foregroundStyle(Theme.ink)
+                    Text(composing?.name ?? "New Run").font(.headline)
                 }
                 if composing == nil {
                     ToolbarItem(placement: .confirmationAction) {
@@ -407,11 +395,11 @@ private struct NewRunView: View {
             Spacer()
             VStack(spacing: 10) {
                 Image(systemName: "laptopcomputer")
-                    .font(.system(size: 40)).foregroundStyle(Theme.celadonBright)
+                    .font(.system(size: 40)).foregroundStyle(Theme.celadon)
                 Text("Chat with \(ws.name)")
-                    .font(.title3.weight(.semibold)).foregroundStyle(Theme.ink)
+                    .font(.title3.weight(.semibold))
                 Text("Runs on your Mac · \(RepoRecents.shortLabel(ws.remoteUrl))")
-                    .font(.caption).foregroundStyle(Theme.dim)
+                    .font(.subheadline).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(Theme.red)
@@ -424,19 +412,17 @@ private struct NewRunView: View {
                 TextField("Message…", text: $firstMessage, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($composerFocused)
-                    .foregroundStyle(Theme.ink)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Theme.panel, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
                     .onSubmit { Task { await sendFirst(ws) } }
                 if sending {
-                    ProgressView().frame(width: 36, height: 36)
+                    ProgressView().frame(width: 34, height: 34)
                 } else {
                     SendButton(enabled: !firstMessage.trimmingCharacters(in: .whitespaces).isEmpty) {
                         Task { await sendFirst(ws) }
                     }
                 }
             }
+            .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 6)
+            .glassCapsule()
             .padding(12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

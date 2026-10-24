@@ -62,8 +62,7 @@ struct ChangesView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                CeliadorBackground()
+            Group {
                 if shownDiffs.isEmpty {
                     if loadingLive {
                         ProgressView()
@@ -97,11 +96,11 @@ struct ChangesView: View {
                                 .listRowBackground(Color.clear).listRowSeparator(.hidden)
                         }
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
+                    .listStyle(.insetGrouped)
                     .refreshable { await loadLive() }
                 }
             }
+            .background(CeliadorBackground())
             .toast($toast)
             .navigationTitle("Changes")
             .navigationBarTitleDisplayMode(.inline)
@@ -111,24 +110,27 @@ struct ChangesView: View {
                         let t = totals
                         HStack(spacing: 8) {
                             if let branch = live?.branch {
-                                Image(systemName: "arrow.triangle.branch").font(.caption2).foregroundStyle(Theme.dim)
-                                Text(branch).font(.caption.monospaced()).foregroundStyle(Theme.dim).lineLimit(1)
+                                Image(systemName: "arrow.triangle.branch").font(.caption).foregroundStyle(.secondary)
+                                Text(branch).font(.subheadline.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                             } else {
-                                Text("Changes").font(.headline).foregroundStyle(Theme.ink)
+                                Text("Changes").font(.headline)
                             }
-                            Text("+\(t.added)").font(.caption.monospaced().weight(.semibold)).foregroundStyle(Theme.celadonBright)
-                            Text("−\(t.removed)").font(.caption.monospaced().weight(.semibold)).foregroundStyle(Theme.red)
+                            Text("+\(t.added)").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(Theme.celadon)
+                            Text("−\(t.removed)").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(Theme.red)
                         }
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
             .safeAreaInset(edge: .bottom) {
-                if isLive && !shownDiffs.isEmpty {
-                    commitBar
-                } else if isLive && !loadingLive {
-                    pullRequestBar
+                Group {
+                    if isLive && !shownDiffs.isEmpty {
+                        commitBar
+                    } else if isLive && !loadingLive {
+                        pullRequestBar
+                    }
                 }
+                .padding(.horizontal, 12).padding(.bottom, 8)
             }
             .task { await loadLive() }
             .alert(
@@ -200,8 +202,8 @@ struct ChangesView: View {
             .buttonStyle(.borderedProminent)
             .tint(Theme.celadon)
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .glassPanel()
     }
 
     private var commitSheet: some View {
@@ -287,8 +289,8 @@ struct ChangesView: View {
                 .tint(Theme.celadon)
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .glassPanel()
     }
 
     private var pullRequestSheet: some View {
@@ -357,8 +359,8 @@ struct ChangesView: View {
         return HStack(spacing: 8) {
             Image(systemName: SyntaxHighlighter.icon(forPath: file.path)).font(.caption).foregroundStyle(Theme.celadon)
             Text(file.path)
-                .font(.caption.monospaced().weight(.medium))
-                .foregroundStyle(Theme.ink)
+                .font(.footnote.monospaced().weight(.medium))
+                .foregroundStyle(.primary)
                 .lineLimit(1).truncationMode(.middle)
             if let status {
                 Text(status.status)
@@ -366,8 +368,8 @@ struct ChangesView: View {
                     .foregroundStyle(statusColor(status.status))
             }
             Spacer(minLength: 6)
-            Text("+\(counts.added)").font(.caption2.monospaced()).foregroundStyle(Theme.celadonBright)
-            Text("−\(counts.removed)").font(.caption2.monospaced()).foregroundStyle(Theme.red)
+            Text("+\(counts.added)").font(.caption.monospacedDigit()).foregroundStyle(Theme.celadon)
+            Text("−\(counts.removed)").font(.caption.monospacedDigit()).foregroundStyle(Theme.red)
             Button {
                 Haptics.tap()
                 #if canImport(UIKit)
@@ -425,9 +427,9 @@ private struct DiffBody: View {
                 HStack(spacing: 0) {
                     Rectangle()
                         .fill(gutter(for: entry.line))
-                        .frame(width: 2.5)
+                        .frame(width: 3)
                     content(for: entry.line)
-                        .font(.caption2.monospaced())
+                        .font(.caption.monospaced())
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 1.5)
@@ -442,7 +444,7 @@ private struct DiffBody: View {
     @ViewBuilder
     private func content(for line: String) -> some View {
         if isAdd(line) {
-            Text(line.isEmpty ? " " : line).foregroundStyle(Theme.celadonBright)
+            Text(line.isEmpty ? " " : line).foregroundStyle(Theme.celadon)
         } else if isDel(line) {
             Text(line.isEmpty ? " " : line).foregroundStyle(Theme.red)
         } else if line.hasPrefix("@@") {
@@ -462,8 +464,8 @@ private struct DiffBody: View {
     }
 
     private func background(for line: String) -> Color {
-        if isAdd(line) { return Theme.celadon.opacity(0.10) }
-        if isDel(line) { return Theme.red.opacity(0.10) }
+        if isAdd(line) { return Theme.celadon.opacity(0.12) }
+        if isDel(line) { return Theme.red.opacity(0.12) }
         return .clear
     }
 }

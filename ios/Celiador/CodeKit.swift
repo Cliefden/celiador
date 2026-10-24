@@ -52,16 +52,16 @@ struct CodeView: View {
                     ForEach(lines, id: \.n) { line in
                         HStack(alignment: .top, spacing: 10) {
                             Text("\(line.n)")
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(Theme.faint)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
                                 .frame(minWidth: 32, alignment: .trailing)
                             Text(SyntaxHighlighter.highlight(line.s.isEmpty ? " " : line.s))
-                                .font(.caption.monospaced())
+                                .font(.footnote.monospaced())
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: true, vertical: false)
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 1.5)
                     }
                 }
                 .padding(.vertical, 8)

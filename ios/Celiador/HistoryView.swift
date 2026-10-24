@@ -8,12 +8,9 @@ struct HistoryView: View {
     @State private var error: String?
 
     var body: some View {
-        ZStack {
-            CeliadorBackground()
-            content
-        }
+        content
+        .background(CeliadorBackground())
         .navigationTitle("Activity")
-        .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: String.self) { id in ChatTranscriptView(chatId: id) }
         .task { await load() }
     }
@@ -23,11 +20,10 @@ struct HistoryView: View {
         if loading {
             List {
                 ForEach(0..<5, id: \.self) { _ in
-                    SkeletonRow().listRowBackground(Theme.panel)
+                    SkeletonRow()
                 }
             }
             .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
         } else if let error {
             EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load history", message: error)
         } else if chats.isEmpty {
@@ -39,10 +35,8 @@ struct HistoryView: View {
         } else {
             List(chats) { chat in
                 NavigationLink(value: chat.id) { ChatRow(chat: chat) }
-                    .listRowBackground(Theme.panel)
             }
             .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
         }
     }
 
@@ -63,34 +57,33 @@ struct HistoryView: View {
 private struct ChatRow: View {
     let chat: ChatSummary
 
-    private var statusColor: Color {
+    private var badge: (icon: String, color: Color) {
         let s = chat.status.lowercased()
-        if s.contains("error") || s.contains("fail") { return Theme.red }
-        if s.contains("await") || s.contains("need") { return Theme.attention }
-        if s.contains("run") || s.contains("work") || s.contains("active") { return Theme.celadonBright }
-        return Theme.faint
+        if s.contains("error") || s.contains("fail") { return ("xmark", Theme.red) }
+        if s.contains("await") || s.contains("need") { return ("hand.raised.fill", Theme.attention) }
+        if s.contains("run") || s.contains("work") || s.contains("active") { return ("bolt.fill", .blue) }
+        return ("text.bubble", .gray)
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            StatusDot(color: statusColor, size: 9).padding(.top, 5)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 12) {
+            IconBadge(systemName: badge.icon, color: badge.color)
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(chat.title ?? "Untitled task")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
+                        .font(.body)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     Text(RelativeTime.short(chat.updatedAt))
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(Theme.faint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
                 Text(chat.status.capitalized)
-                    .font(.caption)
-                    .foregroundStyle(Theme.dim)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 2)
     }
 }
 
@@ -108,22 +101,25 @@ struct ChatTranscriptView: View {
                 if let detail {
                     VStack(alignment: .leading, spacing: 16) {
                         ForEach(detail.messages) { m in
-                            VStack(alignment: .leading, spacing: 5) {
-                                StatusPill(text: m.role,
-                                           color: m.role.lowercased() == "user" ? Theme.celadonBright : Theme.dim)
+                            if m.role.lowercased() == "user" {
                                 Text(m.text)
-                                    .font(.callout)
-                                    .foregroundStyle(Theme.ink)
+                                    .font(.body)
+                                    .foregroundStyle(.white)
+                                    .textSelection(.enabled)
+                                    .padding(.horizontal, 14).padding(.vertical, 10)
+                                    .background(Theme.celadon, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                                    .padding(.leading, 48)
+                            } else {
+                                Text(m.text)
+                                    .font(.body)
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.trailing, 24)
                             }
-                            .padding(14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.panel.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
                         }
                         if detail.messages.isEmpty {
-                            Text("No messages in this chat.").foregroundStyle(Theme.dim).padding(.top, 20)
+                            Text("No messages in this chat.").foregroundStyle(.secondary).padding(.top, 20)
                         }
                     }
                     .padding()
@@ -140,7 +136,7 @@ struct ChatTranscriptView: View {
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.panel.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
                         }
                     }
                     .padding()
