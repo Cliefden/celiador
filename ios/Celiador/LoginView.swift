@@ -15,17 +15,21 @@ struct LoginView: View {
     private enum Field { case email, password }
 
     private var canSubmit: Bool { !busy && !email.isEmpty && !password.isEmpty }
+    private var headline: String { isSignUp ? "Create your account" : "Sign in" }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
                 VStack(spacing: 10) {
                     Wordmark(size: 44)
-                    Text(isSignUp ? "Create your account" : "Steer your agents from here")
+                    Text(headline)
+                        .font(.title2.weight(.semibold))
+                    Text(isSignUp ? "One account for the editor, the phone and the agent." : "Use the account you created in the Celiador editor, or make one here.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
-                .padding(.top, 72)
+                .padding(.top, 56)
 
                 VStack(spacing: 0) {
                     TextField("Email", text: $email)
@@ -56,7 +60,7 @@ struct LoginView: View {
                         }
                     }
                     .primaryButton()
-                    .disabled(!canSubmit)
+                    .disabled(busy)
 
                     Button(isSignUp ? "Have an account? Sign in" : "New here? Create an account") {
                         Haptics.select()
@@ -102,7 +106,9 @@ struct LoginView: View {
     }
 
     private func submit() {
-        guard canSubmit else { return }
+        guard !busy else { return }
+        guard !email.isEmpty else { error = "Enter your email address."; focus = .email; return }
+        guard !password.isEmpty else { error = "Enter your password."; focus = .password; return }
         busy = true
         error = nil
         info = nil

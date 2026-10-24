@@ -17,6 +17,7 @@ struct QueueView: View {
     @State private var toast: String?
     @State private var showNew = false
     @State private var showRepos = false
+    @State private var showAccount = false
 
     private var needsYou: [Session] { model.sessions.filter { $0.state == .awaiting } }
     private var running: [AgentTask] { tasks.filter { $0.state == "dispatched" || $0.state == "running" } }
@@ -103,6 +104,10 @@ struct QueueView: View {
         .navigationTitle("Queue")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
+                Button { Haptics.tap(); showAccount = true } label: { Image(systemName: "person.crop.circle") }
+                    .accessibilityLabel("Account")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button { showRepos = true } label: { Image(systemName: "eye") }
                     .accessibilityLabel("Watched repos")
             }
@@ -112,6 +117,7 @@ struct QueueView: View {
             }
         }
         .toast($toast)
+        .sheet(isPresented: $showAccount) { AccountView() }
         .sheet(isPresented: $showNew) { NewTaskSheet { title in toast = "Queued: \(title)"; Task { await load() } } }
         .sheet(isPresented: $showRepos) { WatchedReposSheet(watched: $watched) }
         .task {
