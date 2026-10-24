@@ -21,20 +21,46 @@ const chains = new Map<string, Promise<void>>();
 /** Event kinds that change what the chat row shows (title/status/recency). */
 const CHAT_ROW_KINDS = new Set(["state", "message", "done", "error"]);
 
+/** An assistant reply being streamed as `delta` events, not yet persisted. */
+interface StreamedReply {
+  seq: number;
+  at: string;
+  text: string;
+}
+
+/**
+ * Per-session assistant text accumulated from `delta` events. Editor and
+ * Celiador Remote runners stream replies only as deltas (no closing assistant
+ * `message`), so without this their replies never reach durable history.
+ */
+const replies = new Map<string, StreamedReply>();
+
 /**
  * Queue a durable write for this event. Never throws and never blocks the relay.
- * Streamed deltas / activity / tool events are live-only, so they cause no DB
- * write at all; the chat row is upserted on the first event and on
+ * Activity / tool events are live-only. Deltas are buffered and written as one
+ * assistant message when the reply ends (the next non-delta, non-activity
+ * event). The chat row is upserted on the first event and on
  * state/message/done/error events.
  */
 export function persistSession(userId: string, session: Session, event: SessionEvent): void {
   if (!getPool()) return;
+  let reply: StreamedReply | undefined;
+  if (event.kind === "delta") {
+    const r = replies.get(session.id);
+    if (r) r.text += event.text;
+    else replies.set(session.id, { seq: event.seq, at: event.at, text: event.text });
+  } else if (event.kind !== "activity") {
+    reply = replies.get(session.id);
+    replies.delete(session.id);
+    // A runner that sends its own closing assistant message is authoritative.
+    if (event.kind === "message" && event.role === "assistant") reply = undefined;
+  }
   const first = !chains.has(session.id);
-  if (!first && !CHAT_ROW_KINDS.has(event.kind)) return;
+  if (!first && !reply?.text && !CHAT_ROW_KINDS.has(event.kind)) return;
   // Snapshot what we write now; the session object keeps mutating.
   const snapshot = { title: session.title, state: session.state, origin: session.origin };
   const prev = chains.get(session.id) ?? Promise.resolve();
-  const next = prev.then(() => write(userId, session.id, snapshot, event));
+  const next = prev.then(() => write(userId, session.id, snapshot, event, reply));
   chains.set(session.id, next);
   // Drop the chain entry once idle so the map doesn't grow without bound.
   void next.then(() => {
@@ -48,7 +74,8 @@ async function write(
   userId: string,
   sessionId: string,
   snap: { title: string; state: Session["state"]; origin: SessionOrigin },
-  event: SessionEvent
+  event: SessionEvent,
+  reply?: StreamedReply
 ): Promise<void> {
   const pool = getPool();
   if (!pool) return;
@@ -57,27 +84,44 @@ async function write(
     // to the owner, so an id collision can never rewrite another user's chat.
     await pool.query(
       `insert into public.chats (id, user_id, title, session_id, origin, status, created_at, updated_at)
-       values ($1, $2, $3, $1, $4, $5, now(), now())
+       values ($1, $2, $3, $6, $4, $5, now(), now())
        on conflict (id) do update
          set title = excluded.title, status = excluded.status, updated_at = now()
          where public.chats.user_id = excluded.user_id`,
-      [sessionId, userId, snap.title, chatOrigin(snap.origin), snap.state]
+      // The id goes in twice ($1 uuid, $6 text): one parameter used for both
+      // columns fails with "inconsistent types deduced for parameter $1".
+      [sessionId, userId, snap.title, chatOrigin(snap.origin), snap.state, sessionId]
     );
 
-    // Only conversation turns become durable messages. Other event kinds
-    // (delta/activity/tool/diff/…) are live-only relay concerns.
+    // Only conversation turns become durable messages: explicit `message` events
+    // and streamed replies (keyed by their first delta's seq). Other event kinds
+    // (activity/tool/diff/…) are live-only relay concerns.
+    if (reply?.text) {
+      await insertMessage(userId, sessionId, "assistant", reply.text, reply.seq, reply.at);
+    }
     if (event.kind === "message") {
-      await pool.query(
-        `insert into public.messages (chat_id, user_id, role, content, seq, created_at)
-         select $1, $2, $3, $4::jsonb, $5, $6
-         where exists (select 1 from public.chats where id = $1 and user_id = $2)
-         on conflict (chat_id, seq) where seq is not null do nothing`,
-        [sessionId, userId, event.role, JSON.stringify({ text: event.text }), event.seq, event.at]
-      );
+      await insertMessage(userId, sessionId, event.role, event.text, event.seq, event.at);
     }
   } catch (err) {
     console.error("[persist] session write failed:", err instanceof Error ? err.message : err);
   }
+}
+
+async function insertMessage(
+  userId: string,
+  sessionId: string,
+  role: "user" | "assistant",
+  text: string,
+  seq: number,
+  at: string
+): Promise<void> {
+  await getPool()!.query(
+    `insert into public.messages (chat_id, user_id, role, content, seq, created_at)
+     select $1, $2, $3, $4::jsonb, $5, $6
+     where exists (select 1 from public.chats where id = $1 and user_id = $2)
+     on conflict (chat_id, seq) where seq is not null do nothing`,
+    [sessionId, userId, role, JSON.stringify({ text }), seq, at]
+  );
 }
 
 /** Relay origin → chats.origin domain ('editor' | 'ios' | 'server'). */
