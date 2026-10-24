@@ -52,7 +52,7 @@ struct ChatsWidgetView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Celiador")
                 .font(.system(size: 15, design: .serif).italic())
-                .foregroundStyle(Theme.celadonBright)
+                .foregroundStyle(Theme.accentBright)
             if snapshot.needsYou > 0 {
                 Text("\(snapshot.needsYou) need\(snapshot.needsYou == 1 ? "s" : "") you")
                     .font(.caption.weight(.semibold))
@@ -60,7 +60,7 @@ struct ChatsWidgetView: View {
             } else if snapshot.working > 0 {
                 Text("\(snapshot.working) working")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.celadon)
+                    .foregroundStyle(Theme.accent)
             } else {
                 Text("all clear")
                     .font(.caption)

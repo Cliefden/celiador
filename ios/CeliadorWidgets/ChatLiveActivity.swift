@@ -10,11 +10,11 @@ struct ChatLiveActivity: Widget {
         ActivityConfiguration(for: ChatActivityAttributes.self) { context in
             lockScreen(context)
                 .activityBackgroundTint(Theme.bg)
-                .activitySystemActionForegroundColor(Theme.celadonBright)
+                .activitySystemActionForegroundColor(Theme.accentBright)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: "hammer.fill").foregroundStyle(Theme.celadonBright)
+                    Image(systemName: "hammer.fill").foregroundStyle(Theme.accentBright)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.attributes.sessionTitle)
@@ -30,11 +30,11 @@ struct ChatLiveActivity: Widget {
                         .truncationMode(.middle)
                 }
             } compactLeading: {
-                Image(systemName: "hammer.fill").foregroundStyle(Theme.celadonBright)
+                Image(systemName: "hammer.fill").foregroundStyle(Theme.accentBright)
             } compactTrailing: {
-                ProgressView().controlSize(.mini).tint(Theme.celadon)
+                ProgressView().controlSize(.mini).tint(Theme.accent)
             } minimal: {
-                Image(systemName: "hammer.fill").foregroundStyle(Theme.celadonBright)
+                Image(systemName: "hammer.fill").foregroundStyle(Theme.accentBright)
             }
             .widgetURL(URL(string: AppScheme.session(context.attributes.sessionId)))
         }
@@ -48,7 +48,7 @@ struct ChatLiveActivity: Widget {
     private func lockScreen(_ context: ActivityViewContext<ChatActivityAttributes>) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "hammer.fill")
-                .foregroundStyle(Theme.celadonBright)
+                .foregroundStyle(Theme.accentBright)
             VStack(alignment: .leading, spacing: 2) {
                 Text(context.attributes.sessionTitle)
                     .font(.subheadline.weight(.semibold))
@@ -61,7 +61,7 @@ struct ChatLiveActivity: Widget {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)
-            ProgressView().controlSize(.small).tint(Theme.celadon)
+            ProgressView().controlSize(.small).tint(Theme.accent)
         }
         .padding(14)
     }

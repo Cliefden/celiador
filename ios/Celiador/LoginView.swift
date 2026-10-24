@@ -88,7 +88,7 @@ struct LoginView: View {
                 }
                 if let info {
                     Label(info, systemImage: "checkmark.circle.fill")
-                        .font(.footnote).foregroundStyle(Theme.celadon).multilineTextAlignment(.center)
+                        .font(.footnote).foregroundStyle(Theme.accent).multilineTextAlignment(.center)
                         .transition(.opacity)
                 }
                 Spacer(minLength: 32)

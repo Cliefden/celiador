@@ -91,8 +91,10 @@ struct DirectoryView: View {
         case .loading:
             List {
                 ForEach(0..<6, id: \.self) { _ in SkeletonRow() }
+                    .listRowBackground(Theme.panel)
             }
             .listStyle(.insetGrouped)
+            .brandGround()
         case .empty:
             EmptyStateView(icon: "folder", title: "Empty folder", message: "There's nothing in this folder yet.")
         case .offline:
@@ -105,8 +107,10 @@ struct DirectoryView: View {
                 ForEach(entries) { entry in
                     NavigationLink(value: route(for: entry)) { FileRow(entry: entry) }
                 }
+                .listRowBackground(Theme.panel)
             }
             .listStyle(.insetGrouped)
+            .brandGround()
         }
     }
 
@@ -141,7 +145,7 @@ private struct FileRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: entry.isDir ? "folder.fill" : SyntaxHighlighter.icon(forPath: entry.name))
-                .foregroundStyle(entry.isDir ? Theme.celadon : Color.secondary)
+                .foregroundStyle(entry.isDir ? Theme.accent : Color.secondary)
                 .frame(width: 24)
             Text(entry.name)
                 .font(.body)

@@ -314,7 +314,7 @@ struct SessionView: View {
                 .font(.body)
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Theme.celadon, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.leading, 48)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -449,7 +449,7 @@ struct SendButton: View {
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 34, height: 34)
-                .background(enabled ? AnyShapeStyle(Theme.celadon) : AnyShapeStyle(Color.gray.opacity(0.5)), in: Circle())
+                .background(enabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.gray.opacity(0.5)), in: Circle())
         }
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.5)
@@ -463,7 +463,7 @@ private struct TypingDots: View {
     var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<3, id: \.self) { i in
-                Circle().fill(Theme.celadon)
+                Circle().fill(Theme.accent)
                     .frame(width: 5, height: 5)
                     .opacity(t ? 1 : 0.3)
                     .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(i) * 0.2), value: t)

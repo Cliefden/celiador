@@ -74,7 +74,7 @@ struct SessionsView: View {
             if workingCount > 0 || model.needsYouCount > 0 {
                 HStack(spacing: 8) {
                     if workingCount > 0 {
-                        StatusPill(text: "\(workingCount) working", color: Theme.celadonBright, icon: "bolt.fill")
+                        StatusPill(text: "\(workingCount) working", color: Theme.accentBright, icon: "bolt.fill")
                     }
                     if model.needsYouCount > 0 {
                         StatusPill(text: "\(model.needsYouCount) need you", color: Theme.attention, icon: "hand.raised.fill")
@@ -93,7 +93,7 @@ struct SessionsView: View {
             }
 
             section("Needs you", needsYou, accent: Theme.attention)
-            section("Working", working, accent: Theme.celadonBright)
+            section("Working", working, accent: Theme.accentBright)
             section("Recent", recent, accent: Theme.dim)
 
             if noMatches {
@@ -103,6 +103,7 @@ struct SessionsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .brandGround()
         .animation(Theme.spring, value: model.sessions.map(\.id))
         .refreshable { await model.refresh() }
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search runs")
@@ -114,11 +115,13 @@ struct SessionsView: View {
                 ForEach(0..<4, id: \.self) { _ in
                     SkeletonRow()
                 }
+                .listRowBackground(Theme.panel)
             } header: {
                 SkeletonBar(width: 90, height: 10)
             }
         }
         .listStyle(.insetGrouped)
+        .brandGround()
         .scrollContentBackground(.hidden)
     }
 
@@ -136,6 +139,7 @@ struct SessionsView: View {
                         }
                     }
                 }
+                .listRowBackground(Theme.panel)
             } header: {
                 HStack {
                     Text(title)
@@ -168,10 +172,10 @@ struct SessionRow: View {
 
     private var badge: (icon: String, color: Color) {
         switch session.state {
-        case .running: return ("bolt.fill", .blue)
+        case .running: return ("bolt.fill", Theme.accent)
         case .awaiting: return ("hand.raised.fill", Theme.attention)
         case .error: return ("xmark", Theme.red)
-        case .done: return ("checkmark", Theme.celadon)
+        case .done: return ("checkmark", Theme.added)
         default: return ("minus", .gray)
         }
     }
@@ -363,7 +367,7 @@ private struct NewRunView: View {
                                 Spacer()
                                 if url == repoURL.trimmingCharacters(in: .whitespaces) {
                                     Image(systemName: "checkmark")
-                                        .foregroundStyle(Theme.celadonBright)
+                                        .foregroundStyle(Theme.accentBright)
                                 }
                             }
                         }
@@ -395,7 +399,7 @@ private struct NewRunView: View {
             Spacer()
             VStack(spacing: 10) {
                 Image(systemName: "laptopcomputer")
-                    .font(.system(size: 40)).foregroundStyle(Theme.celadon)
+                    .font(.system(size: 40)).foregroundStyle(Theme.accent)
                 Text("Chat with \(ws.name)")
                     .font(.title3.weight(.semibold))
                 Text("Runs on your Mac · \(RepoRecents.shortLabel(ws.remoteUrl))")

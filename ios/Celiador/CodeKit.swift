@@ -10,7 +10,7 @@ enum SyntaxHighlighter {
         func idx(_ n: Int) -> AttributedString.Index { attr.index(attr.startIndex, offsetByCharacters: n) }
 
         for r in line.ranges(of: /"[^"]*"|'[^']*'/) {
-            attr[idx(offset(r.lowerBound))..<idx(offset(r.upperBound))].foregroundColor = Theme.celadon
+            attr[idx(offset(r.lowerBound))..<idx(offset(r.upperBound))].foregroundColor = Theme.accent
         }
         if let r = line.firstRange(of: "//") ?? line.firstRange(of: "#") {
             attr[idx(offset(r.lowerBound))..<attr.endIndex].foregroundColor = Theme.faint

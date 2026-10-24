@@ -85,9 +85,9 @@ extension View {
     @ViewBuilder
     func primaryButton() -> some View {
         if #available(iOS 26.0, *) {
-            self.buttonStyle(.glassProminent).controlSize(.large).tint(Theme.celadon)
+            self.buttonStyle(.glassProminent).controlSize(.large).tint(Theme.accent)
         } else {
-            self.buttonStyle(.borderedProminent).controlSize(.large).tint(Theme.celadon)
+            self.buttonStyle(.borderedProminent).controlSize(.large).tint(Theme.accent)
         }
     }
 
@@ -99,6 +99,14 @@ extension View {
         } else {
             self.buttonStyle(.bordered).controlSize(.large)
         }
+    }
+}
+
+/// A List or Form on the brand ground: the navy (or cool white) background
+/// instead of the system's grouped grey. Rows still need `.listRowBackground(Theme.panel)`.
+extension View {
+    func brandGround() -> some View {
+        self.scrollContentBackground(.hidden).background(CeliadorBackground())
     }
 }
 
@@ -255,7 +263,7 @@ private struct ToastModifier: ViewModifier {
 
 extension View {
     /// Transient bottom toast. Set `message` to show; it clears itself.
-    func toast(_ message: Binding<String?>, icon: String = "checkmark.circle.fill", tint: Color = Theme.celadon) -> some View {
+    func toast(_ message: Binding<String?>, icon: String = "checkmark.circle.fill", tint: Color = Theme.accent) -> some View {
         modifier(ToastModifier(message: message, icon: icon, tint: tint))
     }
 }

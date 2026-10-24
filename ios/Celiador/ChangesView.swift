@@ -87,7 +87,7 @@ struct ChangesView: View {
                                     .listRowInsets(EdgeInsets())
                                     .listRowBackground(Theme.panel)
                             } header: {
-                                fileHeader(file)
+                                fileHeader(file).textCase(nil)
                             }
                         }
                         if let liveUnavailable {
@@ -97,6 +97,7 @@ struct ChangesView: View {
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .brandGround()
                     .refreshable { await loadLive() }
                 }
             }
@@ -115,7 +116,7 @@ struct ChangesView: View {
                             } else {
                                 Text("Changes").font(.headline)
                             }
-                            Text("+\(t.added)").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(Theme.celadon)
+                            Text("+\(t.added)").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(Theme.added)
                             Text("−\(t.removed)").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(Theme.red)
                         }
                     }
@@ -188,7 +189,7 @@ struct ChangesView: View {
 
     private var commitBar: some View {
         HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.celadonBright)
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.accentBright)
             Text("\(shownDiffs.count) file\(shownDiffs.count == 1 ? "" : "s") ready to commit")
                 .font(.footnote).foregroundStyle(Theme.ink)
             Spacer()
@@ -200,7 +201,7 @@ struct ChangesView: View {
                 Text("Commit…").font(.footnote.weight(.semibold))
             }
             .buttonStyle(.borderedProminent)
-            .tint(Theme.celadon)
+            .tint(Theme.accent)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .glassPanel()
@@ -213,11 +214,14 @@ struct ChangesView: View {
                     TextField("What changed?", text: $commitMessage, axis: .vertical)
                         .lineLimit(2...6)
                 }
+                .listRowBackground(Theme.panel)
                 Section {
                     Text("Commits all \(shownDiffs.count) changed file\(shownDiffs.count == 1 ? "" : "s") on \(live?.branch.map { "“\($0)”" } ?? "the current branch"), with your git identity from the Mac.")
-                        .font(.footnote).foregroundStyle(Theme.dim)
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
+                .listRowBackground(Theme.panel)
             }
+            .brandGround()
             .navigationTitle("Commit")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -261,20 +265,20 @@ struct ChangesView: View {
     private var pullRequestBar: some View {
         HStack(spacing: 10) {
             if let pullRequest, let url = pullRequest.url.flatMap(URL.init) {
-                Image(systemName: "arrow.triangle.pull").foregroundStyle(Theme.celadonBright)
+                Image(systemName: "arrow.triangle.pull").foregroundStyle(Theme.accentBright)
                 Text(pullRequest.created ? "Pull request opened" : "Pull request ready")
                     .font(.footnote).foregroundStyle(Theme.ink)
                 Spacer()
                 Link("View", destination: url)
                     .font(.footnote.weight(.semibold))
                     .buttonStyle(.borderedProminent)
-                    .tint(Theme.celadon)
+                    .tint(Theme.accent)
             } else if onIntegrationBranch {
                 Image(systemName: "arrow.triangle.branch").foregroundStyle(Theme.dim)
                 Text("On \(live?.branch ?? "the default branch") — switch the editor to a feature branch to open a pull request.")
                     .font(.footnote).foregroundStyle(Theme.dim)
             } else {
-                Image(systemName: "arrow.triangle.pull").foregroundStyle(Theme.celadonBright)
+                Image(systemName: "arrow.triangle.pull").foregroundStyle(Theme.accentBright)
                 Text("Committed on \(live?.branch ?? "the branch")")
                     .font(.footnote).foregroundStyle(Theme.ink).lineLimit(1)
                 Spacer()
@@ -286,7 +290,7 @@ struct ChangesView: View {
                     Text("Open PR…").font(.footnote.weight(.semibold))
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(Theme.celadon)
+                .tint(Theme.accent)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -300,15 +304,19 @@ struct ChangesView: View {
                     TextField("What does this change?", text: $pullRequestTitle, axis: .vertical)
                         .lineLimit(1...3)
                 }
+                .listRowBackground(Theme.panel)
                 Section("Description") {
                     TextField("Optional", text: $pullRequestBody, axis: .vertical)
                         .lineLimit(3...8)
                 }
+                .listRowBackground(Theme.panel)
                 Section {
                     Text("Pushes \(live?.branch.map { "“\($0)”" } ?? "the branch") from your Mac and opens the pull request with the editor's GitHub sign-in. Without one, you get a link to finish it in the browser.")
-                        .font(.footnote).foregroundStyle(Theme.dim)
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
+                .listRowBackground(Theme.panel)
             }
+            .brandGround()
             .navigationTitle("Pull Request")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -357,7 +365,7 @@ struct ChangesView: View {
         let counts = fileCounts(file.patch)
         let status = live?.files.first { $0.path == file.path }
         return HStack(spacing: 8) {
-            Image(systemName: SyntaxHighlighter.icon(forPath: file.path)).font(.caption).foregroundStyle(Theme.celadon)
+            Image(systemName: SyntaxHighlighter.icon(forPath: file.path)).font(.caption).foregroundStyle(Theme.accent)
             Text(file.path)
                 .font(.footnote.monospaced().weight(.medium))
                 .foregroundStyle(.primary)
@@ -368,7 +376,7 @@ struct ChangesView: View {
                     .foregroundStyle(statusColor(status.status))
             }
             Spacer(minLength: 6)
-            Text("+\(counts.added)").font(.caption.monospacedDigit()).foregroundStyle(Theme.celadon)
+            Text("+\(counts.added)").font(.caption.monospacedDigit()).foregroundStyle(Theme.added)
             Text("−\(counts.removed)").font(.caption.monospacedDigit()).foregroundStyle(Theme.red)
             Button {
                 Haptics.tap()
@@ -396,7 +404,7 @@ struct ChangesView: View {
 
     private func statusColor(_ code: String) -> Color {
         switch code {
-        case "A", "U": return Theme.celadonBright
+        case "A", "U": return Theme.added
         case "D": return Theme.red
         case "R": return Theme.dim
         default: return Theme.attention
@@ -444,7 +452,7 @@ private struct DiffBody: View {
     @ViewBuilder
     private func content(for line: String) -> some View {
         if isAdd(line) {
-            Text(line.isEmpty ? " " : line).foregroundStyle(Theme.celadon)
+            Text(line.isEmpty ? " " : line).foregroundStyle(Theme.added)
         } else if isDel(line) {
             Text(line.isEmpty ? " " : line).foregroundStyle(Theme.red)
         } else if line.hasPrefix("@@") {
@@ -458,13 +466,13 @@ private struct DiffBody: View {
     private func isDel(_ l: String) -> Bool { l.hasPrefix("-") && !l.hasPrefix("---") }
 
     private func gutter(for line: String) -> Color {
-        if isAdd(line) { return Theme.celadon }
+        if isAdd(line) { return Theme.added }
         if isDel(line) { return Theme.red }
         return .clear
     }
 
     private func background(for line: String) -> Color {
-        if isAdd(line) { return Theme.celadon.opacity(0.12) }
+        if isAdd(line) { return Theme.added.opacity(0.12) }
         if isDel(line) { return Theme.red.opacity(0.12) }
         return .clear
     }

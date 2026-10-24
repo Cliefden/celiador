@@ -22,8 +22,10 @@ struct HistoryView: View {
                 ForEach(0..<5, id: \.self) { _ in
                     SkeletonRow()
                 }
+                .listRowBackground(Theme.panel)
             }
             .listStyle(.insetGrouped)
+            .brandGround()
         } else if let error {
             EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load history", message: error)
         } else if chats.isEmpty {
@@ -35,8 +37,10 @@ struct HistoryView: View {
         } else {
             List(chats) { chat in
                 NavigationLink(value: chat.id) { ChatRow(chat: chat) }
+                    .listRowBackground(Theme.panel)
             }
             .listStyle(.insetGrouped)
+            .brandGround()
         }
     }
 
@@ -61,7 +65,7 @@ private struct ChatRow: View {
         let s = chat.status.lowercased()
         if s.contains("error") || s.contains("fail") { return ("xmark", Theme.red) }
         if s.contains("await") || s.contains("need") { return ("hand.raised.fill", Theme.attention) }
-        if s.contains("run") || s.contains("work") || s.contains("active") { return ("bolt.fill", .blue) }
+        if s.contains("run") || s.contains("work") || s.contains("active") { return ("bolt.fill", Theme.accent) }
         return ("text.bubble", .gray)
     }
 
@@ -107,7 +111,7 @@ struct ChatTranscriptView: View {
                                     .foregroundStyle(.white)
                                     .textSelection(.enabled)
                                     .padding(.horizontal, 14).padding(.vertical, 10)
-                                    .background(Theme.celadon, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                                     .frame(maxWidth: .infinity, alignment: .trailing)
                                     .padding(.leading, 48)
                             } else {

@@ -29,18 +29,18 @@ struct AccountView: View {
                     if let profile {
                         VStack(spacing: 10) {
                             ZStack {
-                                Circle().fill(Theme.accentGradient).frame(width: 64, height: 64)
-                                    .shadow(color: Theme.celadon.opacity(0.4), radius: 10, y: 4)
+                                Circle().fill(Theme.accentGradient).frame(width: 72, height: 72)
+                                    .shadow(color: Theme.accent.opacity(0.35), radius: 14, y: 6)
                                 Text(initials)
                                     .font(.title2.weight(.bold))
-                                    .foregroundStyle(Color(red: 0.04, green: 0.09, blue: 0.07))
+                                    .foregroundStyle(.white)
                             }
                             Text(profile.displayName?.isEmpty == false ? profile.displayName! : (profile.email ?? "Your account"))
                                 .font(.title2.weight(.semibold))
                             if let email = profile.email {
                                 Text(email).font(.subheadline).foregroundStyle(.secondary)
                             }
-                            StatusPill(text: "\(profile.plan.capitalized) plan", color: Theme.celadon, icon: "sparkles")
+                            StatusPill(text: "\(profile.plan.capitalized) plan", color: Theme.violet, icon: "sparkles")
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
@@ -67,6 +67,7 @@ struct AccountView: View {
                     } header: {
                         Text("Profile")
                     }
+                .listRowBackground(Theme.panel)
                 }
 
                 if let me {
@@ -79,6 +80,7 @@ struct AccountView: View {
                     } footer: {
                         Text(resetsFooter)
                     }
+                .listRowBackground(Theme.panel)
 
                     if let tasks = me.tasks {
                         Section {
@@ -90,6 +92,7 @@ struct AccountView: View {
                         } footer: {
                             Text("Queued issues become pull requests; the merged count is the one number Celiador steers by.")
                         }
+                .listRowBackground(Theme.panel)
                         }
                 }
 
@@ -98,19 +101,21 @@ struct AccountView: View {
                         Text("Your code stays on your machine. Agents run locally; the daemon only relays what you send and never trains on your code.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } icon: {
-                        Image(systemName: "lock.shield").foregroundStyle(Theme.celadon)
+                        Image(systemName: "lock.shield").foregroundStyle(Theme.accent)
                     }
                 }
+                .listRowBackground(Theme.panel)
 
                 Section {
                     Toggle(isOn: $telemetryEnabled) {
                         Label("Share anonymous usage data", systemImage: "chart.bar")
                     }
-                    .tint(Theme.celadon)
+                    .tint(Theme.accent)
                     .onChange(of: telemetryEnabled) { _, enabled in Telemetry.isEnabled = enabled }
                 } footer: {
                     Text("Which features get used and what crashes — never your code, prompts, chat, repository names or email. Details at celiador.ai/privacy.")
                 }
+                .listRowBackground(Theme.panel)
 
                 Section {
                     Button {
@@ -119,6 +124,7 @@ struct AccountView: View {
                         Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                     }
                 }
+                .listRowBackground(Theme.panel)
 
                 Section {
                     Button(role: .destructive) {
@@ -137,8 +143,10 @@ struct AccountView: View {
                 } footer: {
                     Text("Permanently deletes your Celiador account, profile, chat history and push registrations. This can't be undone.")
                 }
+                .listRowBackground(Theme.panel)
             }
             .listStyle(.insetGrouped)
+            .brandGround()
             .navigationTitle("Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -245,7 +253,7 @@ private struct UsageMeter: View {
     let limit: Int
 
     private var fraction: Double { limit > 0 ? min(1, Double(used) / Double(limit)) : 0 }
-    private var fillColor: Color { fraction >= 0.8 ? Theme.attention : Theme.celadon }
+    private var fillColor: Color { fraction >= 0.8 ? Theme.attention : Theme.accent }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {

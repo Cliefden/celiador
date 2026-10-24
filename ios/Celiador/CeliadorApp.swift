@@ -13,7 +13,7 @@ struct CeliadorApp: App {
         WindowGroup {
             ContentView()
                 .environment(model)
-                .tint(Theme.celadon)
+                .tint(Theme.accent)
                 .onOpenURL { url in
                     guard url.scheme == AppScheme.scheme else { return }
                     switch url.host {
@@ -177,7 +177,7 @@ private struct BootView: View {
                 .scaleEffect(appear ? 1 : 0.92)
                 .opacity(appear ? 1 : 0)
             ProgressView()
-                .tint(Theme.celadon)
+                .tint(Theme.accent)
                 .opacity(appear ? 1 : 0)
         }
         .onAppear { withAnimation(Theme.spring) { appear = true } }

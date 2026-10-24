@@ -44,6 +44,7 @@ struct QueueView: View {
                                     row(title: session.title, detail: "Waiting for your answer", icon: "hand.raised.fill", color: Theme.attention, pulsing: true)
                                 }
                             }
+                            .listRowBackground(Theme.panel)
                         } header: { header("Needs you", needsYou.count) }
                     }
                     if !review.isEmpty {
@@ -52,12 +53,13 @@ struct QueueView: View {
                                 Button {
                                     if let url = task.prUrl.flatMap(URL.init) { openURL(url) }
                                 } label: {
-                                    row(title: task.title, detail: "\(repoLine(task)) · pull request ready · swipe to merge", icon: "arrow.triangle.pull", color: Theme.celadon)
+                                    row(title: task.title, detail: "\(repoLine(task)) · pull request ready · swipe to merge", icon: "arrow.triangle.pull", color: Theme.violet)
                                 }
                                 .tint(.primary)
                                 .swipeActions(edge: .leading) { mergeButton(task) }
                                 .swipeActions { sessionLink(task) }
                             }
+                            .listRowBackground(Theme.panel)
                         } header: { header("Ready for review", review.count) }
                     }
                     if !running.isEmpty || !waiting.isEmpty {
@@ -65,24 +67,27 @@ struct QueueView: View {
                             ForEach(running) { task in
                                 Group {
                                     if let sid = task.sessionId {
-                                        NavigationLink(value: sid) { row(title: task.title, detail: "\(repoLine(task)) · running on your Mac", icon: "bolt.fill", color: .blue, pulsing: true) }
+                                        NavigationLink(value: sid) { row(title: task.title, detail: "\(repoLine(task)) · running on your Mac", icon: "bolt.fill", color: Theme.accent, pulsing: true) }
                                     } else {
-                                        row(title: task.title, detail: "\(repoLine(task)) · starting on your Mac", icon: "bolt.fill", color: .blue, pulsing: true)
+                                        row(title: task.title, detail: "\(repoLine(task)) · starting on your Mac", icon: "bolt.fill", color: Theme.accent, pulsing: true)
                                     }
                                 }
                                 .swipeActions { cancelButton(task) }
                             }
+                            .listRowBackground(Theme.panel)
                             ForEach(waiting) { task in
                                 row(title: task.title, detail: "\(repoLine(task)) · \(waitReason)", icon: "clock", color: .gray)
                                     .swipeActions { cancelButton(task) }
                             }
+                            .listRowBackground(Theme.panel)
                         } header: { header("Running", running.count + waiting.count, note: concurrency > 0 ? "\(running.count) of \(concurrency) slots" : nil) }
                     }
                     if !finished.isEmpty {
                         Section {
                             ForEach(finished) { task in
-                                row(title: task.title, detail: "\(repoLine(task)) · \(finishedLine(task))", icon: task.state == "merged" ? "checkmark" : task.state == "failed" ? "xmark" : "minus", color: task.state == "merged" ? Theme.celadon : task.state == "failed" ? Theme.red : .gray)
+                                row(title: task.title, detail: "\(repoLine(task)) · \(finishedLine(task))", icon: task.state == "merged" ? "checkmark" : task.state == "failed" ? "xmark" : "minus", color: task.state == "merged" ? Theme.added : task.state == "failed" ? Theme.red : .gray)
                             }
+                            .listRowBackground(Theme.panel)
                         } header: { header("Recently finished", finished.count) }
                     }
                     if let error {
@@ -90,6 +95,7 @@ struct QueueView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .brandGround()
                 .refreshable { await load() }
             }
         }
@@ -177,7 +183,7 @@ struct QueueView: View {
     @ViewBuilder
     private func sessionLink(_ task: AgentTask) -> some View {
         if let sid = task.sessionId {
-            Button { model.queuePath.append(sid) } label: { Label("Transcript", systemImage: "text.bubble") }.tint(.blue)
+            Button { model.queuePath.append(sid) } label: { Label("Transcript", systemImage: "text.bubble") }.tint(Theme.accent)
         }
     }
 
@@ -200,7 +206,7 @@ struct QueueView: View {
                     }
                 }
             } label: { Label("Merge", systemImage: "arrow.triangle.merge") }
-            .tint(Theme.celadon)
+            .tint(Theme.violet)
         }
     }
 
@@ -242,16 +248,20 @@ private struct NewTaskSheet: View {
                         }
                     }
                 }
+                .listRowBackground(Theme.panel)
                 Section("Task") {
                     TextField("What should change?", text: $title, axis: .vertical).lineLimit(1...3)
                     TextField("Details (optional)", text: $details, axis: .vertical).lineLimit(3...8)
                 }
+                .listRowBackground(Theme.panel)
                 Section {
                     Text("Runs on your Mac in its own worktree and branch, and ends in a pull request.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                .listRowBackground(Theme.panel)
                 if let error { Text(error).font(.footnote).foregroundStyle(Theme.red) }
             }
+            .brandGround()
             .navigationTitle("New task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -312,13 +322,15 @@ private struct WatchedReposSheet: View {
                             get: { isWatched(ws.remoteUrl) },
                             set: { on in Task { await set(ws.remoteUrl, on) } }
                         ))
-                        .tint(Theme.celadon)
+                        .tint(Theme.accent)
                     }
                 } footer: {
                     Text("Label an issue `celiador`, or comment `@celiador` as a collaborator, and the agent picks it up. Needs the repo's Celiador webhook.")
                 }
+                .listRowBackground(Theme.panel)
                 if let error { Text(error).font(.footnote).foregroundStyle(Theme.red) }
             }
+            .brandGround()
             .navigationTitle("Watched repos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
