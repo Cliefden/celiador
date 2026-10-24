@@ -73,9 +73,11 @@ export default async function StartPage() {
           </p>
           <p>
             Want to keep VS Code or Cursor? Install{" "}
-            <a href="https://github.com/Cliefden/celiador-remote/releases/latest" className="text-brand hover:underline">Celiador Remote</a>{" "}
-            instead (a VSIX; run <strong className="text-white">Extensions: Install from VSIX…</strong>), sign in
-            from its status bar item, and follow the same steps 2 to 6. Runs happen on your machine in a git
+            <a href="https://open-vsx.org/extension/celiador/celiador-remote" className="text-brand hover:underline">Celiador Remote</a>{" "}
+            instead. In Cursor, search for it in the Extensions view; in VS Code, download the VSIX from the{" "}
+            <a href="https://github.com/Cliefden/celiador-remote/releases/latest" className="text-brand hover:underline">latest release</a>{" "}
+            and run <strong className="text-white">Extensions: Install from VSIX…</strong>. Sign in from its
+            status bar item, then follow the same steps 2 to 6. Runs happen on your machine in a git
             worktree, the same way; the extension uses the Claude Code CLI you have installed, or downloads it once.
           </p>
 
