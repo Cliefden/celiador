@@ -5,7 +5,9 @@ What's in this build
 - Start a run on a repo your editor already has open ("From your editor"), or in the cloud.
 - Explorer: browse and edit files of a running session.
 - Changes: review the run's diff, discard files, commit, push and open a pull request.
-- Account: today's usage against the daemon's quota.
+- Queue: GitHub issues labelled `celiador` (and tasks you add here) run on your Mac in their own worktree; swipe a finished one to merge its pull request.
+- Account: today's usage against the daemon's quota, and agent pull requests running, open and merged this week.
+- Works with the Celiador editor, or with VS Code/Cursor plus the Celiador Remote extension.
 
 Please try
 1. Sign in (magic link), then confirm your Mac's open repos appear under "From your editor".
@@ -15,6 +17,7 @@ Please try
 5. Let the run finish: it must reach a final state (no permanent "running").
 6. Open a file in Explorer, edit, save; check the editor sees the change.
 7. In Changes, discard one file, commit the rest, open a PR.
+8. Label an issue `celiador` on a watched repo; wait for the queue row, then merge it with a swipe when the PR is open.
 
 Known gaps
 - Cloud runs of private repositories are not supported yet (run on your editor instead).
