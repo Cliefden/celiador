@@ -1,6 +1,7 @@
 Celiador for iPhone — companion to the Celiador editor on your Mac.
 
 What's in this build
+- New look: the app now follows iOS (light and dark mode, Liquid Glass bars and buttons on iOS 26). Tell us what feels off.
 - Watch an agent run from your editor live, and steer it: send follow-ups, approve or deny a tool call, answer the agent's questions, cancel.
 - Start a run on a repo your editor already has open ("From your editor"), or in the cloud.
 - Explorer: browse and edit files of a running session.
