@@ -6,9 +6,12 @@
 # build. Xcode Cloud requires this ci_scripts directory to sit beside the
 # .xcodeproj, which here is the repository root.
 #
-# Celiador has no remote Swift package dependencies, so no resolution step is
-# needed; if that changes, commit a Package.resolved beside project.yml and seed
-# it into the generated workspace before resolving (see the Ariman/Nassau hooks).
+# Xcode Cloud disables automatic Swift package resolution, so the pinned
+# Package.resolved (beside project.yml; TelemetryDeck SDK) is seeded into the
+# generated workspace before the build resolves packages. Refresh it after a
+# dependency change with: xcodegen generate && xcodebuild
+# -resolvePackageDependencies -project Celiador.xcodeproj -scheme Celiador &&
+# cp Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved .
 
 set -e
 
@@ -22,5 +25,9 @@ brew install xcodegen
 
 echo "→ generating Celiador.xcodeproj from project.yml"
 xcodegen generate
+
+echo "→ seeding Package.resolved into the generated workspace"
+mkdir -p Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+cp Package.resolved Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 echo "→ done"
