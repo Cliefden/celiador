@@ -122,6 +122,15 @@ struct QueueView: View {
     }
 
     private func load() async {
+        #if DEBUG
+        if DemoData.isActive {
+            tasks = DemoData.tasks
+            concurrency = 2
+            watched = ["https://github.com/acme/web.git", "https://github.com/acme/api.git"]
+            loaded = true
+            return
+        }
+        #endif
         do {
             let list = try await Api.shared.listTasks()
             tasks = list.tasks

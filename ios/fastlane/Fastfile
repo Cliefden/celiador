@@ -1,0 +1,165 @@
+# Celiador for iPhone — fastlane
+#
+# Auth is the shared App Store Connect API key (no Apple ID password, no 2FA):
+#   ~/.appstoreconnect/private_keys/AuthKey_R73AU5822H.p8
+# Secrets that must not be committed (demo account, review phone) live in
+# fastlane/.env (gitignored; see fastlane/.env.example).
+#
+#   fastlane metadata         push App Store text + categories + review info
+#   fastlane screenshots      capture the 6.9" set from the simulator (demo data)
+#   fastlane upload_screenshots
+#   fastlane age_rating       declare "no objectionable content" (4+)
+#   fastlane beta_info        TestFlight description, feedback email, review contact + demo account
+#   fastlane beta             build locally with automatic signing and upload to TestFlight
+#                             (Xcode Cloud "Archive - App Store" is the usual path; this is the fallback)
+#   fastlane external         put a processed build in front of Beta App Review and the External group
+#                             (BUILD=10 fastlane external) — this is what makes a public TestFlight link possible
+
+default_platform(:ios)
+
+APP_ID = "6819707590"
+KEY_ID = "R73AU5822H"
+ISSUER_ID = "69a6de70-4abf-47e3-e053-5b8c7c11a4d1"
+KEY_PATH = File.expand_path("~/.appstoreconnect/private_keys/AuthKey_#{KEY_ID}.p8")
+
+def api_key
+  app_store_connect_api_key(key_id: KEY_ID, issuer_id: ISSUER_ID, key_filepath: KEY_PATH, in_house: false)
+end
+
+def review_info
+  {
+    first_name: ENV.fetch("REVIEW_FIRST_NAME", "Stefan"),
+    last_name: ENV.fetch("REVIEW_LAST_NAME", "Wiklund"),
+    phone_number: ENV.fetch("REVIEW_PHONE", ""),           # fastlane/.env
+    email_address: ENV.fetch("REVIEW_EMAIL", "stefan@celiador.ai"),
+    demo_user: ENV.fetch("REVIEW_DEMO_USER"),           # fastlane/.env
+    demo_password: ENV.fetch("REVIEW_DEMO_PASSWORD"),   # fastlane/.env
+    notes: File.read(File.join(__dir__, "metadata", "review_information", "notes.txt")),
+  }.reject { |_, v| v.nil? || v.to_s.empty? }   # an unset phone is left as it is in App Store Connect
+end
+
+def beta_review_info
+  {
+    contact_email: ENV.fetch("REVIEW_EMAIL", "stefan@celiador.ai"),
+    contact_first_name: ENV.fetch("REVIEW_FIRST_NAME", "Stefan"),
+    contact_last_name: ENV.fetch("REVIEW_LAST_NAME", "Wiklund"),
+    contact_phone: ENV.fetch("REVIEW_PHONE"),
+    demo_account_name: ENV.fetch("REVIEW_DEMO_USER"),
+    demo_account_password: ENV.fetch("REVIEW_DEMO_PASSWORD"),
+    notes: File.read(File.join(__dir__, "metadata", "review_information", "notes.txt")),
+  }
+end
+
+platform :ios do
+  desc "Push App Store metadata (text, URLs, categories, review information) for version 1.0. No binary, no screenshots."
+  lane :metadata do
+    api_key
+    deliver(
+      app_identifier: "ai.celiador.companion",
+      app_version: "1.0",
+      metadata_path: "./fastlane/metadata",
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      skip_app_version_update: true,
+      run_precheck_before_submit: false,
+      precheck_include_in_app_purchases: false,
+      force: true,
+      app_review_information: review_info,
+      submit_for_review: false,
+    )
+  end
+
+  desc "App Store review contact + demo account + notes for version 1.0 (needs REVIEW_PHONE in fastlane/.env; Apple requires it)."
+  lane :review_info do
+    sh("python3 ./review_info.py")
+  end
+
+  desc "Capture the App Store screenshot set (iPhone 6.9\") from the simulator using the app's demo data."
+  lane :screenshots do
+    sh("./screenshots.sh")
+  end
+
+  desc "Upload fastlane/screenshots to version 1.0 (replaces what is there)."
+  lane :upload_screenshots do
+    api_key
+    deliver(
+      app_identifier: "ai.celiador.companion",
+      app_version: "1.0",
+      screenshots_path: "./fastlane/screenshots",
+      skip_binary_upload: true,
+      skip_metadata: true,
+      skip_app_version_update: true,
+      overwrite_screenshots: true,
+      run_precheck_before_submit: false,
+      force: true,
+      submit_for_review: false,
+    )
+  end
+
+  desc "Age rating: no objectionable content (4+)."
+  lane :age_rating do
+    sh("asc age-rating edit --app #{APP_ID} --all-none --profile celiador")
+  end
+
+  desc "TestFlight app description, feedback email, privacy URL, and Beta App Review contact + demo account."
+  lane :beta_info do
+    api_key
+    pilot(
+      app_identifier: "ai.celiador.companion",
+      skip_submission: true,
+      skip_waiting_for_build_processing: true,
+      distribute_only: true,
+      distribute_external: false,
+      build_number: ENV.fetch("BUILD", "10"),
+      app_version: "0.1.1",
+      # Apple requires a contact phone for Beta App Review; without REVIEW_PHONE only the localized info is pushed.
+      beta_app_review_info: ENV.fetch("REVIEW_PHONE", "").empty? ? nil : beta_review_info,
+      localized_app_info: {
+        "default" => {
+          feedback_email: "stefan@celiador.ai",
+          marketing_url: "https://celiador.ai",
+          privacy_policy_url: "https://celiador.ai/privacy",
+          description: File.read(File.join(__dir__, "metadata", "en-US", "description.txt")),
+        },
+      },
+    )
+  end
+
+  desc "Build locally (automatic signing through the API key) and upload to TestFlight. Fallback for Xcode Cloud."
+  lane :beta do
+    api_key
+    sh("cd .. && xcodegen generate")
+    build_app(
+      project: "Celiador.xcodeproj",
+      scheme: "Celiador",
+      configuration: "Release",
+      export_method: "app-store",
+      xcargs: "-allowProvisioningUpdates -authenticationKeyPath #{KEY_PATH} -authenticationKeyID #{KEY_ID} -authenticationKeyIssuerID #{ISSUER_ID}",
+      output_directory: "./build",
+      clean: true,
+    )
+    pilot(
+      app_identifier: "ai.celiador.companion",
+      skip_submission: true,
+      skip_waiting_for_build_processing: false,
+      changelog: File.read(File.join(__dir__, "..", "testflight", "WHAT_TO_TEST.md")),
+    )
+  end
+
+  desc "Submit a processed build (BUILD=<number>) to Beta App Review and distribute it to the External group."
+  lane :external do
+    api_key
+    pilot(
+      app_identifier: "ai.celiador.companion",
+      app_version: ENV.fetch("VERSION", "0.1.1"),
+      build_number: ENV.fetch("BUILD"),
+      skip_waiting_for_build_processing: true,
+      distribute_only: true,
+      distribute_external: true,
+      groups: [ENV.fetch("GROUP", "External")],
+      notify_external_testers: true,
+      changelog: File.read(File.join(__dir__, "..", "testflight", "WHAT_TO_TEST.md")),
+      beta_app_review_info: beta_review_info,
+    )
+  end
+end

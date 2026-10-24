@@ -1,0 +1,1 @@
+coding agent,claude,github,pull request,code review,developer,remote,vscode,cursor,ai

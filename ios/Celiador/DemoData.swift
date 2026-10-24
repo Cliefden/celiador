@@ -74,6 +74,14 @@ enum DemoData {
         """,
     ]
 
+    /// The queue: one issue running, one waiting, two finished (one merged).
+    static let tasks: [AgentTask] = [
+        AgentTask(id: "t1", repo: .init(owner: "acme", name: "web", url: "https://github.com/acme/web.git"), issue: .init(number: 142, title: "Search field: add a keyboard shortcut hint", url: "https://github.com/acme/web/issues/142"), title: "Search field: add a keyboard shortcut hint", branch: "142-search-shortcut-hint", source: "github", state: "running", sessionId: "s1", prUrl: nil, error: nil, createdAt: iso(240), updatedAt: iso(30)),
+        AgentTask(id: "t2", repo: .init(owner: "acme", name: "web", url: "https://github.com/acme/web.git"), issue: .init(number: 143, title: "Changelog: link release headings", url: "https://github.com/acme/web/issues/143"), title: "Changelog: link release headings", branch: "143-changelog-links", source: "github", state: "queued", sessionId: nil, prUrl: nil, error: nil, createdAt: iso(180), updatedAt: iso(180)),
+        AgentTask(id: "t3", repo: .init(owner: "acme", name: "api", url: "https://github.com/acme/api.git"), issue: .init(number: 88, title: "Refactor auth middleware", url: "https://github.com/acme/api/issues/88"), title: "Refactor auth middleware", branch: "88-refactor-auth-middleware", source: "github", state: "pr-open", sessionId: "s1", prUrl: "https://github.com/acme/api/pull/91", error: nil, createdAt: iso(3_600), updatedAt: iso(900)),
+        AgentTask(id: "t4", repo: .init(owner: "acme", name: "api", url: "https://github.com/acme/api.git"), issue: nil, title: "Add a health endpoint", branch: "celiador-health-endpoint", source: "manual", state: "merged", sessionId: "s2", prUrl: "https://github.com/acme/api/pull/90", error: nil, createdAt: iso(7_200), updatedAt: iso(5_400)),
+    ]
+
     static let chats: [ChatSummary] = [
         ChatSummary(id: "c1", title: "Refactor auth middleware", origin: "editor", status: "done", updatedAt: iso(7200), lastMessageAt: iso(7200)),
         ChatSummary(id: "c2", title: "Fix flaky checkout test", origin: "editor", status: "error", updatedAt: iso(90000), lastMessageAt: iso(90000)),

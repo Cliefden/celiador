@@ -25,3 +25,9 @@ signing/
 
 # wb worktrees (one checkout per issue; see github.com/Cliefden/workbench)
 /.claude/worktrees/
+
+# fastlane output (screenshots are regenerated with `fastlane screenshots`)
+fastlane/screenshots/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output/

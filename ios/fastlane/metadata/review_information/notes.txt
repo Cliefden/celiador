@@ -1,0 +1,10 @@
+Celiador is a companion app: it controls coding agents that run on the user's own computer (the Celiador editor, or VS Code/Cursor with the Celiador Remote extension). Without a computer online, the app shows the account, an empty queue and the history of past runs.
+
+To review:
+1. Sign in with the demo account (email and password; the magic-link and GitHub buttons also work but the password path is quickest).
+2. The Queue tab lists tasks. The demo account has finished runs with pull requests so the review and merge screens can be opened without a live computer. Tap a run to see its transcript, diff and files.
+3. The Account tab shows usage and the pull-request counts.
+
+Agent runs are started from the computer side (a GitHub issue label or the editor), so the "run now" actions will report that no editor is online for the demo account. That is expected. Nothing is purchased in the app; there are no in-app purchases.
+
+Contact: stefan@celiador.ai
