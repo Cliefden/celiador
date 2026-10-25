@@ -103,7 +103,8 @@ export async function getChat(
   );
   if (chat.rows.length === 0) return null;
   const messages = await pool.query<MessageRow>(
-    `select id, role, content, seq, created_at from public.messages
+    // seq is bigint, which node-postgres returns as a string; clients decode a number.
+    `select id, role, content, seq::int4 as seq, created_at from public.messages
      where chat_id = $1 and user_id = $2 order by seq asc nulls last, created_at asc`,
     [chatId, userId]
   );
