@@ -1,6 +1,7 @@
 import http2 from "node:http2";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { recordFailure } from "../health";
 
 /**
  * Dependency-free APNs sender. Signs a provider JWT (ES256) with the .p8 key
@@ -74,7 +75,20 @@ export interface SendResult {
   reason?: string;
 }
 
-function post(
+/** {@link postOnce}, counting failures (a dead token is a normal outcome, not a failure). */
+async function post(
+  host: string,
+  cfg: ApnsConfig,
+  deviceToken: string,
+  headers: Record<string, string>,
+  payload: unknown
+): Promise<SendResult> {
+  const result = await postOnce(host, cfg, deviceToken, headers, payload);
+  if (result.status !== 200 && !isDeadToken(result)) recordFailure("push");
+  return result;
+}
+
+function postOnce(
   host: string,
   cfg: ApnsConfig,
   deviceToken: string,
