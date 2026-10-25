@@ -69,7 +69,12 @@ export class SessionStore {
     return this.sessions.find((s) => s.id === id);
   }
 
-  create(input: { title?: string; origin: SessionOrigin; runner: SessionRunner }): Session {
+  /** The most recent session created for this runner-side key (see Session.mirrorKey). */
+  findMirror(mirrorKey: string): Session | undefined {
+    return this.list().find((s) => s.mirrorKey === mirrorKey);
+  }
+
+  create(input: { title?: string; origin: SessionOrigin; runner: SessionRunner; mirrorKey?: string }): Session {
     const now = new Date().toISOString();
     const session: Session = {
       id: crypto.randomUUID(),
@@ -82,6 +87,7 @@ export class SessionStore {
       lastSeq: 0,
       createdAt: now,
       updatedAt: now,
+      ...(input.mirrorKey ? { mirrorKey: input.mirrorKey } : {}),
     };
     this.sessions.push(session);
     this.logs.set(session.id, []);

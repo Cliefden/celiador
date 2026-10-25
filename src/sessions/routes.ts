@@ -25,6 +25,8 @@ const RUNNER_GRACE_MS = 10000;
 
 /** Max events per POST /:id/events batch, and max text length per field. */
 const MAX_BATCH = 500;
+/** How long a fresh mirror holds its claim before its window has attached the command channel. */
+const MIRROR_CLAIM_MS = 60_000;
 const MAX_TEXT = 200_000;
 
 const STATES = new Set<SessionState>(["idle", "running", "awaiting", "done", "error", "cancelled"]);
@@ -98,7 +100,8 @@ export function sessionRoutes(): Hono<AppEnv> {
   // ---- Watcher: session CRUD ------------------------------------------------
 
   app.post("/", async (c) => {
-    const { title, origin, runner, repo, prompt, taskId } = await c.req.json().catch(() => ({}));
+    const body = await c.req.json().catch(() => ({}));
+    const { title, origin, runner, repo, prompt, taskId } = body;
     const userId = c.get("user").userId;
     const isServer = runner === "server";
 
@@ -110,10 +113,23 @@ export function sessionRoutes(): Hono<AppEnv> {
       return c.json({ error: "a server run needs repo.url (http/https) and a prompt" }, 400);
     }
 
+    // One mirror per runner-side session: another window already mirroring this
+    // agent session (attached, or created moments ago and still attaching) wins.
+    const mirrorKey = !isServer && typeof body.mirrorKey === "string" && body.mirrorKey.length > 0 && body.mirrorKey.length <= 500
+      ? body.mirrorKey
+      : undefined;
+    if (mirrorKey) {
+      const existing = stores.for(userId).findMirror(mirrorKey);
+      if (existing && (existing.runnerConnected || Date.now() - Date.parse(existing.createdAt) < MIRROR_CLAIM_MS)) {
+        return c.json({ error: "already mirrored by another window", session: existing }, 409);
+      }
+    }
+
     const session = stores.for(userId).create({
       title: title ?? (isServer ? prompt : undefined),
       origin: origin === "phone" ? "phone" : "editor",
       runner: isServer ? "server" : "editor",
+      mirrorKey,
     });
 
     if (isServer) {
