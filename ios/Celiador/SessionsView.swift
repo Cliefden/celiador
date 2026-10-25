@@ -42,8 +42,8 @@ struct SessionsView: View {
             }
         }
         .toast($toast)
-        .sheet(isPresented: $showAccount) { AccountView() }
-        .sheet(isPresented: $showNewRun) { NewRunView() }
+        .sheet(isPresented: $showAccount) { AccountView().trackScreen(.account) }
+        .sheet(isPresented: $showNewRun) { NewRunView().trackScreen(.newRun) }
         .task {
             await model.refresh()
             withAnimation(Theme.gentle) { didLoad = true }
@@ -156,9 +156,11 @@ struct SessionsView: View {
         Task {
             do {
                 try await Api.shared.deleteSession(session.id)
+                Telemetry.signal(.sessionDeleted)
                 await model.refresh()
                 toast = "Run deleted"
             } catch {
+                Telemetry.error(.sessions, "delete", error)
                 actionError = error.localizedDescription
                 Haptics.error()
             }
@@ -268,6 +270,7 @@ private struct NewRunView: View {
             .task {
                 editorWorkspaces = (try? await Api.shared.editorWorkspaces()) ?? []
                 Telemetry.signal(.newRunOpened, ["editorRepos": Telemetry.bucket(editorWorkspaces.count)])
+                if !editorWorkspaces.isEmpty { Telemetry.onboarding(.editorPaired) }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -434,6 +437,7 @@ private struct NewRunView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(CeliadorBackground())
+        .trackScreen(.newRunCompose)
         .onAppear { composerFocused = true }
     }
 
@@ -460,8 +464,10 @@ private struct NewRunView: View {
                     return
                 }
             }
+            Telemetry.error(.run, "editorRun", code: "editorTimeout")
             error = "Couldn't reach your editor. Make sure Celiador is open and signed in on your Mac."
         } catch {
+            Telemetry.error(.run, "editorRun", error)
             self.error = (error as NSError).localizedDescription
         }
         sending = false
@@ -475,11 +481,13 @@ private struct NewRunView: View {
             let repo = repoURL.trimmingCharacters(in: .whitespaces)
             let br = branch.trimmingCharacters(in: .whitespaces).isEmpty ? nil : branch.trimmingCharacters(in: .whitespaces)
             let session = try await Api.shared.startServerRun(repoURL: repo, branch: br, prompt: prompt)
+            Telemetry.signal(.cloudRunStarted)
             RepoRecents.remember(repo)
             await model.refresh()
             dismiss()
             model.open(sessionId: session.id)
         } catch {
+            Telemetry.error(.run, "cloudRun", error)
             self.error = (error as NSError).localizedDescription
         }
         starting = false

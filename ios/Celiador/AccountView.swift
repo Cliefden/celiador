@@ -119,7 +119,7 @@ struct AccountView: View {
 
                 Section {
                     Button {
-                        Haptics.warning(); model.signOut(); dismiss()
+                        Haptics.warning(); Telemetry.signal(.signedOut); model.signOut(); dismiss()
                     } label: {
                         Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                     }
@@ -207,6 +207,7 @@ struct AccountView: View {
             profile = p
             name = p.displayName ?? ""
         } catch {
+            Telemetry.error(.profile, "load", error)
             self.error = error.localizedDescription
         }
         // Usage is best-effort and independent of the profile — the panel still
@@ -221,9 +222,11 @@ struct AccountView: View {
             defer { deleting = false }
             do {
                 try await Api.shared.deleteAccount()
+                Telemetry.signal(.accountDeleted)
                 model.signOut(serverAlreadyDeleted: true)
                 dismiss()
             } catch {
+                Telemetry.error(.account, "delete", error)
                 self.error = "Couldn't delete your account: \(error.localizedDescription)"
             }
         }
@@ -238,6 +241,7 @@ struct AccountView: View {
             do {
                 profile = try await Api.shared.updateProfile(displayName: trimmed)
             } catch {
+                Telemetry.error(.profile, "save", error)
                 self.error = error.localizedDescription
             }
         }

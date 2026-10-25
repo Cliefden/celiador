@@ -23,11 +23,14 @@ private struct PendingApproval: Equatable {
     /// Human-readable description of what will happen.
     let label: String
     let preview: String?
+    /// When the card appeared on the phone — for the decision-latency bucket.
+    var shownAt = Date()
 }
 
 private struct PendingQuestion: Equatable {
     let requestId: String
     let prompt: String
+    var shownAt = Date()
 }
 
 /// Folds a session's live event stream into a transcript + control state. Owns
@@ -53,6 +56,7 @@ private final class SessionTranscript {
     private var statusTask: Task<Void, Never>?
     /// tool callId → transcript item id, so a toolResult can mark its tool line done.
     private var toolItemByCallId: [String: Int] = [:]
+    private var reportedStreamFailure = false
 
     func start(sessionId: String, model: AppModel) {
         guard stream == nil else { return }
@@ -71,9 +75,14 @@ private final class SessionTranscript {
                 try? await Task.sleep(for: .seconds(10))
             }
         }
-        let s = SessionEventStream(sessionId: sessionId, since: 0) { [weak self] event in
+        let s = SessionEventStream(sessionId: sessionId, since: 0, onEvent: { [weak self] event in
             self?.ingest(event)
-        }
+        }, onFailure: { [weak self] error in
+            // Once per open session: the stream retries with backoff on its own.
+            guard let self, !self.reportedStreamFailure else { return }
+            self.reportedStreamFailure = true
+            Telemetry.error(.relay, "eventStream", error)
+        })
         stream = s
         s.start()
     }
@@ -152,28 +161,52 @@ private final class SessionTranscript {
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        Telemetry.signal(.phoneCommand, ["command": "instruct"])
-        Task { try? await Api.shared.sendMessage(sessionId, text: trimmed) }
+        command("instruct") { [sessionId] in try await Api.shared.sendMessage(sessionId, text: trimmed) }
     }
 
     func resolve(_ approve: Bool) {
         guard let p = pendingApproval else { return }
         pendingApproval = nil // optimistic; the runner's next state event confirms
-        Telemetry.signal(.phoneCommand, ["command": approve ? "approve" : "reject"])
-        Task { try? await Api.shared.resolveApproval(sessionId, requestId: p.requestId, approve: approve) }
+        Telemetry.signal(.approvalResolved, [
+            "decision": approve ? "approve" : "deny",
+            "tool": Self.toolBucket(p.kind),
+            "latency": Telemetry.latency(since: p.shownAt),
+        ])
+        command(approve ? "approve" : "reject") { [sessionId] in
+            try await Api.shared.resolveApproval(sessionId, requestId: p.requestId, approve: approve)
+        }
     }
 
     func answer(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let q = pendingQuestion, !trimmed.isEmpty else { return }
         pendingQuestion = nil
-        Telemetry.signal(.phoneCommand, ["command": "answer"])
-        Task { try? await Api.shared.answer(sessionId, requestId: q.requestId, text: trimmed) }
+        Telemetry.signal(.questionAnswered, ["latency": Telemetry.latency(since: q.shownAt)])
+        command("answer") { [sessionId] in try await Api.shared.answer(sessionId, requestId: q.requestId, text: trimmed) }
     }
 
     func cancel() {
-        Telemetry.signal(.phoneCommand, ["command": "cancel"])
-        Task { try? await Api.shared.cancelSession(sessionId) }
+        command("cancel") { [sessionId] in try await Api.shared.cancelSession(sessionId) }
+    }
+
+    /// Signal the steering command (v1 `phoneCommand`, unchanged), mark the
+    /// funnel's last step, and post it; a failed post is counted, still silent.
+    private func command(_ name: String, _ post: @escaping () async throws -> Void) {
+        Telemetry.signal(.phoneCommand, ["command": name])
+        Telemetry.onboarding(.firstPhoneCommand)
+        Task {
+            do { try await post() }
+            catch { Telemetry.error(.relay, name, error) }
+        }
+    }
+
+    /// The approval's tool kind, folded to a fixed set (MCP / custom tool names never leave).
+    private static func toolBucket(_ kind: String) -> String {
+        let k = kind.lowercased()
+        if k.contains("write") || k.contains("edit") || k.contains("patch") { return "write" }
+        if k.contains("bash") || k.contains("shell") || k.contains("exec") || k.contains("command") { return "shell" }
+        if k.contains("fetch") || k.contains("web") || k.contains("http") { return "fetch" }
+        return "other"
     }
 
     #if DEBUG
@@ -294,14 +327,30 @@ struct SessionView: View {
         }
         .sheet(isPresented: $showChanges) {
             ChangesView(title: title, diffs: transcript.diffs, liveSessionId: canReviewLive ? sessionId : nil)
+                .trackScreen(.changes)
         }
+        .trackScreen(.session)
         .onAppear {
             #if DEBUG
             if DemoData.isActive { transcript.seedDemo(); return }
             #endif
+            trackOpened()
             transcript.start(sessionId: sessionId, model: model)
         }
         .onDisappear { transcript.stop() }
+    }
+
+    /// `sessionOpened`: the run's state and whether its editor was there to steer.
+    private func trackOpened() {
+        let session = model.sessions.first { $0.id == sessionId }
+        let editor: String
+        switch session {
+        case nil: editor = "unknown"
+        case let s? where s.runner == "editor": editor = s.runnerConnected ? "online" : "offline"
+        case _?: editor = "cloud"
+        }
+        Telemetry.signal(.sessionOpened, ["state": session?.state.rawValue ?? "unknown", "editor": editor])
+        Telemetry.onboarding(.firstSessionOpened)
     }
 
     // MARK: - Transcript rows

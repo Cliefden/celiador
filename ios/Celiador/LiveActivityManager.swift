@@ -33,7 +33,7 @@ final class LiveActivityManager {
     /// End every Live Activity (sign-out / account deletion).
     func endAll() {
         adoptExisting()
-        for (id, activity) in activities { end(id, activity: activity) }
+        for (id, activity) in activities { end(id, activity: activity, reason: "signOut") }
     }
 
     /// Bring Live Activities in line with the current session list: start ones
@@ -54,7 +54,9 @@ final class LiveActivityManager {
         }
 
         for (id, activity) in activities where !runningIds.contains(id) {
-            end(id, activity: activity)
+            // Why it ended: the session's new state, or gone from the list.
+            let reason = sessions.first { $0.id == id }?.state.rawValue ?? "removed"
+            end(id, activity: activity, reason: reason)
         }
     }
 
@@ -80,8 +82,11 @@ final class LiveActivityManager {
             )
             activities[session.id] = activity
             observeToken(activity, sessionId: session.id)
+            Telemetry.signal(.liveActivityStarted)
         } catch {
             // Activities disabled or at the system limit — degrade silently.
+            let code = (error as? ActivityAuthorizationError).map { String(describing: $0) } ?? "other"
+            Telemetry.error(.liveActivity, "start", code: code)
         }
     }
 
@@ -90,12 +95,14 @@ final class LiveActivityManager {
         tokenTasks[sessionId] = Task {
             for await tokenData in activity.pushTokenUpdates {
                 let token = tokenData.map { String(format: "%02x", $0) }.joined()
-                try? await Api.shared.registerActivityToken(sessionId: sessionId, token: token)
+                do { try await Api.shared.registerActivityToken(sessionId: sessionId, token: token) }
+                catch { Telemetry.error(.liveActivity, "registerToken", error) }
             }
         }
     }
 
-    private func end(_ id: String, activity: Activity<ChatActivityAttributes>) {
+    private func end(_ id: String, activity: Activity<ChatActivityAttributes>, reason: String) {
+        Telemetry.signal(.liveActivityEnded, ["reason": reason])
         activities[id] = nil
         tokenTasks[id]?.cancel()
         tokenTasks[id] = nil

@@ -36,7 +36,7 @@ struct ChatLiveActivity: Widget {
             } minimal: {
                 Image(systemName: "hammer.fill").foregroundStyle(Theme.accentBright)
             }
-            .widgetURL(URL(string: AppScheme.session(context.attributes.sessionId)))
+            .widgetURL(URL(string: AppScheme.session(context.attributes.sessionId, source: "liveActivity")))
         }
     }
 

@@ -52,6 +52,9 @@ final class AppModel {
         do {
             _ = try await Api.shared.loadConfig()
         } catch {
+            #if os(iOS)
+            Telemetry.error(.config, "load", error)
+            #endif
             phase = .unreachable("Can't reach celiador.ai — check your connection.")
             return
         }
@@ -105,6 +108,7 @@ final class AppModel {
         #endif
         phase = .signedIn
         #if os(iOS)
+        Telemetry.onboarding(.signedIn)
         PushManager.shared.requestAuthorization()
         PushManager.shared.attach(model: self)
         #endif
@@ -161,27 +165,45 @@ final class AppModel {
         #endif
     }
 
+    /// Report a failing session-list poll once per failure streak, not every 15s.
+    private var listFailing = false
+
     func refresh() async {
         guard case .signedIn = phase else { return }
-        if let latest = try? await Api.shared.listSessions() {
-            sessions = latest
-            let active = Set(latest.filter { $0.state.isActive }.map(\.id))
-            activity = activity.filter { active.contains($0.key) }
-            // Keep the Explorer's focused session valid; default to the newest active run.
-            if focusedSessionId == nil || !latest.contains(where: { $0.id == focusedSessionId }) {
-                focusedSessionId = latest.first(where: { $0.state.isActive })?.id ?? latest.first?.id
-            }
-            publishSnapshot()
+        let latest: [Session]
+        do {
+            latest = try await Api.shared.listSessions()
+            listFailing = false
+        } catch {
             #if os(iOS)
-            LiveActivityManager.shared.reconcile(sessions: sessions, activity: activity)
+            if !listFailing { Telemetry.error(.sessions, "list", error) }
             #endif
-            #if DEBUG
-            if ProcessInfo.processInfo.environment["CELIADOR_AUTOOPEN"] != nil,
-               agentsPath.isEmpty, let first = latest.first {
-                agentsPath = [first.id]
-            }
-            #endif
+            listFailing = true
+            return
         }
+        sessions = latest
+        #if os(iOS)
+        // Any editor-run session proves the desktop is paired to this account;
+        // one the editor started itself is a session mirrored to the phone.
+        if latest.contains(where: { $0.runner == "editor" }) { Telemetry.onboarding(.editorPaired) }
+        if latest.contains(where: { $0.origin == "editor" }) { Telemetry.onboarding(.firstSessionMirrored) }
+        #endif
+        let active = Set(latest.filter { $0.state.isActive }.map(\.id))
+        activity = activity.filter { active.contains($0.key) }
+        // Keep the Explorer's focused session valid; default to the newest active run.
+        if focusedSessionId == nil || !latest.contains(where: { $0.id == focusedSessionId }) {
+            focusedSessionId = latest.first(where: { $0.state.isActive })?.id ?? latest.first?.id
+        }
+        publishSnapshot()
+        #if os(iOS)
+        LiveActivityManager.shared.reconcile(sessions: sessions, activity: activity)
+        #endif
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CELIADOR_AUTOOPEN"] != nil,
+           agentsPath.isEmpty, let first = latest.first {
+            agentsPath = [first.id]
+        }
+        #endif
     }
 
     /// Publish a compact snapshot for the Home Screen widget (App Group) and nudge

@@ -103,6 +103,13 @@ struct LoginView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .background(CeliadorBackground())
+        .onAppear { Telemetry.onboarding(.signInShown) }
+    }
+
+    /// `signInFailed` — the failure's fixed code, never its message.
+    private func trackFailure(_ method: String, _ error: Error) {
+        guard let reason = Telemetry.code(for: error) else { return }
+        Telemetry.signal(.signInFailed, ["method": method, "reason": reason])
     }
 
     private func submit() {
@@ -117,6 +124,7 @@ struct LoginView: View {
                 if isSignUp {
                     guard try await Api.shared.signUp(email: email, password: password) else {
                         // Email confirmation is on: the account exists but has no session yet.
+                        Telemetry.signal(.signUpPendingConfirmation)
                         info = "Account created. Confirm it via the email we sent to \(email), then sign in."
                         isSignUp = false
                         busy = false
@@ -128,6 +136,7 @@ struct LoginView: View {
                 Telemetry.signal(.signedIn, ["method": "password"])
                 model.didSignIn()
             } catch {
+                trackFailure(isSignUp ? "signUp" : "password", error)
                 self.error = error.localizedDescription
             }
             busy = false
@@ -142,8 +151,10 @@ struct LoginView: View {
         Task {
             do {
                 try await Api.shared.sendMagicLink(email: email)
+                Telemetry.signal(.magicLinkSent)
                 info = "Sign-in link sent to \(email). Open it on this device to finish signing in."
             } catch {
+                trackFailure("magicLink", error)
                 self.error = error.localizedDescription
             }
             busy = false
@@ -168,11 +179,13 @@ struct LoginView: View {
                     Telemetry.signal(.signedIn, ["method": "github"])
                     model.didSignIn()
                 } else {
+                    Telemetry.signal(.signInFailed, ["method": "github", "reason": "callbackInvalid"])
                     self.error = "GitHub sign-in didn't complete."
                 }
             } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
                 // User closed the sheet — not an error.
             } catch {
+                trackFailure("github", error)
                 self.error = error.localizedDescription
             }
             busy = false

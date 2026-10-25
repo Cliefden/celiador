@@ -22,10 +22,17 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
 
     /// Ask permission (once) and register with APNs. Safe to call on every launch.
     func requestAuthorization() {
-        UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        Task { @MainActor in
+            // Only an undetermined status means the system prompt is actually shown.
+            let prompted = await center.notificationSettings().authorizationStatus == .notDetermined
+            let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+            if prompted {
+                Telemetry.signal(.permissionPrompt, ["permission": "notifications", "result": granted ? "granted" : "denied"])
+            }
             guard granted else { return }
-            Task { @MainActor in UIApplication.shared.registerForRemoteNotifications() }
+            UIApplication.shared.registerForRemoteNotifications()
         }
     }
 
@@ -33,7 +40,10 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     func didRegister(deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
         currentToken = token
-        Task { try? await Api.shared.registerPush(token: token, env: Api.shared.pushEnv) }
+        Task {
+            do { try await Api.shared.registerPush(token: token, env: Api.shared.pushEnv) }
+            catch { Telemetry.error(.push, "register", error) }
+        }
     }
 
     /// Hand over (and forget) the registered token so sign-out can unregister it
@@ -73,8 +83,10 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         let info = response.notification.request.content.userInfo
         if let id = (info["sessionId"] ?? info["activityId"]) as? String {
             if let model, case .signedIn = model.phase {
+                Telemetry.signal(.notificationOpened, ["kind": "push", "appState": "running"])
                 model.open(sessionId: id)
             } else {
+                Telemetry.signal(.notificationOpened, ["kind": "push", "appState": "launching"])
                 pendingSessionId = id
             }
         }

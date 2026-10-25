@@ -133,7 +133,11 @@ struct ChangesView: View {
                 }
                 .padding(.horizontal, 12).padding(.bottom, 8)
             }
-            .task { await loadLive() }
+            .task {
+                await loadLive()
+                let mode = liveSessionId == nil ? "transcript" : (isLive ? "live" : "liveUnavailable")
+                Telemetry.signal(.changesViewed, ["mode": mode, "files": Telemetry.bucket(shownDiffs.count)])
+            }
             .alert(
                 "Discard changes?",
                 isPresented: Binding(get: { revertTarget != nil }, set: { if !$0 { revertTarget = nil } }),
@@ -146,8 +150,8 @@ struct ChangesView: View {
                     ? "Deletes the new file \(file.path) from the working copy."
                     : "Reverts \(file.path) to its last committed state.")
             }
-            .sheet(isPresented: $showCommit) { commitSheet }
-            .sheet(isPresented: $showPullRequest) { pullRequestSheet }
+            .sheet(isPresented: $showCommit) { commitSheet.trackScreen(.commit) }
+            .sheet(isPresented: $showPullRequest) { pullRequestSheet.trackScreen(.pullRequest) }
         }
     }
 
@@ -166,7 +170,9 @@ struct ChangesView: View {
             livePatches = patches
             liveUnavailable = nil
         } catch {
-            // Editor offline / cloud run → stay on the transcript diffs.
+            // Editor offline / cloud run → stay on the transcript diffs. 409 (editor
+            // offline) is expected and shows as `changesViewed` mode liveUnavailable.
+            if (error as? Api.ApiError)?.status != 409 { Telemetry.error(.git, "status", error) }
             liveUnavailable = (error as NSError).localizedDescription
         }
         loadingLive = false
@@ -178,9 +184,11 @@ struct ChangesView: View {
         Task {
             do {
                 try await Api.shared.gitRevert(sessionId: sid, paths: [file.path])
+                Telemetry.signal(.fileReverted)
                 toast = "Discarded \((file.path as NSString).lastPathComponent)"
                 await loadLive()
             } catch {
+                Telemetry.error(.git, "revert", error)
                 Haptics.error()
                 toast = (error as NSError).localizedDescription
             }
@@ -247,12 +255,14 @@ struct ChangesView: View {
         Task {
             do {
                 let sha = try await Api.shared.gitCommit(sessionId: sid, message: commitMessage.trimmingCharacters(in: .whitespacesAndNewlines))
+                Telemetry.signal(.changesCommitted)
                 Haptics.success()
                 toast = sha.map { "Committed \(String($0.prefix(7)))" } ?? "Committed"
                 commitMessage = ""
                 showCommit = false
                 await loadLive()
             } catch {
+                Telemetry.error(.git, "commit", error)
                 Haptics.error()
                 toast = (error as NSError).localizedDescription
             }
@@ -354,6 +364,7 @@ struct ChangesView: View {
                 toast = result.created ? "Pull request opened" : (result.url == nil ? "Pushed" : "Pull request ready")
                 showPullRequest = false
             } catch {
+                Telemetry.error(.git, "pullRequest", error)
                 Haptics.error()
                 toast = (error as NSError).localizedDescription
             }
