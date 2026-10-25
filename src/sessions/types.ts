@@ -40,6 +40,12 @@ export interface Session {
   lastSeq: number;
   createdAt: string;
   updatedAt: string;
+  /**
+   * The runner's own id for what this session mirrors (the editor sends its
+   * agent-host session URI). Every editor window, and the Agents window, sees the
+   * same agent session; the key lets the daemon keep it to one mirror.
+   */
+  mirrorKey?: string;
 }
 
 /** A session summary as returned to list/get callers (identical shape today). */
