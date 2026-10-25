@@ -115,6 +115,8 @@ targets:
       - path: Shared/Events.swift
       - path: Shared/Theme.swift
       - path: Shared/WatchSync.swift
+      # Api.swift's authRedirect needs AppScheme (watchOS-safe; ActivityKit is iOS-gated).
+      - path: Shared/WidgetShared.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.celiador.companion$(BUNDLE_ID_SUFFIX).watchkitapp

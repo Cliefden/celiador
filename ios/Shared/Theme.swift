@@ -34,7 +34,9 @@ enum Theme {
     static let celadonBright = accentBright
 
     // MARK: Surfaces and text (follow light/dark; navy-tinted in the dark like the icon)
-    #if canImport(UIKit)
+    // watchOS has UIKit but not the dynamic provider or the semantic colours
+    // below; the watch is always dark, so it takes the fixed navy palette.
+    #if canImport(UIKit) && !os(watchOS)
     private static func dynamic(dark: (CGFloat, CGFloat, CGFloat), light: (CGFloat, CGFloat, CGFloat)) -> Color {
         Color(uiColor: UIColor { traits in
             let c = traits.userInterfaceStyle == .dark ? dark : light
