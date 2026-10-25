@@ -1,4 +1,5 @@
 import { getPool } from "../db/pool";
+import { recordFailure } from "../health";
 import type { Session, SessionEvent, SessionOrigin } from "./types";
 
 /**
@@ -103,6 +104,7 @@ async function write(
       await insertMessage(userId, sessionId, event.role, event.text, event.seq, event.at);
     }
   } catch (err) {
+    recordFailure("persist");
     console.error("[persist] session write failed:", err instanceof Error ? err.message : err);
   }
 }
