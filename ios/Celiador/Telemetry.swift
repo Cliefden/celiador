@@ -30,6 +30,20 @@ enum Telemetry {
         case phonePullRequest = "celiador/phonePullRequest"
         /// Sign-in completed. `method`: password, magicLink, github.
         case signedIn = "celiador/signedIn"
+        /// A past chat was opened from Activity. `result`: loaded, failed.
+        case chatOpened = "celiador/chatOpened"
+        /// The New Run sheet loaded its "From your editor" list. `editorRepos`: 0, 1, 2-5, 6+.
+        case newRunOpened = "celiador/newRunOpened"
+    }
+
+    /// Bucket a count so small numbers don't fingerprint anyone.
+    static func bucket(_ n: Int) -> String {
+        switch n {
+        case 0: "0"
+        case 1: "1"
+        case 2...5: "2-5"
+        default: "6+"
+        }
     }
 
     private static let config = TelemetryDeck.Config(appID: appId)

@@ -265,7 +265,10 @@ private struct NewRunView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
-            .task { editorWorkspaces = (try? await Api.shared.editorWorkspaces()) ?? [] }
+            .task {
+                editorWorkspaces = (try? await Api.shared.editorWorkspaces()) ?? []
+                Telemetry.signal(.newRunOpened, ["editorRepos": Telemetry.bucket(editorWorkspaces.count)])
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if composing != nil {

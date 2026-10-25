@@ -155,8 +155,10 @@ struct ChatTranscriptView: View {
     private func load() async {
         do {
             detail = try await Api.shared.getChat(chatId)
+            Telemetry.signal(.chatOpened, ["result": "loaded"])
         } catch {
             self.error = error.localizedDescription
+            Telemetry.signal(.chatOpened, ["result": "failed"])
         }
     }
 }
