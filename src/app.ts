@@ -14,6 +14,7 @@ import { sessionRoutes } from "./sessions/routes";
 import { presenceRoutes } from "./presence/routes";
 import { chatRoutes, profileRoutes } from "./data/routes";
 import { meRoutes } from "./me/routes";
+import { adminRoutes } from "./admin/routes";
 import { accountRoutes } from "./account/routes";
 import { releaseRoutes, updateFeed } from "./releases/routes";
 import { extensionControl } from "./extensions/control";
@@ -107,6 +108,7 @@ export function createApp(): Hono<AppEnv> {
 
   // Signed-in account summary: identity, plan, and current agent usage vs. quota.
   app.route("/api/me", meRoutes());
+  app.route("/api/admin", adminRoutes());
 
   // Account self-service (in-app account deletion — App Store 5.1.1(v)).
   app.route("/api/account", accountRoutes());

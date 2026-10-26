@@ -10,9 +10,14 @@ import { ROOT } from "../config";
  *   - a daily request budget         CELIADOR_AGENT_DAILY_REQUESTS      (default 500)
  *   - a daily input-token budget     CELIADOR_AGENT_DAILY_INPUT_TOKENS  (default 5,000,000)
  *   - a daily output-token budget    CELIADOR_AGENT_DAILY_OUTPUT_TOKENS (default 300,000)
+ * and, across ALL accounts together (so scripted signups can't run the key dry):
+ *   - a daily request cap            CELIADOR_AGENT_GLOBAL_DAILY_REQUESTS      (default 3,000)
+ *   - a daily input-token cap        CELIADOR_AGENT_GLOBAL_DAILY_INPUT_TOKENS  (default 20,000,000)
+ *   - a daily output-token cap       CELIADOR_AGENT_GLOBAL_DAILY_OUTPUT_TOKENS (default 1,000,000)
  * Set any of them to 0 to disable that limit. Days are UTC. Daily usage persists
  * to <CELIADOR_HOME>/data/quota/usage.json so a restart doesn't reset budgets; the
- * per-minute window and concurrency are in-memory only.
+ * per-minute window and concurrency are in-memory only. Finished days are kept
+ * (HISTORY_DAYS) in data/quota/history.json for GET /api/admin/usage.
  */
 
 interface DayUsage {
@@ -25,6 +30,9 @@ interface UsageFile {
   day: string;
   users: Record<string, DayUsage>;
 }
+
+/** Finished days kept for the admin usage view. */
+const HISTORY_DAYS = 90;
 
 function limit(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -39,21 +47,50 @@ const limits = () => ({
   dailyRequests: limit("CELIADOR_AGENT_DAILY_REQUESTS", 500),
   dailyInput: limit("CELIADOR_AGENT_DAILY_INPUT_TOKENS", 5_000_000),
   dailyOutput: limit("CELIADOR_AGENT_DAILY_OUTPUT_TOKENS", 300_000),
+  globalDailyRequests: limit("CELIADOR_AGENT_GLOBAL_DAILY_REQUESTS", 3_000),
+  globalDailyInput: limit("CELIADOR_AGENT_GLOBAL_DAILY_INPUT_TOKENS", 20_000_000),
+  globalDailyOutput: limit("CELIADOR_AGENT_GLOBAL_DAILY_OUTPUT_TOKENS", 1_000_000),
 });
+
+function sum(users: Record<string, DayUsage>): DayUsage {
+  const total = { requests: 0, inputTokens: 0, outputTokens: 0 };
+  for (const u of Object.values(users)) {
+    total.requests += u.requests;
+    total.inputTokens += u.inputTokens;
+    total.outputTokens += u.outputTokens;
+  }
+  return total;
+}
 
 /**
  * The limits currently in force, for the public `/api/limits` endpoint the
  * pricing page reads — the same object `/api/me` returns to a signed-in
  * client, so the site and the app show the same figures (0 = unlimited).
  */
-export function activeLimits(): ReturnType<typeof limits> {
-  return limits();
+export function activeLimits(): UserLimits {
+  return userLimits();
+}
+
+/** The per-account limits only; the global caps stay private (no point telling anyone the headroom). */
+type UserLimits = Pick<ReturnType<typeof limits>, "rpm" | "concurrency" | "dailyRequests" | "dailyInput" | "dailyOutput">;
+function userLimits(): UserLimits {
+  const { rpm, concurrency, dailyRequests, dailyInput, dailyOutput } = limits();
+  return { rpm, concurrency, dailyRequests, dailyInput, dailyOutput };
+}
+
+/** One day of usage as the admin view reports it. */
+export interface DayReport {
+  day: string;
+  total: DayUsage;
+  accounts: number;
+  users: Record<string, DayUsage>;
 }
 
 const SAVE_DEBOUNCE_MS = 2000;
 
 class AgentQuota {
   private file = path.join(ROOT, "data", "quota", "usage.json");
+  private historyFile = path.join(ROOT, "data", "quota", "history.json");
   private usage: UsageFile;
   private minute = new Map<string, number[]>();
   private active = new Map<string, number>();
@@ -63,16 +100,62 @@ class AgentQuota {
     this.usage = { day: today(), users: {} };
     try {
       const loaded = JSON.parse(fs.readFileSync(this.file, "utf8")) as UsageFile;
-      if (loaded?.day === this.usage.day && loaded.users) this.usage = loaded;
+      if (loaded?.users) {
+        if (loaded.day === this.usage.day) this.usage = loaded;
+        else this.archive(loaded); // the daemon was down over midnight: keep that day
+      }
     } catch {
       /* missing or corrupt — start the day fresh */
     }
   }
 
-  private day(userId: string): DayUsage {
+  /** Roll over to a new UTC day, archiving the finished one. */
+  private rollover(): void {
     const d = today();
-    if (this.usage.day !== d) this.usage = { day: d, users: {} };
+    if (this.usage.day === d) return;
+    this.archive(this.usage);
+    this.usage = { day: d, users: {} };
+    this.scheduleSave();
+  }
+
+  private day(userId: string): DayUsage {
+    this.rollover();
     return (this.usage.users[userId] ??= { requests: 0, inputTokens: 0, outputTokens: 0 });
+  }
+
+  private readHistory(): UsageFile[] {
+    try {
+      const h = JSON.parse(fs.readFileSync(this.historyFile, "utf8")) as UsageFile[];
+      return Array.isArray(h) ? h : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Append a finished day to history (one entry per day, newest last, HISTORY_DAYS kept). */
+  private archive(day: UsageFile): void {
+    if (Object.keys(day.users).length === 0) return;
+    try {
+      const history = this.readHistory().filter((h) => h.day !== day.day);
+      history.push(day);
+      history.sort((a, b) => a.day.localeCompare(b.day));
+      fs.mkdirSync(path.dirname(this.historyFile), { recursive: true });
+      const tmp = `${this.historyFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(history.slice(-HISTORY_DAYS)));
+      fs.renameSync(tmp, this.historyFile);
+    } catch (err) {
+      console.error("[quota] history save failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Today (live) plus up to `days - 1` finished days, newest first. */
+  report(days: number): DayReport[] {
+    this.rollover();
+    const all = [...this.readHistory(), this.usage].filter((d, i, arr) => arr.findIndex((x) => x.day === d.day) === i);
+    return all
+      .sort((a, b) => b.day.localeCompare(a.day))
+      .slice(0, Math.max(1, days))
+      .map((d) => ({ day: d.day, total: sum(d.users), accounts: Object.keys(d.users).length, users: d.users }));
   }
 
   /**
@@ -93,6 +176,15 @@ class AgentQuota {
     }
     if (l.dailyOutput && used.outputTokens >= l.dailyOutput) {
       return { error: "Daily output-token budget used up.", retryAfter: secondsToMidnight };
+    }
+    const total = sum(this.usage.users);
+    if (
+      (l.globalDailyRequests && total.requests >= l.globalDailyRequests) ||
+      (l.globalDailyInput && total.inputTokens >= l.globalDailyInput) ||
+      (l.globalDailyOutput && total.outputTokens >= l.globalDailyOutput)
+    ) {
+      console.warn(`[quota] global daily cap reached (${total.requests} requests, ${total.inputTokens} in, ${total.outputTokens} out)`);
+      return { error: "Celiador's agent capacity for today is used up. It resets at midnight UTC.", retryAfter: secondsToMidnight };
     }
     if (l.concurrency && (this.active.get(userId) ?? 0) >= l.concurrency) {
       return { error: "Too many concurrent agent requests.", retryAfter: 5 };
@@ -126,12 +218,12 @@ class AgentQuota {
    * the daily counters reset (next UTC midnight). Pure: unlike {@link acquire},
    * it never mutates counters or inserts a user entry — safe for a `/api/me` poll.
    */
-  snapshot(userId: string): { usage: DayUsage; limits: ReturnType<typeof limits>; resetsAt: string } {
-    const d = today();
-    if (this.usage.day !== d) this.usage = { day: d, users: {} };
+  snapshot(userId: string): { usage: DayUsage; limits: UserLimits; resetsAt: string } {
+    this.rollover();
+    const d = this.usage.day;
     const used = this.usage.users[userId] ?? { requests: 0, inputTokens: 0, outputTokens: 0 };
     const resetsAt = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString();
-    return { usage: { ...used }, limits: limits(), resetsAt };
+    return { usage: { ...used }, limits: userLimits(), resetsAt };
   }
 
   /** Record token usage reported by the upstream stream. */
