@@ -14,14 +14,23 @@ The daemon's own GitHub identity. With it installed on an organization:
 3. GitHub sends you back to `/api/github/app/setup`. The daemon exchanges the one-time code for the app's id, private key and webhook secret and stores them in `data/github-app.json` (mode 0600). Nothing is typed or pasted.
 4. Click **install it on the organization** and choose the repositories agents may work on.
 
-Permissions requested: issues (write), pull requests (write), contents (write), metadata (read). Events: `issues`, `issue_comment`, `pull_request`.
+Permissions requested: issues (write), pull requests (write), contents (write), metadata (read), checks (read), commit statuses (read). Events: `issues`, `issue_comment`, `pull_request`, `check_suite`, `status`.
+
+### Checks and statuses (added 2026-10)
+
+The queue's "Ready to merge" cards show a pull request's CI state, which needs **checks: read** and **commit statuses: read** plus the `check_suite` and `status` events. An app created before this change doesn't have them:
+
+1. Open the app's settings (`https://github.com/organizations/<org>/settings/apps/<slug>/permissions`), add *Checks: Read-only* and *Commit statuses: Read-only*, subscribe to *Check suite* and *Status*, and save.
+2. GitHub then asks the **organization owner to approve the new permissions on the installation** (a banner under the org's *Settings → GitHub Apps → Celiador*). Until they approve, everything else keeps working: the daemon asks for an installation token with checks/statuses, gets a 422, retries without them, and the checks badge reads `unknown`.
 
 ## What changes afterwards
 
 | Before | After |
 |---|---|
 | Per-repo webhook, `CELIADOR_GITHUB_WEBHOOK_SECRET` | The app's webhook; both secrets stay accepted, so old hooks can be removed at leisure |
-| Editor posts the "picked up" comment via the developer's gh token | Daemon posts it as the app at dispatch; the editor is told (`commented: true`) and skips |
+| Editor posts the "picked up" comment via the developer's gh token | Daemon posts it as the app when the editor reports `running` (naming the machine, with "Watch the run" / "Open the queue" links to `/api/open/*`) and "Pull request opened: <url>" on the first `pr-open`; the editor is told at dispatch (`commented: true`) and skips |
+| PR cards show what the editor reported | Size, mergeable and CI checks refreshed from GitHub (on pr-open, on PR/CI webhooks, and when a listing finds them older than 60 s) |
+| Merging a task's PR needs the editor online | `POST /api/tasks/:id/merge` merges as the app; the editor is only the fallback |
 | Cloud runs: public repos only | Private repos clone with an installation token (never written to disk or logs) |
 | Task `merged` only via the phone's merge call | Also when the PR is merged on GitHub |
 

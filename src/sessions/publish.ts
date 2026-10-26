@@ -2,6 +2,7 @@ import { sessionStores } from "./instance";
 import { sessionBus } from "./bus";
 import { notifySession } from "./notify";
 import { persistSession } from "./persist";
+import { taskSessionEvent } from "../tasks/live";
 import type { SessionEvent, SessionEventInput } from "./types";
 
 /**
@@ -21,6 +22,12 @@ export function publishSessionEvent(userId: string, sessionId: string, input: Se
         console.error("[notify] push failed:", err instanceof Error ? err.message : err)
       );
       persistSession(userId, session, event); // durable mirror → Supabase (no-op if unconfigured; serialized, never throws)
+    }
+    // An agent task's run: its activity line and "needs you" state follow the session.
+    try {
+      taskSessionEvent(userId, sessionId, event);
+    } catch (err) {
+      console.error("[tasks] live update failed:", err instanceof Error ? err.message : err);
     }
   }
   return event;

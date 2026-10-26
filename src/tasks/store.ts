@@ -33,6 +33,33 @@ export interface TaskIssue {
   readonly url: string;
 }
 
+/** What the linked session is blocked on, while it waits for the user. */
+export interface TaskAwaiting {
+  readonly kind: "permission" | "question";
+  /** Pass to the session's approve/reject/answer endpoints. */
+  readonly requestId: string;
+  /** permission: the approval's title or command; question: the prompt. */
+  readonly text: string;
+  readonly preview?: string;
+  readonly choices?: string[];
+}
+
+export type TaskChecks = "passing" | "failing" | "pending" | "none" | "unknown";
+
+/** The task's pull request as last seen (editor report, refreshed from GitHub with the App). */
+export interface TaskPullRequest {
+  readonly number: number;
+  readonly url: string;
+  readonly additions?: number;
+  readonly deletions?: number;
+  readonly changedFiles?: number;
+  readonly checks?: TaskChecks;
+  /** GitHub's mergeable flag (false = conflicts); absent while GitHub computes it. */
+  readonly mergeable?: boolean;
+  /** When the daemon last refreshed it. */
+  readonly updatedAt: string;
+}
+
 export interface Task {
   readonly id: string;
   readonly repo: TaskRepo;
@@ -49,6 +76,37 @@ export interface Task {
   error?: string;
   readonly createdAt: string;
   updatedAt: string;
+  /** Where it runs: "mac" = an editor took it at dispatch. */
+  runner?: "mac" | "cloud";
+  /** The editor's computer name, as it reported it. */
+  machine?: string;
+  /** First time the state became `running`. */
+  startedAt?: string;
+  /** When it reached pr-open / failed / merged / cancelled (cleared by a follow-up run). */
+  finishedAt?: string;
+  /** Latest one-line activity of the linked session; in memory only, never written to disk. */
+  activity?: string;
+  awaiting?: TaskAwaiting;
+  pr?: TaskPullRequest;
+  /** Daemon-internal: which issue comments the App already posted. Stripped from API output. */
+  posted?: { pickedUp?: boolean; prOpened?: boolean };
+}
+
+/** Fields a task update may set; an explicit `undefined` removes the field. */
+export type TaskPatch = Partial<
+  Pick<Task, "state" | "sessionId" | "prUrl" | "error" | "runner" | "machine" | "startedAt" | "finishedAt" | "activity" | "awaiting" | "pr" | "posted">
+>;
+
+/** A task as clients see it (internal bookkeeping removed). */
+export function publicTask(task: Task): Omit<Task, "posted"> {
+  const { posted: _posted, ...rest } = task;
+  return rest;
+}
+
+/** `https://github.com/<owner>/<repo>/pull/<n>` → n. */
+export function prNumberFromUrl(url: string | undefined): number | undefined {
+  const m = url ? /\/pull\/(\d{1,9})(?:[/?#]|$)/.exec(url) : null;
+  return m ? Number(m[1]) : undefined;
 }
 
 /** `https://github.com/<owner>/<repo>.git`, lower-cased for matching. */
@@ -155,16 +213,45 @@ export class TaskStore {
     return task;
   }
 
-  update(id: string, patch: Partial<Pick<Task, "state" | "sessionId" | "prUrl" | "error">>): Task | undefined {
+  /**
+   * Patch a task and persist it. A state change also keeps the timeline right:
+   * `running` stamps startedAt (once) and clears finishedAt (a follow-up turn
+   * after pr-open); reaching a terminal state stamps finishedAt and drops the
+   * live fields (activity, awaiting).
+   */
+  update(id: string, patch: TaskPatch): Task | undefined {
     const task = this.get(id);
     if (!task) return undefined;
-    Object.assign(task, patch, { updatedAt: new Date().toISOString() });
+    const now = new Date().toISOString();
+    const next: TaskPatch = { ...patch };
+    if (patch.state === "running") {
+      if (!task.startedAt && !("startedAt" in patch)) next.startedAt = now;
+      next.finishedAt = undefined;
+    } else if (patch.state && TERMINAL_STATES.has(patch.state)) {
+      if ((task.state !== patch.state || !task.finishedAt) && !("finishedAt" in patch)) next.finishedAt = now;
+      next.activity = undefined;
+      next.awaiting = undefined;
+    }
+    for (const [key, value] of Object.entries(next)) {
+      if (value === undefined) delete (task as unknown as Record<string, unknown>)[key];
+      else (task as unknown as Record<string, unknown>)[key] = value;
+    }
+    task.updatedAt = now;
     this.save();
     return task;
   }
 
+  /** The live activity line: memory only (it changes many times a second while a run streams). */
+  setActivity(id: string, activity: string | undefined): Task | undefined {
+    const task = this.get(id);
+    if (!task) return undefined;
+    if (activity) task.activity = activity;
+    else delete task.activity;
+    return task;
+  }
+
   private save(): void {
-    writeJson(this.file, this.tasks);
+    writeJson(this.file, this.tasks.map(({ activity: _activity, ...rest }) => rest));
   }
 }
 

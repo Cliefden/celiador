@@ -21,6 +21,7 @@ import { extensionControl } from "./extensions/control";
 import { taskRoutes } from "./tasks/routes";
 import { githubWebhook } from "./tasks/github";
 import { githubAppRoutes } from "./github/app";
+import { openRoutes } from "./open/routes";
 
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
@@ -128,6 +129,8 @@ export function createApp(): Hono<AppEnv> {
   app.post("/api/github/webhook", githubWebhook);
   // The Celiador GitHub App's one-time setup (manifest flow); see github/app.ts.
   app.route("/api/github/app", githubAppRoutes());
+  // Deep-link bounce pages for the GitHub comment's links (no auth, no task data).
+  app.route("/api/open", openRoutes());
 
   app.notFound((c) => c.json({ error: "Unknown endpoint" }, 404));
   // Log the detail server-side; never leak raw (e.g. pg) error text to clients.

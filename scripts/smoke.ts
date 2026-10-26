@@ -33,7 +33,15 @@ async function main(): Promise<void> {
 	// Stub the Anthropic upstream the gateway forwards to.
 	let gwBody: Record<string, unknown> | null = null;
 	const realFetch = globalThis.fetch;
-	globalThis.fetch = (async (url: unknown, init: { body?: string } = {}) => {
+	// GitHub's REST API, stubbed per section (never the real network): 404 unless a test installs a handler.
+	type GhCall = { method: string; path: string; body?: Record<string, unknown> };
+	let ghHandler: (call: GhCall) => { status: number; json?: unknown } = () => ({ status: 404, json: { message: "Not Found" } });
+	globalThis.fetch = (async (url: unknown, init: { body?: string; method?: string } = {}) => {
+		if (String(url).startsWith("https://api.github.com/")) {
+			const call: GhCall = { method: init.method ?? "GET", path: String(url).slice("https://api.github.com".length), body: init.body ? JSON.parse(init.body) : undefined };
+			const r = ghHandler(call);
+			return new Response(JSON.stringify(r.json ?? {}), { status: r.status, headers: { "content-type": "application/json" } });
+		}
 		if (String(url).includes("/v1/messages")) {
 			gwBody = JSON.parse(init.body ?? "{}");
 			const sse = `event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}\n\n`
@@ -414,6 +422,205 @@ async function main(): Promise<void> {
 	const newPage = await app.request("http://localhost/api/github/app/new");
 	ok("setup page renders the manifest form when no app is stored", newPage.status === 200 && /organizations\/Cliefden\/settings\/apps\/new\?state=/.test(await newPage.text()));
 	ok("setup callback without a known state → 400", (await app.request("http://localhost/api/github/app/setup?code=x&state=unknown")).status === 400);
+	ok("manifest: checks + statuses read, check_suite + status events", manifest.default_permissions.checks === "read" && manifest.default_permissions.statuses === "read" && manifest.default_events.includes("check_suite") && manifest.default_events.includes("status"), JSON.stringify(manifest.default_permissions));
+
+	// ── Agents UI: task fields, live session state, merge / follow-up, deep-link pages ──
+	console.log("\n== agents ui ==");
+	const AREPO = "https://github.com/Cliefden/agents-repo.git";
+	const aGhRepo = { name: "agents-repo", owner: { login: "Cliefden" }, clone_url: AREPO };
+	await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO }) });
+	type ATask = { id: string; state: string; title: string; branch: string; source: string; runner?: string; machine?: string; startedAt?: string; finishedAt?: string; activity?: string; prUrl?: string; issue?: { number: number }; posted?: unknown; awaiting?: { kind: string; requestId: string; text: string; preview?: string; choices?: string[] }; pr?: { number: number; url: string; additions?: number; deletions?: number; changedFiles?: number; checks?: string; mergeable?: boolean; updatedAt: string } };
+	const getTask = async (id: string) => ((await (await app.request(T, { headers: authH })).json()) as { tasks: ATask[] }).tasks.find((t) => t.id === id);
+	const postStatus = (id: string, body: unknown) => app.request(`${T}/${id}/status`, { method: "POST", headers: authH, body: JSON.stringify(body) });
+	const tick = (ms = 60) => new Promise((r) => setTimeout(r, ms));
+
+	// An editor with the repo open, to take dispatched tasks.
+	const aAbort = new AbortController();
+	const aStream = await app.request("http://localhost/api/presence/commands", { headers: authH, signal: aAbort.signal } as RequestInit);
+	const aCmds: Array<{ kind?: string; taskId?: string; commented?: boolean }> = [];
+	const aReader = (async () => {
+		const reader = aStream.body!.getReader();
+		const decoder = new TextDecoder();
+		let buf = "";
+		for (;;) {
+			const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
+			if (done) return;
+			buf += decoder.decode(value, { stream: true });
+			const lines = buf.split("\n");
+			buf = lines.pop() ?? "";
+			for (const line of lines) if (line.startsWith("data:") && line.slice(5).trim()) aCmds.push(JSON.parse(line.slice(5)));
+		}
+	})();
+	await tick(30);
+	await app.request("http://localhost/api/presence/workspaces", { method: "PUT", headers: authH, body: JSON.stringify({ clientId: "ed-agents", workspaces: [{ name: "agents-repo", remoteUrl: AREPO }] }) });
+
+	// Manual create with an issue (the editor's "Run an issue…" picker).
+	const issueUrl = (n: number, repo = "agents-repo") => `https://github.com/Cliefden/${repo}/issues/${n}`;
+	const otherRepo = await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO, issue: { number: 11, title: "Relay drops frames", url: issueUrl(11, "smoke-repo") } }) });
+	ok("manual create: issue of another repo → 400", otherRepo.status === 400, `got ${otherRepo.status}`);
+	const wrongNumber = await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO, issue: { number: 11, title: "x", url: issueUrl(12) } }) });
+	ok("manual create: issue url/number mismatch → 400", wrongNumber.status === 400, `got ${wrongNumber.status}`);
+	const withIssue = await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO, issue: { number: 11, title: "Relay drops frames", url: issueUrl(11) }, details: "Frames vanish under load." }) });
+	const at = ((await withIssue.json()) as { task: ATask }).task;
+	ok("manual create with an issue → 201, title from the issue, issue branch", withIssue.status === 201 && at.title === "Relay drops frames" && at.issue?.number === 11 && at.branch === "11-relay-drops-frames" && at.source === "manual", JSON.stringify(at));
+	const again = await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO, issue: { number: 11, title: "Relay drops frames", url: issueUrl(11) } }) });
+	const againBody = (await again.json()) as { task?: ATask; deduped?: boolean };
+	ok("same issue again → the open task (deduped)", again.status === 200 && againBody.deduped === true && againBody.task?.id === at.id, JSON.stringify(againBody));
+	await tick();
+	const aStart = aCmds.find((c) => c.kind === "start-task" && c.taskId === at.id);
+	ok("dispatched to the editor, commented=false without the App", !!aStart && aStart.commented === false, JSON.stringify(aCmds));
+	ok("dispatch sets runner mac", (await getTask(at.id))?.runner === "mac");
+
+	// The editor's run session, linked to the task.
+	const aSess = ((await (await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ title: at.title, origin: "editor", runner: "editor", taskId: at.id }) })).json()) as { session: { id: string } }).session.id;
+	const ev = (events: unknown[]) => app.request(`http://localhost/api/sessions/${aSess}/events`, { method: "POST", headers: authH, body: JSON.stringify(events) });
+
+	// Follow-up / merge before there's a runner or a PR.
+	const noRunner = await app.request(`${T}/${at.id}/followup`, { method: "POST", headers: authH, body: JSON.stringify({ text: "also add a test" }) });
+	ok("followup with the editor offline → 409", noRunner.status === 409 && /editor offline/.test(((await noRunner.json()) as { error?: string }).error ?? ""), `got ${noRunner.status}`);
+	ok("followup without text → 400", (await app.request(`${T}/${at.id}/followup`, { method: "POST", headers: authH, body: JSON.stringify({ text: " " }) })).status === 400);
+	ok("merge before a PR → 409", (await app.request(`${T}/${at.id}/merge`, { method: "POST", headers: authH, body: "{}" })).status === 409);
+
+	// Status with machine: startedAt once, no finishedAt.
+	const runRes = ((await (await postStatus(at.id, { state: "running", sessionId: aSess, machine: "Stefan's MacBook Pro\n" })).json()) as { task: ATask }).task;
+	ok("running + machine → machine (one line), startedAt set, no finishedAt", runRes.machine === "Stefan's MacBook Pro" && !!runRes.startedAt && !runRes.finishedAt && runRes.posted === undefined, JSON.stringify(runRes));
+	const startedAt = runRes.startedAt;
+
+	// Session events → activity / awaiting on the task.
+	await ev([{ kind: "state", state: "running" }, { kind: "activity", text: "Reading   src/relay.ts\n" }]);
+	ok("session activity → task.activity (one line)", (await getTask(at.id))?.activity === "Reading src/relay.ts");
+	await ev([{ kind: "approval", requestId: "r1", approvalKind: "bash", title: "Run command: npm test -- relay", preview: "npm test -- relay" }, { kind: "state", state: "awaiting" }]);
+	const awaitingP = (await getTask(at.id))?.awaiting;
+	ok("approval → awaiting permission with requestId, text, preview", awaitingP?.kind === "permission" && awaitingP.requestId === "r1" && awaitingP.text === "Run command: npm test -- relay" && awaitingP.preview === "npm test -- relay", JSON.stringify(awaitingP));
+	await ev([{ kind: "state", state: "running" }]);
+	ok("session back to running → awaiting cleared", (await getTask(at.id))?.awaiting === undefined);
+	await ev([{ kind: "question", requestId: "q1", prompt: "Which port?", choices: ["4661", "4671"] }, { kind: "state", state: "awaiting" }]);
+	const awaitingQ = (await getTask(at.id))?.awaiting;
+	ok("question → awaiting question with choices", awaitingQ?.kind === "question" && awaitingQ.text === "Which port?" && awaitingQ.choices?.length === 2, JSON.stringify(awaitingQ));
+	await ev([{ kind: "state", state: "done" }]);
+	const doneTask = await getTask(at.id);
+	ok("session done → awaiting and activity cleared", doneTask?.awaiting === undefined && doneTask?.activity === undefined, JSON.stringify(doneTask));
+	const onDisk = JSON.parse(fs.readFileSync(path.join(HOME, "data", "tasks", "smoke-user.json"), "utf8")) as ATask[];
+	await ev([{ kind: "activity", text: "Still going" }]);
+	const onDisk2 = JSON.parse(fs.readFileSync(path.join(HOME, "data", "tasks", "smoke-user.json"), "utf8")) as ATask[];
+	ok("activity is never written to disk", onDisk2.every((t) => t.activity === undefined) && onDisk.length === onDisk2.length);
+
+	// pr-open with pr numbers: finishedAt, pr fields; running again clears finishedAt.
+	const prOpen = ((await (await postStatus(at.id, { state: "pr-open", prUrl: "https://github.com/Cliefden/agents-repo/pull/8", pr: { number: 8, additions: 64, deletions: 11, changedFiles: 3 } })).json()) as { task: ATask }).task;
+	ok("pr-open + pr → pr {number,url,+/-,files}, checks unknown, finishedAt", prOpen.pr?.number === 8 && prOpen.pr.url === "https://github.com/Cliefden/agents-repo/pull/8" && prOpen.pr.additions === 64 && prOpen.pr.deletions === 11 && prOpen.pr.changedFiles === 3 && prOpen.pr.checks === "unknown" && !!prOpen.pr.updatedAt && !!prOpen.finishedAt && prOpen.activity === undefined, JSON.stringify(prOpen));
+	const badPr = ((await (await postStatus(at.id, { state: "pr-open", pr: { number: "8", additions: -1 } })).json()) as { task: ATask }).task;
+	ok("pr-open re-sent (no prUrl, bad pr values) → idempotent, keeps the PR", badPr.state === "pr-open" && badPr.pr?.number === 8 && badPr.pr.additions === 64 && badPr.finishedAt === prOpen.finishedAt, JSON.stringify(badPr.pr));
+	const followRun = ((await (await postStatus(at.id, { state: "running" })).json()) as { task: ATask }).task;
+	ok("running after pr-open (follow-up) → finishedAt cleared, startedAt kept", !followRun.finishedAt && followRun.startedAt === startedAt && followRun.pr?.number === 8, JSON.stringify(followRun));
+	await postStatus(at.id, { state: "pr-open", prUrl: "https://github.com/Cliefden/agents-repo/pull/8" });
+	ok("merge with no App and the editor offline → 409 with the reason", await (async () => {
+		const r = await app.request(`${T}/${at.id}/merge`, { method: "POST", headers: authH, body: "{}" });
+		return r.status === 409 && ((await r.json()) as { error?: string }).error === "editor offline and the GitHub App isn't installed on this repo";
+	})());
+	ok("merge with a bad method → 400", (await app.request(`${T}/${at.id}/merge`, { method: "POST", headers: authH, body: JSON.stringify({ method: "ff" }) })).status === 400);
+
+	// The editor attaches as the session's runner: follow-up + merge are relayed to it.
+	const rAbort = new AbortController();
+	const rStream = await app.request(`http://localhost/api/sessions/${aSess}/commands`, { headers: authH, signal: rAbort.signal } as RequestInit);
+	const rCmds: Array<{ kind?: string; requestId?: string; text?: string; head?: string; method?: string }> = [];
+	const rReader = (async () => {
+		const reader = rStream.body!.getReader();
+		const decoder = new TextDecoder();
+		let buf = "";
+		for (;;) {
+			const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
+			if (done) return;
+			buf += decoder.decode(value, { stream: true });
+			const lines = buf.split("\n");
+			buf = lines.pop() ?? "";
+			for (const line of lines) {
+				if (!line.startsWith("data:") || !line.slice(5).trim()) continue;
+				const cmd = JSON.parse(line.slice(5));
+				rCmds.push(cmd);
+				if (cmd.kind === "git.merge") {
+					await app.request(`http://localhost/api/sessions/${aSess}/events`, { method: "POST", headers: authH, body: JSON.stringify({ kind: "fs.result", requestId: cmd.requestId, ok: true, merged: true, sha: "feed01", url: "https://github.com/Cliefden/agents-repo/pull/8" }) });
+				}
+			}
+		}
+	})();
+	await tick(30);
+	const fu = await app.request(`${T}/${at.id}/followup`, { method: "POST", headers: authH, body: JSON.stringify({ text: "  also add a test  " }) });
+	await tick(20);
+	ok("followup → 200, instruct relayed to the run's session", fu.status === 200 && rCmds.some((c) => c.kind === "instruct" && c.text === "also add a test"), JSON.stringify(rCmds));
+	const mr = await app.request(`${T}/${at.id}/merge`, { method: "POST", headers: authH, body: JSON.stringify({ method: "squash" }) });
+	const mrBody = (await mr.json()) as { ok?: boolean; merged?: boolean; sha?: string; url?: string };
+	ok("merge without the App → relayed git.merge with head = the task branch", mr.status === 200 && mrBody.merged === true && mrBody.sha === "feed01" && rCmds.some((c) => c.kind === "git.merge" && c.head === at.branch && c.method === "squash"), JSON.stringify({ mrBody, rCmds }));
+	const mergedA = await getTask(at.id);
+	ok("merged task: state merged, finishedAt set", mergedA?.state === "merged" && !!mergedA.finishedAt, JSON.stringify(mergedA));
+	ok("merge again → 409", (await app.request(`${T}/${at.id}/merge`, { method: "POST", headers: authH, body: "{}" })).status === 409);
+	ok("a late running report on a merged task → 409", (await postStatus(at.id, { state: "running" })).status === 409);
+	rAbort.abort();
+	await rReader;
+
+	// With the GitHub App: comments at running / pr-open, PR refresh with checks, App merge.
+	const ghCalls: GhCall[] = [];
+	ghHandler = (call) => {
+		ghCalls.push(call);
+		const base = "/repos/Cliefden/agents-repo";
+		if (call.path === `${base}/installation`) return { status: 200, json: { id: 7 } };
+		if (call.path === "/app/installations/7/access_tokens") {
+			// An installation that hasn't approved checks/statuses read refuses the request.
+			const perms = (call.body?.permissions ?? {}) as Record<string, string>;
+			return perms.checks ? { status: 422, json: { message: "The permissions requested are not granted to this installation." } } : { status: 201, json: { token: "ghs_smoke" } };
+		}
+		if (call.path === base) return { status: 200, json: { default_branch: "develop" } };
+		if (call.path.startsWith(`${base}/issues/`) && call.method === "POST") return { status: 201, json: { id: 1 } };
+		if (call.path === `${base}/pulls/9`) return { status: 200, json: { number: 9, html_url: "https://github.com/Cliefden/agents-repo/pull/9", additions: 5, deletions: 1, changed_files: 2, mergeable: true, merged: false, head: { sha: "deadbeef" } } };
+		if (call.path.startsWith(`${base}/commits/deadbeef/check-runs`)) return { status: 200, json: { total_count: 1, check_runs: [{ status: "completed", conclusion: "success" }] } };
+		if (call.path === `${base}/commits/deadbeef/status`) return { status: 200, json: { state: "pending", total_count: 0, statuses: [] } };
+		if (call.path === `${base}/pulls/9/merge` && call.method === "PUT") return { status: 200, json: { merged: true, sha: "m1" } };
+		return { status: 404, json: { message: "Not Found" } };
+	};
+	resetGitHubAppForTests(smokeApp);
+	const appTask = ((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO, issue: { number: 12, title: "Queue shows stale checks", url: issueUrl(12) } }) })).json()) as { task: ATask }).task;
+	await tick();
+	ok("with the App, dispatch tells the editor the daemon will comment", aCmds.find((c) => c.kind === "start-task" && c.taskId === appTask.id)?.commented === true, JSON.stringify(aCmds));
+	ok("no comment at dispatch any more", !ghCalls.some((c) => c.path.includes("/issues/12/comments")));
+	await postStatus(appTask.id, { state: "running", machine: "Stefan's MacBook Pro" });
+	await tick();
+	await postStatus(appTask.id, { state: "running", machine: "Stefan's MacBook Pro" });
+	await tick();
+	const pickedUp = ghCalls.filter((c) => c.path.endsWith("/issues/12/comments")).map((c) => String(c.body?.body));
+	ok("token request retried without checks/statuses after a 422", ghCalls.filter((c) => c.path.endsWith("/access_tokens")).length === 2);
+	const expectedComment = `**Picked up.** Running on Stefan's MacBook Pro in its own worktree, \`${appTask.branch}\`.\n\nI'll open a pull request against \`develop\` and link it here. Approvals and questions go to the Celiador queue.\n\n[Watch the run](https://smoke.test/api/open/task/${appTask.id}) · [Open the queue](https://smoke.test/api/open/queue)`;
+	ok("running → one 'Picked up' comment with machine, branch, default branch and links", pickedUp.length === 1 && pickedUp[0] === expectedComment, JSON.stringify(pickedUp));
+	await postStatus(appTask.id, { state: "pr-open", prUrl: "https://github.com/Cliefden/agents-repo/pull/9" });
+	await tick();
+	await postStatus(appTask.id, { state: "pr-open", prUrl: "https://github.com/Cliefden/agents-repo/pull/9" });
+	await tick();
+	const prComments = ghCalls.filter((c) => c.path.endsWith("/issues/12/comments")).map((c) => String(c.body?.body)).slice(1);
+	ok("pr-open → one 'Pull request opened' comment", prComments.length === 1 && prComments[0] === "Pull request opened: https://github.com/Cliefden/agents-repo/pull/9", JSON.stringify(prComments));
+	const refreshed = await getTask(appTask.id);
+	ok("pr-open → PR refreshed from GitHub (size, mergeable, checks passing)", refreshed?.pr?.number === 9 && refreshed.pr.additions === 5 && refreshed.pr.changedFiles === 2 && refreshed.pr.mergeable === true && refreshed.pr.checks === "passing", JSON.stringify(refreshed?.pr));
+	const ciHook = (await (await hook("check_suite", { action: "completed", repository: aGhRepo, check_suite: { head_branch: appTask.branch, pull_requests: [] } }, "appsec")).json()) as { refreshed?: string[] };
+	ok("check_suite completed on the task's branch → its PR is refreshed", ciHook.refreshed?.includes(appTask.id) === true, JSON.stringify(ciHook));
+	const statusHook = (await (await hook("status", { repository: aGhRepo, sha: "deadbeef", branches: [{ name: appTask.branch }] }, "appsec")).json()) as { refreshed?: string[] };
+	ok("status event on the task's branch → refreshed", statusHook.refreshed?.includes(appTask.id) === true, JSON.stringify(statusHook));
+	const syncHook = (await (await hook("pull_request", { action: "synchronize", repository: aGhRepo, pull_request: { number: 9, head: { ref: appTask.branch } } }, "appsec")).json()) as { refreshed?: string[] };
+	ok("pull_request synchronize → refreshed", syncHook.refreshed?.includes(appTask.id) === true, JSON.stringify(syncHook));
+	await tick();
+	const appMerge = await app.request(`${T}/${appTask.id}/merge`, { method: "POST", headers: authH, body: JSON.stringify({ method: "rebase" }) });
+	const appMergeBody = (await appMerge.json()) as { merged?: boolean; sha?: string; url?: string };
+	const putCall = ghCalls.find((c) => c.method === "PUT");
+	ok("merge with the App → PUT pulls/9/merge as the App, task merged", appMerge.status === 200 && appMergeBody.merged === true && appMergeBody.sha === "m1" && appMergeBody.url === "https://github.com/Cliefden/agents-repo/pull/9" && putCall?.body?.merge_method === "rebase" && (await getTask(appTask.id))?.state === "merged", JSON.stringify({ appMergeBody, putCall }));
+	ok("internal comment bookkeeping is not in the API", (await getTask(appTask.id))?.posted === undefined);
+	resetGitHubAppForTests();
+	ghHandler = () => ({ status: 404, json: { message: "Not Found" } });
+	aAbort.abort();
+	await aReader;
+
+	// Deep-link pages for the comment's links: no auth, no data, bounce to the app.
+	const openTask = await app.request(`http://localhost/api/open/task/${appTask.id}`);
+	const openTaskHtml = await openTask.text();
+	ok("GET /api/open/task/:id (no auth) → page bouncing to celiador://task/<id>", openTask.status === 200 && openTaskHtml.includes(`celiador://task/${appTask.id}`) && openTaskHtml.includes("Open in Celiador") && !openTaskHtml.includes(appTask.title), openTaskHtml.slice(0, 200));
+	ok("open page for a non-uuid id → 404", (await app.request("http://localhost/api/open/task/not-a-uuid")).status === 404);
+	const openQueue = await app.request("http://localhost/api/open/queue");
+	ok("GET /api/open/queue → page bouncing to celiador://queue", openQueue.status === 200 && (await openQueue.text()).includes("celiador://queue"));
 
 	// ── Cloud-runner sandbox (pure parts; isolation itself: scripts/sandbox-check.ts) ──
 	console.log("\n== sandbox ==");

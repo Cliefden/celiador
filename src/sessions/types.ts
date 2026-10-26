@@ -96,7 +96,9 @@ export type SessionCommand =
   | { kind: "git.revert"; requestId: string; paths: string[] }
   | { kind: "git.push"; requestId: string }
   | { kind: "git.pr"; requestId: string; title: string; body?: string; base?: string }
-  | { kind: "git.merge"; requestId: string; method?: "merge" | "squash" | "rebase" };
+  // head: merge the open pull request for this branch instead of the run worktree's HEAD
+  // (an agent task's merge, possibly after its run finished).
+  | { kind: "git.merge"; requestId: string; method?: "merge" | "squash" | "rebase"; head?: string };
 
 /** Any `fs.*` command the daemon can round-trip to the runner. */
 export type FsCommand = Extract<SessionCommand, { kind: "fs.list" | "fs.read" | "fs.write" }>;

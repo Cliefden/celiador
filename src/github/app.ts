@@ -66,6 +66,7 @@ function saveApp(app: GitHubAppCredentials): void {
 /** Test seam: forget the stored app (and optionally install a fake one). */
 export function resetGitHubAppForTests(app?: GitHubAppCredentials): void {
   cached = app ?? null;
+  tokens.clear();
 }
 
 function b64url(data: Buffer | string): string {
@@ -98,10 +99,17 @@ async function api(token: string, method: string, pathname: string, body?: unkno
 /** Installation tokens by repo (`owner/name`), good for an hour; reused for 50 minutes. */
 const tokens = new Map<string, { token: string; expiresAt: number }>();
 
+const BASE_PERMISSIONS = { contents: "write", issues: "write", pull_requests: "write", metadata: "read" };
+/** Read-only CI state for the queue's checks badge. Added later: older installations may not have approved it. */
+const CI_PERMISSIONS = { checks: "read", statuses: "read" };
+
 /**
  * A short-lived installation token for `repo`, or null when the app is not set
  * up or not installed on that repo. The token can read contents and write
- * issues / pull requests on the repos the installation covers, nothing else.
+ * issues / pull requests on the repos the installation covers, plus read
+ * checks and commit statuses when the installation has approved those (an
+ * installation that hasn't answers 422 to asking — then the token goes without,
+ * and the checks badge reads "unknown").
  */
 export async function installationToken(repo: Pick<TaskRepo, "owner" | "name">): Promise<string | null> {
   const app = githubApp();
@@ -112,21 +120,34 @@ export async function installationToken(repo: Pick<TaskRepo, "owner" | "name">):
   const jwt = appJwt(app);
   const inst = await api(jwt, "GET", `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/installation`);
   if (inst.status !== 200 || typeof inst.json?.id !== "number") return null;
-  const created = await api(jwt, "POST", `/app/installations/${inst.json.id}/access_tokens`, {
-    repositories: [repo.name],
-    permissions: { contents: "write", issues: "write", pull_requests: "write", metadata: "read" },
-  });
+  const request = (permissions: Record<string, string>) =>
+    api(jwt, "POST", `/app/installations/${inst.json.id}/access_tokens`, { repositories: [repo.name], permissions });
+  let created = await request({ ...BASE_PERMISSIONS, ...CI_PERMISSIONS });
+  if (created.status === 422) created = await request(BASE_PERMISSIONS);
   if (created.status !== 201 || typeof created.json?.token !== "string") return null;
   tokens.set(key, { token: created.json.token, expiresAt: Date.now() + 50 * 60_000 });
   return created.json.token;
 }
 
+/**
+ * One REST call on `repo` as the app (installation token). Null when the app
+ * isn't set up or isn't installed there — callers fall back to the editor.
+ */
+export async function appRequest(
+  repo: Pick<TaskRepo, "owner" | "name">,
+  method: string,
+  pathname: string,
+  body?: unknown,
+): Promise<{ status: number; json: any } | null> {
+  const token = await installationToken(repo);
+  if (!token) return null;
+  return api(token, method, `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${pathname}`, body);
+}
+
 /** Comment on an issue as the app. False when the app is absent or not installed there. */
 export async function commentOnIssue(repo: Pick<TaskRepo, "owner" | "name">, issueNumber: number, body: string): Promise<boolean> {
-  const token = await installationToken(repo);
-  if (!token) return false;
-  const res = await api(token, "POST", `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/issues/${issueNumber}/comments`, { body });
-  return res.status === 201;
+  const res = await appRequest(repo, "POST", `/issues/${issueNumber}/comments`, { body });
+  return res?.status === 201;
 }
 
 // ---- Setup flow (manifest) --------------------------------------------------
@@ -151,17 +172,18 @@ export function appManifest(): Record<string, unknown> {
     hook_attributes: { url: `${PUBLIC_URL}/api/github/webhook`, active: true },
     redirect_url: `${PUBLIC_URL}/api/github/app/setup`,
     public: false,
-    default_permissions: { issues: "write", pull_requests: "write", contents: "write", metadata: "read" },
-    default_events: ["issues", "issue_comment", "pull_request"],
+    default_permissions: { issues: "write", pull_requests: "write", contents: "write", metadata: "read", checks: "read", statuses: "read" },
+    default_events: ["issues", "issue_comment", "pull_request", "check_suite", "status"],
   };
 }
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function page(title: string, body: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;background:#0E1113;color:#E8ECEA;margin:0;padding:48px 24px}main{max-width:560px;margin:0 auto}h1{font-size:24px}a{color:#7FD1AE}button{font:inherit;background:#7FD1AE;color:#0B1A13;border:0;border-radius:10px;padding:12px 18px;font-weight:600;cursor:pointer}code{background:#171B1E;padding:2px 6px;border-radius:4px}</style></head><body><main>${body}</main></body></html>`;
+/** The daemon's small dark HTML page (setup flow, deep-link pages). `head` is extra markup for <head>. */
+export function page(title: string, body: string, head = ""): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title>${head}<style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;background:#0E1113;color:#E8ECEA;margin:0;padding:48px 24px}main{max-width:560px;margin:0 auto}h1{font-size:24px}a{color:#7FD1AE}button{font:inherit;background:#7FD1AE;color:#0B1A13;border:0;border-radius:10px;padding:12px 18px;font-weight:600;cursor:pointer}code{background:#171B1E;padding:2px 6px;border-radius:4px}</style></head><body><main>${body}</main></body></html>`;
 }
 
 /**
@@ -180,7 +202,7 @@ export function githubAppRoutes(): Hono<AppEnv> {
     const state = newState();
     const action = `https://github.com/organizations/${encodeURIComponent(ORG)}/settings/apps/new?state=${state}`;
     const manifest = escapeHtml(JSON.stringify(appManifest()));
-    return c.html(page("Create the Celiador GitHub App", `<h1>Create the Celiador GitHub App</h1><p>This takes you to GitHub with the app's manifest filled in (webhook, permissions, events). Only an owner of <code>${escapeHtml(ORG)}</code> can create it. GitHub then sends you back here and the daemon stores the app's credentials itself.</p><form method="post" action="${escapeHtml(action)}"><input type="hidden" name="manifest" value="${manifest}"><button type="submit">Continue to GitHub</button></form><p><small>Permissions: issues and pull requests (write), contents (write, for private-repo clones and pushes), metadata (read). Events: issues, issue comments, pull requests.</small></p>`));
+    return c.html(page("Create the Celiador GitHub App", `<h1>Create the Celiador GitHub App</h1><p>This takes you to GitHub with the app's manifest filled in (webhook, permissions, events). Only an owner of <code>${escapeHtml(ORG)}</code> can create it. GitHub then sends you back here and the daemon stores the app's credentials itself.</p><form method="post" action="${escapeHtml(action)}"><input type="hidden" name="manifest" value="${manifest}"><button type="submit">Continue to GitHub</button></form><p><small>Permissions: issues and pull requests (write), contents (write, for private-repo clones and pushes), metadata, checks and commit statuses (read). Events: issues, issue comments, pull requests, check suites, statuses.</small></p>`));
   });
 
   app.get("/setup", async (c) => {

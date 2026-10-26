@@ -15,6 +15,47 @@ key and the DB connection — clients never hold either.
 | Chat history | `GET /api/chats`, `GET /api/chats/:id`, `PATCH/DELETE /api/chats/:id` | both | durable; rows written by the relay persister |
 | Push | `POST/DELETE /api/push/register`, `POST /api/push/activity` | phone | APNs |
 | Account | `DELETE /api/account` | phone (editor later) | permanent account deletion (App Store 5.1.1(v)) |
+| Tasks | `GET /api/tasks` (+ `/stream` SSE `task` events), `POST /api/tasks`, `POST /:id/{cancel,status,merge,followup}` | phone + editor | the agent queue; see "Agents UI" below |
+| Deep links | `GET /api/open/task/:id`, `GET /api/open/queue` | browser (no auth) | bounce pages → `celiador://task/<id>`, `celiador://queue` |
+
+## Agents UI (tasks)
+
+The phone's Queue / One-run screens and the editor's Agents view read tasks from
+`GET /api/tasks` (`{ tasks, concurrency, repos }`) and live `task` events on
+`GET /api/tasks/stream`. On top of the original fields (`id, repo, issue?, title,
+prompt, branch, source, state, sessionId?, prUrl?, error?, createdAt, updatedAt`)
+a task may carry — all optional, old tasks lack them:
+
+| Field | Meaning |
+|---|---|
+| `runner` | `"mac"` (an editor took it at dispatch) or `"cloud"` |
+| `machine` | the editor's computer name as it reported it ("Stefan's MacBook Pro") |
+| `startedAt` / `finishedAt` | first `running`; reaching pr-open / failed / merged / cancelled (cleared when a follow-up turn runs again) |
+| `activity` | latest one-line activity of the linked session (≤200 chars, in memory, published at most every 2 s); gone when the run isn't running |
+| `awaiting` | `{ kind: "permission" \| "question", requestId, text, preview?, choices? }` while the linked session waits on the user; answer with the session's `approvals/:requestId` / `answers/:requestId` endpoints |
+| `pr` | `{ number, url, additions?, deletions?, changedFiles?, checks?, mergeable?, updatedAt }`; `checks` = passing / failing / pending / none / unknown (unknown without the GitHub App or its checks permission) |
+
+Buckets: **Needs you** = `awaiting` present · **Ready to merge** = `pr-open` ·
+**Running** = queued / dispatched / running without `awaiting` · **Merged today** =
+`merged` with `finishedAt` today.
+
+Editor → daemon, `POST /api/tasks/:id/status`:
+`{ state: "running" | "pr-open" | "merged" | "failed", sessionId?, prUrl?, error?, machine?, pr?: { number, additions, deletions, changedFiles } }`.
+Invalid `machine` / `pr` values are dropped, not rejected. `pr-open` may be re-sent
+(idempotent; needs a `prUrl` only the first time) and `running` may follow it.
+A task already `merged` answers 409 to anything but `merged`.
+
+Other calls:
+
+- `POST /api/tasks` with `issue: { number, title, url }` (url = `https://github.com/<same owner>/<same repo>/issues/<number>`) — the editor's "Run an issue…" picker; `details` = the issue body. An open task for that issue comes back as `200 { task, deduped: true }`.
+- `POST /api/tasks/:id/merge` `{ method?: "merge" | "squash" | "rebase" }` → `{ ok, merged: true, sha?, url }` or 409 `{ error }`. Needs `pr-open`. The daemon merges as the GitHub App when it is installed on the repo; otherwise it relays `git.merge` with `head: <task branch>` to the run's editor session (the editor merges the open PR for that branch); with neither: 409 "editor offline and the GitHub App isn't installed on this repo".
+- `POST /api/tasks/:id/followup` `{ text }` → `{ ok: true }`: logged as the user's turn and relayed as `instruct` to the task's linked session; 409 when the task has no session or the editor is offline.
+
+With the GitHub App on the repo the daemon posts the issue comments itself — the
+"Picked up" comment when the editor first reports `running` (it names `machine`),
+"Pull request opened: <url>" on the first `pr-open` — and `start-task` says
+`commented: true`, so the editor skips its own comment. Without the App the editor
+posts the same "Picked up" text.
 
 Two layers, already wired end-to-end on the daemon: **relay = live**, **Supabase = durable**.
 As the editor (runner) publishes to `/api/sessions/:id/events`, the daemon fans out
