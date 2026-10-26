@@ -1,10 +1,11 @@
-import type { Task } from "./store";
+import { publicTask, type Task } from "./store";
 
 /**
  * Live task changes for the phone's queue: one listener set per user, fed on
- * every create / dispatch / status change. In-memory, best-effort.
+ * every create / dispatch / status change. In-memory, best-effort. Listeners
+ * get the public shape (internal bookkeeping stripped).
  */
-type Listener = (task: Task) => void;
+type Listener = (task: ReturnType<typeof publicTask>) => void;
 const listeners = new Map<string, Set<Listener>>();
 
 export function onTaskChange(userId: string, listener: Listener): () => void {
@@ -18,9 +19,12 @@ export function onTaskChange(userId: string, listener: Listener): () => void {
 }
 
 export function publishTaskChange(userId: string, task: Task): void {
-  for (const listener of listeners.get(userId) ?? []) {
+  const set = listeners.get(userId);
+  if (!set) return;
+  const shown = publicTask(task);
+  for (const listener of set) {
     try {
-      listener(task);
+      listener(shown);
     } catch {
       /* a dead stream is reaped on its own abort */
     }

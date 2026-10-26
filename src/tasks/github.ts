@@ -4,6 +4,7 @@ import type { AppEnv } from "../auth";
 import { githubApp } from "../github/app";
 import { dispatchTasks, taskStores } from "./dispatch";
 import { publishTaskChange } from "./events";
+import { refreshPullRequest } from "./pulls";
 import { repoKey, type TaskRepo } from "./store";
 
 /**
@@ -14,6 +15,9 @@ import { repoKey, type TaskRepo } from "./store";
  * - an issue gets the `celiador` label (labelling needs triage access already);
  * - a comment containing `@celiador` from an OWNER, MEMBER or COLLABORATOR —
  *   anyone can comment on a public repo, so outsiders are ignored.
+ *
+ * `pull_request` (opened / new commits / merged) and CI events (`check_suite`,
+ * `check_run`, `status`) on a task's branch keep its PR card current.
  *
  * Signed with CELIADOR_GITHUB_WEBHOOK_SECRET (X-Hub-Signature-256); without the
  * secret the endpoint refuses everything. No user auth: GitHub sends none.
@@ -39,8 +43,16 @@ interface GhPayload {
   issue?: GhIssue;
   label?: { name?: string };
   comment?: { body?: string; author_association?: string };
-  pull_request?: { merged?: boolean; html_url?: string; head?: { ref?: string } };
+  pull_request?: { number?: number; merged?: boolean; html_url?: string; head?: { ref?: string } };
+  check_suite?: { head_branch?: string | null; pull_requests?: GhPullRef[] };
+  check_run?: { check_suite?: { head_branch?: string | null }; pull_requests?: GhPullRef[] };
+  /** `status` events: the branches whose head is the commit. */
+  branches?: Array<{ name?: string }>;
 }
+interface GhPullRef { number?: number; head?: { ref?: string } }
+
+/** CI and pull-request events that change what a task's PR card shows. */
+const PR_REFRESH_ACTIONS = new Set(["opened", "synchronize", "reopened", "edited", "ready_for_review"]);
 
 function repoOf(r: GhRepository | undefined): TaskRepo | undefined {
   if (!r?.name || !r.owner?.login || !r.clone_url || !/^https:\/\//.test(r.clone_url)) return undefined;
@@ -81,6 +93,7 @@ export async function githubWebhook(c: Context<AppEnv>): Promise<Response> {
     return c.json({ error: "bad payload" }, 400);
   }
   if (event === "pull_request") return pullRequestEvent(c, payload);
+  if (event === "check_suite" || event === "check_run" || event === "status") return ciEvent(c, event, payload);
   const trigger = triggerOf(event, payload);
   if ("ignore" in trigger) return c.json({ ok: true, ignored: trigger.ignore });
 
@@ -114,6 +127,12 @@ export async function githubWebhook(c: Context<AppEnv>): Promise<Response> {
  * north-star number is right however the PR was merged.
  */
 function pullRequestEvent(c: Context<AppEnv>, p: GhPayload): Response {
+  // Opened / new commits / reopened: refresh the task's PR card (size, checks, mergeable).
+  if (PR_REFRESH_ACTIONS.has(p.action ?? "")) {
+    const head = p.pull_request?.head?.ref;
+    const refreshed = refreshForBranches(p.repository, head ? [head] : [], p.pull_request?.number ? [p.pull_request.number] : []);
+    return c.json({ ok: true, refreshed });
+  }
   if (p.action !== "closed" || p.pull_request?.merged !== true) return c.json({ ok: true, ignored: `pull_request/${p.action ?? "-"}` });
   const repo = repoOf(p.repository);
   const head = p.pull_request.head?.ref;
@@ -127,4 +146,36 @@ function pullRequestEvent(c: Context<AppEnv>, p: GhPayload): Response {
   publishTaskChange(userId, updated);
   dispatchTasks(userId);
   return c.json({ ok: true, taskId: task.id, state: "merged" });
+}
+
+/** check_suite / check_run completed, or a commit status: CI on a task's branch moved. */
+function ciEvent(c: Context<AppEnv>, event: string, p: GhPayload): Response {
+  if (event !== "status" && p.action !== "completed") return c.json({ ok: true, ignored: `${event}/${p.action ?? "-"}` });
+  const pulls = (event === "check_suite" ? p.check_suite?.pull_requests : event === "check_run" ? p.check_run?.pull_requests : undefined) ?? [];
+  const branches = [
+    ...(event === "check_suite" ? [p.check_suite?.head_branch] : []),
+    ...(event === "check_run" ? [p.check_run?.check_suite?.head_branch] : []),
+    ...(event === "status" ? (p.branches ?? []).map((b) => b.name) : []),
+    ...pulls.map((pr) => pr.head?.ref),
+  ].filter((b): b is string => typeof b === "string" && b.length > 0);
+  const numbers = pulls.map((pr) => pr.number).filter((n): n is number => typeof n === "number");
+  return c.json({ ok: true, refreshed: refreshForBranches(p.repository, branches, numbers) });
+}
+
+/**
+ * Refresh (in the background — GitHub wants a quick answer) the pr-open tasks
+ * of a linked repo whose branch or PR number matches. Returns their ids.
+ */
+function refreshForBranches(repository: GhRepository | undefined, branches: string[], numbers: number[]): string[] {
+  const repo = repoOf(repository);
+  if (!repo || (branches.length === 0 && numbers.length === 0)) return [];
+  const userId = taskStores.links.owner(repo.url);
+  if (!userId) return [];
+  const key = repoKey(repo.url);
+  const tasks = taskStores
+    .for(userId)
+    .list()
+    .filter((t) => repoKey(t.repo.url) === key && (t.state === "pr-open" || t.state === "running") && (branches.includes(t.branch) || (t.pr && numbers.includes(t.pr.number))));
+  for (const t of tasks) void refreshPullRequest(userId, t.id);
+  return tasks.map((t) => t.id);
 }

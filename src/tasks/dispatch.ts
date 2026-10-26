@@ -1,5 +1,5 @@
 import { ROOT } from "../config";
-import { commentOnIssue, githubApp } from "../github/app";
+import { githubApp } from "../github/app";
 import { editorControl } from "../presence/control";
 import { workspacePresence } from "../presence/workspaces";
 import { publishTaskChange } from "./events";
@@ -34,7 +34,8 @@ export function dispatchTasks(userId: string): Task[] {
     const ws = open.get(repoKey(task.repo.url));
     if (!ws) continue;
     // With the GitHub App set up, the daemon itself posts the "picked up"
-    // comment as Celiador; the editor then skips its own (gh-token) comment.
+    // comment as Celiador — when the editor reports `running` (tasks/pulls.ts),
+    // so it can name the machine; the editor then skips its own (gh-token) comment.
     const commented = !!githubApp() && !!task.issue;
     const delivered = editorControl.request(userId, {
       kind: "start-task",
@@ -48,14 +49,10 @@ export function dispatchTasks(userId: string): Task[] {
       commented,
     });
     if (delivered === 0) break;
-    store.update(task.id, { state: "dispatched" });
+    store.update(task.id, { state: "dispatched", runner: "mac" });
     publishTaskChange(userId, task);
     sent.push(task);
     active++;
-    if (commented && task.issue) {
-      void commentOnIssue(task.repo, task.issue.number, `Celiador picked this up: an agent is working on it in a worktree on branch \`${task.branch}\` and will open a pull request linked here. Approvals and questions go to the Celiador queue.`)
-        .catch(() => undefined);
-    }
   }
   return sent;
 }

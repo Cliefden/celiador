@@ -48,12 +48,15 @@ curl -s localhost:4661/api/config
 | GET | `/api/health` | none | Liveness + version |
 | GET | `/api/config` | none | `authMode` + Supabase client config |
 | GET | `/api/limits` | none | The per-user agent limits in force (same object `/api/me` returns) — what the pricing page shows |
-| GET | `/api/tasks` | user | The agent task queue (+ concurrency, linked repos); `GET /api/tasks/stream` = live changes (SSE) |
-| POST | `/api/tasks` | user | A task by hand: `{remoteUrl, title, details?}` (github.com repos) |
+| GET | `/api/tasks` | user | The agent task queue (+ concurrency, linked repos); `GET /api/tasks/stream` = live changes (SSE). Tasks carry `runner`, `machine`, `startedAt`, `finishedAt`, live `activity` / `awaiting` (from the linked session) and `pr` (size, checks, mergeable — refreshed from GitHub with the App, lazily when older than 60 s) |
+| POST | `/api/tasks` | user | A task by hand: `{remoteUrl, title, details?}` or `{remoteUrl, issue: {number, title, url}, details?}` (github.com repos; an open task for the same issue is returned, `deduped: true`) |
 | POST | `/api/tasks/:id/cancel` | user | Cancel a queued or running task |
-| POST | `/api/tasks/:id/status` | user (editor) | The editor reports `running` / `pr-open` (+`prUrl`) / `merged` / `failed` |
+| POST | `/api/tasks/:id/status` | user (editor) | The editor reports `running` / `pr-open` (+`prUrl`, `pr {number, additions, deletions, changedFiles}`) / `merged` / `failed`, + `machine`. `running` after `pr-open` = a follow-up turn; `pr-open` may be re-sent |
+| POST | `/api/tasks/:id/merge` | user | Merge the task's PR `{method?}`: as the GitHub App when installed, else relayed to the run's editor (`git.merge` with `head` = the task branch); 409 `{error}` otherwise |
+| POST | `/api/tasks/:id/followup` | user | `{text}` → an `instruct` to the task's linked session (409 when there is none or the editor is offline) |
+| GET | `/api/open/task/:id`, `/api/open/queue` | none | Data-free pages that bounce to `celiador://task/<id>` / `celiador://queue` (the GitHub comment's links; scheme via `CELIADOR_APP_SCHEME`) |
 | POST/DELETE | `/api/tasks/repos` | user | Link / unlink a repo whose GitHub issues become tasks (one owner per repo) |
-| POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET` or the GitHub App's secret) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) within `CELIADOR_TASK_CONCURRENCY` (default 3); a merged `pull_request` on a task's branch → the task is `merged` |
+| POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET` or the GitHub App's secret) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) within `CELIADOR_TASK_CONCURRENCY` (default 3); a merged `pull_request` on a task's branch → the task is `merged`; `pull_request` opened/synchronize/reopened, `check_suite`/`check_run` completed and `status` → the task's `pr` is refreshed |
 | GET | `/api/github/app/new`, `/api/github/app/setup` | none (GitHub enforces org ownership) | One-time creation of the Celiador GitHub App via GitHub's manifest flow; credentials land in `data/github-app.json`. With the app installed the daemon comments on issues as Celiador and clones private repos for cloud runs |
 | POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Locked Claude proxy, daemon-owned 3-tool set (SSE) |
 | POST | `/api/anthropic/v1/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | First-party gateway: forwards caller's own system + tools; daemon keeps key/model/caps/quota (SSE) |
@@ -90,6 +93,9 @@ src/
     store.ts     per-user device/activity token registry (data/push/<uid>.json)
     routes.ts    /api/push/* endpoints
   releases/      editor update feed + artifact downloads, read from releases/manifest.json
+  tasks/         agent task queue (store, routes, dispatch, GitHub webhook, live session link, PR refresh/merge/comments)
+  github/        the Celiador GitHub App (manifest setup, installation tokens)
+  open/          /api/open/* deep-link bounce pages
 ```
 
 ## Editor releases
