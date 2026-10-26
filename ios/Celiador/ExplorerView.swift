@@ -30,7 +30,7 @@ struct ExplorerView: View {
             }
         }
         .background(CeliadorBackground())
-        .navigationTitle("Explorer")
+        .navigationTitle("Files")
         .toolbar {
             if !model.sessions.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) { sessionPicker }

@@ -67,3 +67,63 @@ final class SessionEventStream {
         }
     }
 }
+
+/// Live task changes for the queue: `GET /api/tasks/stream` (SSE) sends the full
+/// task as an `event: task` frame whenever one changes. Reconnects with backoff;
+/// there is no cursor, so callers should re-list on (re)connect if they care
+/// about a gap — the queue also polls, so a dropped frame heals on its own.
+final class TaskEventStream {
+    private let onTask: @MainActor (AgentTask) -> Void
+    private var task: Task<Void, Never>?
+
+    init(onTask: @escaping @MainActor (AgentTask) -> Void) {
+        self.onTask = onTask
+    }
+
+    func start() {
+        guard task == nil else { return }
+        task = Task {
+            var delay = 2.0
+            while !Task.isCancelled {
+                let connectedAt = Date()
+                try? await stream()
+                if Task.isCancelled { return }
+                if Date().timeIntervalSince(connectedAt) > 60 { delay = 2.0 }
+                try? await Task.sleep(for: .seconds(delay))
+                delay = min(delay * 2, 60)
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+    }
+
+    private func stream() async throws {
+        let token = try await Api.shared.validAccessToken()
+        var request = URLRequest(url: Api.shared.baseURL.appendingPathComponent("api/tasks/stream"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 3600
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw Api.ApiError(message: "Task stream rejected.")
+        }
+        var event = ""
+        for try await line in bytes.lines {
+            if Task.isCancelled { return }
+            if line.hasPrefix("event:") {
+                event = line.dropFirst("event:".count).trimmingCharacters(in: .whitespaces)
+                continue
+            }
+            guard line.hasPrefix("data:"), event == "task" || event.isEmpty else { continue }
+            let json = line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+            guard !json.isEmpty,
+                  let data = json.data(using: .utf8),
+                  let task = try? JSONDecoder().decode(AgentTask.self, from: data)
+            else { continue }
+            await MainActor.run { self.onTask(task) }
+        }
+    }
+}

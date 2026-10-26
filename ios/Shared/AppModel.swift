@@ -12,17 +12,68 @@ final class AppModel {
         case signedIn
     }
 
-    /// The IDE shell's bottom tabs.
+    /// The IDE shell's bottom tabs: Queue · Runs (agents) · Files (explorer) · Activity.
     enum Tab: Hashable { case queue, agents, explorer, activity }
+
+    /// A screen pushed on the Queue tab's stack.
+    enum QueueRoute: Hashable {
+        /// The One-run screen for an agent task.
+        case task(String)
+        /// A session's full live transcript.
+        case session(String)
+    }
 
     var phase: Phase = .booting
     var email: String?
     var sessions: [Session] = []
     var selectedTab: Tab = .queue
-    var agentsPath: [String] = [] // Agents-tab navigation: session ids
-    var queuePath: [String] = [] // Queue-tab navigation: session ids
+    var agentsPath: [String] = [] // Runs-tab navigation: session ids
+    var queuePath: [QueueRoute] = [] // Queue-tab navigation: run screens + transcripts
     /// The session whose workspace the Explorer tab is browsing (defaults to newest active).
     var focusedSessionId: String?
+
+    // MARK: Agent tasks (the queue) — shared so deep links and pushes can resolve a task.
+    var tasks: [AgentTask] = []
+    /// Tasks allowed to run at once (0 = unknown).
+    var taskConcurrency = 0
+    /// Repos whose labelled GitHub issues become tasks.
+    var watchedRepos: [String] = []
+    var tasksLoaded = false
+    var tasksError: String?
+    /// Approvals / answers sent from the phone, hidden optimistically until the
+    /// daemon clears the task's `awaiting`.
+    var handledRequests: Set<String> = []
+    private var taskStream: TaskEventStream?
+
+    /// The task a session belongs to, if any (pushes + widgets prefer its run screen).
+    func task(forSession sessionId: String) -> AgentTask? {
+        tasks.first { $0.sessionId == sessionId }
+    }
+
+    // MARK: Queue buckets (contract: Needs you / Ready to merge / Running / finished)
+
+    /// Blocked on you: the daemon's `awaiting`, or — from an older daemon that
+    /// doesn't send it — the linked session's own `awaiting` state.
+    func needsYou(_ task: AgentTask) -> Bool {
+        guard !task.isFinished else { return false }
+        if let awaiting = task.awaiting { return !handledRequests.contains(awaiting.requestId) }
+        guard let sid = task.sessionId else { return false }
+        return sessions.first { $0.id == sid }?.state == .awaiting
+    }
+
+    var needsYouTasks: [AgentTask] { tasks.filter(needsYou) }
+    var readyTasks: [AgentTask] { tasks.filter { $0.state == "pr-open" && !needsYou($0) } }
+    var runningTasks: [AgentTask] { tasks.filter { $0.isActive && !needsYou($0) } }
+    var finishedTasks: [AgentTask] { tasks.filter(\.isFinished) }
+
+    /// Awaiting sessions that aren't any task's run (plain editor/phone chats).
+    var looseAwaitingSessions: [Session] {
+        let linked = Set(tasks.compactMap(\.sessionId))
+        return sessions.filter { $0.state == .awaiting && !linked.contains($0.id) }
+    }
+
+    /// The Queue tab badge: everything in "Needs you".
+    var queueNeedsYouCount: Int { needsYouTasks.count + looseAwaitingSessions.count }
 
     /// Latest live agent line per session, fed by the open session's event stream.
     /// Shown as an active session's subtitle; pruned when the session goes inactive.
@@ -92,6 +143,12 @@ final class AppModel {
             "s3": "Editing SettingsView.swift — wiring the toggle binding",
             "s4": "Running tests — 24 passed, 2 remaining",
         ]
+        tasks = DemoData.tasks
+        taskConcurrency = 3
+        watchedRepos = ["https://github.com/Cliefden/celiador-editor.git", "https://github.com/Cliefden/daemon.git"]
+        tasksLoaded = true
+        // CELIADOR_UI_DEMO=run opens the One-run screen for the ready task.
+        if DemoData.mode == "run" { queuePath = [.task(DemoData.readyTaskId)] }
         focusedSessionId = "s1"
         email = "demo@celiador.ai"
         phase = .signedIn
@@ -125,9 +182,14 @@ final class AppModel {
         #endif
         Api.shared.signOut()
         pollTask?.cancel()
+        taskStream?.stop()
+        taskStream = nil
         sessions = []
         activity = [:]
         agentsPath = []
+        queuePath = []
+        tasks = []
+        tasksLoaded = false
         focusedSessionId = nil
         phase = .signedOut
         SharedStore.writeSnapshot(.empty)
@@ -141,16 +203,81 @@ final class AppModel {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
+                await self?.refreshTasks()
                 try? await Task.sleep(for: .seconds(15))
             }
         }
+        // Task changes (state, awaiting, PR stats) arrive live between polls.
+        taskStream?.stop()
+        let stream = TaskEventStream { [weak self] task in self?.upsert(task) }
+        taskStream = stream
+        stream.start()
     }
 
-    /// Navigate to a session (from a push tap or a widget deep link).
+    /// Re-list the queue (GET /api/tasks).
+    func refreshTasks() async {
+        guard case .signedIn = phase else { return }
+        #if DEBUG
+        if DemoData.isActive { tasksLoaded = true; return }
+        #endif
+        do {
+            let list = try await Api.shared.listTasks()
+            tasks = list.tasks
+            taskConcurrency = list.concurrency
+            watchedRepos = list.repos
+            tasksError = nil
+        } catch {
+            tasksError = (error as NSError).localizedDescription
+        }
+        tasksLoaded = true
+    }
+
+    /// Fold one streamed task into the list (newest first for new ones).
+    func upsert(_ task: AgentTask) {
+        if let i = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[i] = task
+        } else {
+            tasks.insert(task, at: 0)
+        }
+    }
+
+    /// Navigate to a session (from a push tap or a widget deep link). A session
+    /// that belongs to an agent task opens that task's run screen on the Queue
+    /// tab instead of the bare transcript.
     func open(sessionId: String) {
         guard case .signedIn = phase else { return }
+        if let task = task(forSession: sessionId) {
+            open(taskId: task.id)
+            return
+        }
+        if !tasksLoaded {
+            // Cold launch from a push: the queue isn't loaded yet — load, then route.
+            Task {
+                await refreshTasks()
+                if let task = task(forSession: sessionId) { open(taskId: task.id) } else { openTranscript(sessionId) }
+            }
+            return
+        }
+        openTranscript(sessionId)
+    }
+
+    private func openTranscript(_ sessionId: String) {
         selectedTab = .agents
         agentsPath = [sessionId]
+    }
+
+    /// `celiador://task/<id>`: the Queue tab with that task's run screen pushed.
+    func open(taskId: String) {
+        guard case .signedIn = phase else { return }
+        selectedTab = .queue
+        queuePath = [.task(taskId)]
+    }
+
+    /// `celiador://queue`: the Queue tab at its root.
+    func openQueue() {
+        guard case .signedIn = phase else { return }
+        selectedTab = .queue
+        queuePath = []
     }
 
     /// Fold a live line from the open session's stream into the list + widget.

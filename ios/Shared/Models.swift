@@ -280,6 +280,32 @@ struct AgentTask: Codable, Identifiable, Hashable {
     struct Repo: Codable, Hashable { let owner: String; let name: String; let url: String }
     struct Issue: Codable, Hashable { let number: Int; let title: String; let url: String }
 
+    /// The linked session is blocked on you: a permission to grant or a question
+    /// to answer. `requestId` goes to the session approve/reject/answer endpoints.
+    struct Awaiting: Codable, Hashable {
+        let kind: String // "permission" | "question"
+        let requestId: String
+        let text: String
+        var preview: String? = nil
+        var choices: [String]? = nil
+
+        var isPermission: Bool { kind != "question" }
+    }
+
+    /// The run's pull request, refreshed by the daemon. Every stat is optional:
+    /// an older daemon (or a PR GitHub hasn't computed yet) leaves them out.
+    struct PullRequest: Codable, Hashable {
+        let number: Int
+        let url: String
+        var additions: Int? = nil
+        var deletions: Int? = nil
+        var changedFiles: Int? = nil
+        /// "passing" | "failing" | "pending" | "none" | "unknown"
+        var checks: String? = nil
+        var mergeable: Bool? = nil
+        var updatedAt: String? = nil
+    }
+
     let id: String
     let repo: Repo
     let issue: Issue?
@@ -293,8 +319,71 @@ struct AgentTask: Codable, Identifiable, Hashable {
     let createdAt: String
     let updatedAt: String
 
+    // Newer daemon fields (all optional — an old daemon sends none of them).
+    /// "mac" | "cloud" — where it runs; nil means an editor (Mac) dispatch.
+    var runner: String? = nil
+    /// The editor's machine name, e.g. "Stefan's MacBook Pro".
+    var machine: String? = nil
+    var startedAt: String? = nil
+    var finishedAt: String? = nil
+    /// The linked session's latest one-line activity while running.
+    var activity: String? = nil
+    var awaiting: Awaiting? = nil
+    var pr: PullRequest? = nil
+
     /// queued / dispatched / running hold work; the rest are finished.
     var isActive: Bool { ["queued", "dispatched", "running"].contains(state) }
+    var isFinished: Bool { ["merged", "failed", "cancelled"].contains(state) }
+    var isCloud: Bool { runner == "cloud" }
+
+    /// The pull request number, from `pr` or parsed from `prUrl` (…/pull/8).
+    var prNumber: Int? {
+        if let pr { return pr.number }
+        guard let prUrl, let range = prUrl.range(of: "/pull/") else { return nil }
+        return Int(prUrl[range.upperBound...].prefix { $0.isNumber })
+    }
+
+    var pullRequestURL: URL? { (pr?.url ?? prUrl).flatMap(URL.init(string:)) }
+}
+
+extension AgentTask {
+    enum CodingKeys: String, CodingKey {
+        case id, repo, issue, title, branch, source, state, sessionId, prUrl, error, createdAt, updatedAt
+        case runner, machine, startedAt, finishedAt, activity, awaiting, pr
+    }
+
+    /// Tolerant decoding: the core fields are required, but a malformed or
+    /// unexpected newer field never drops the whole task from the queue.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        repo = try c.decode(Repo.self, forKey: .repo)
+        issue = (try? c.decodeIfPresent(Issue.self, forKey: .issue)) ?? nil
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        branch = (try? c.decode(String.self, forKey: .branch)) ?? ""
+        source = (try? c.decode(String.self, forKey: .source)) ?? "manual"
+        state = (try? c.decode(String.self, forKey: .state)) ?? "queued"
+        sessionId = (try? c.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
+        prUrl = (try? c.decodeIfPresent(String.self, forKey: .prUrl)) ?? nil
+        error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? nil
+        createdAt = (try? c.decode(String.self, forKey: .createdAt)) ?? ""
+        updatedAt = (try? c.decode(String.self, forKey: .updatedAt)) ?? ""
+        runner = (try? c.decodeIfPresent(String.self, forKey: .runner)) ?? nil
+        machine = (try? c.decodeIfPresent(String.self, forKey: .machine)) ?? nil
+        startedAt = (try? c.decodeIfPresent(String.self, forKey: .startedAt)) ?? nil
+        finishedAt = (try? c.decodeIfPresent(String.self, forKey: .finishedAt)) ?? nil
+        activity = (try? c.decodeIfPresent(String.self, forKey: .activity)) ?? nil
+        awaiting = (try? c.decodeIfPresent(Awaiting.self, forKey: .awaiting)) ?? nil
+        pr = (try? c.decodeIfPresent(PullRequest.self, forKey: .pr)) ?? nil
+    }
+}
+
+/// Outcome of POST /api/tasks/:id/merge.
+struct TaskMergeResult: Codable {
+    let ok: Bool?
+    let merged: Bool
+    let sha: String?
+    let url: String?
 }
 
 struct TaskList: Codable {

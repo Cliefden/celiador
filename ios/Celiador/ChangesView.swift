@@ -53,10 +53,9 @@ struct ChangesView: View {
 
     private var totals: (added: Int, removed: Int) {
         shownDiffs.reduce(into: (0, 0)) { acc, f in
-            for line in f.patch.split(separator: "\n", omittingEmptySubsequences: false) {
-                if line.hasPrefix("+") && !line.hasPrefix("+++") { acc.0 += 1 }
-                else if line.hasPrefix("-") && !line.hasPrefix("---") { acc.1 += 1 }
-            }
+            let c = DiffStats.counts(f.patch)
+            acc.0 += c.added
+            acc.1 += c.removed
         }
     }
 
@@ -157,11 +156,7 @@ struct ChangesView: View {
         guard let sid = liveSessionId else { return }
         loadingLive = live == nil
         do {
-            let status = try await Api.shared.gitStatus(sessionId: sid)
-            var patches: [String: String] = [:]
-            for file in status.files {
-                patches[file.path] = (try? await Api.shared.gitDiff(sessionId: sid, path: file.path)) ?? ""
-            }
+            let (status, patches) = try await DiffStats.loadLive(sessionId: sid)
             live = status
             livePatches = patches
             liveUnavailable = nil
@@ -362,7 +357,7 @@ struct ChangesView: View {
     }
 
     private func fileHeader(_ file: DiffFile) -> some View {
-        let counts = fileCounts(file.patch)
+        let counts = DiffStats.counts(file.patch)
         let status = live?.files.first { $0.path == file.path }
         return HStack(spacing: 8) {
             Image(systemName: SyntaxHighlighter.icon(forPath: file.path)).font(.caption).foregroundStyle(Theme.accent)
@@ -411,17 +406,52 @@ struct ChangesView: View {
         }
     }
 
-    private func fileCounts(_ patch: String) -> (added: Int, removed: Int) {
+}
+
+/// Unified-diff helpers shared by the Changes sheet and the run screen's inline
+/// change summary.
+enum DiffStats {
+    static func isAdd<S: StringProtocol>(_ l: S) -> Bool { l.hasPrefix("+") && !l.hasPrefix("+++") }
+    static func isDel<S: StringProtocol>(_ l: S) -> Bool { l.hasPrefix("-") && !l.hasPrefix("---") }
+
+    /// Added / removed line counts of one file's patch.
+    static func counts(_ patch: String) -> (added: Int, removed: Int) {
         patch.split(separator: "\n", omittingEmptySubsequences: false).reduce(into: (0, 0)) { acc, line in
-            if line.hasPrefix("+") && !line.hasPrefix("+++") { acc.0 += 1 }
-            else if line.hasPrefix("-") && !line.hasPrefix("---") { acc.1 += 1 }
+            if isAdd(line) { acc.0 += 1 }
+            else if isDel(line) { acc.1 += 1 }
         }
+    }
+
+    /// The first hunk of a patch (its `@@` header plus up to `maxLines` lines),
+    /// for a compact inline preview. Empty when the patch has no hunk.
+    static func firstHunk(_ patch: String, maxLines: Int = 6) -> String {
+        let lines = patch.split(separator: "\n", omittingEmptySubsequences: false)
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("@@") }) else { return "" }
+        var out = [lines[start]]
+        for line in lines[(start + 1)...] {
+            if line.hasPrefix("@@") || out.count > maxLines { break }
+            out.append(line)
+        }
+        // Trim trailing blank context so the preview ends on content.
+        while let last = out.last, last.trimmingCharacters(in: .whitespaces).isEmpty, out.count > 1 { out.removeLast() }
+        return out.joined(separator: "\n")
+    }
+
+    /// The editor's live working-copy review over the relay: changed files plus
+    /// one patch per file. Throws when the editor is offline (or it's a cloud run).
+    static func loadLive(sessionId: String) async throws -> (GitStatus, [String: String]) {
+        let status = try await Api.shared.gitStatus(sessionId: sessionId)
+        var patches: [String: String] = [:]
+        for file in status.files {
+            patches[file.path] = (try? await Api.shared.gitDiff(sessionId: sessionId, path: file.path)) ?? ""
+        }
+        return (status, patches)
     }
 }
 
 /// Renders a unified diff: per-line add/remove coloring, a change gutter, and light
 /// syntax highlighting (strings + comments) on unchanged context lines.
-private struct DiffBody: View {
+struct DiffBody: View {
     let patch: String
 
     private var lines: [(offset: Int, line: String)] {
@@ -462,8 +492,8 @@ private struct DiffBody: View {
         }
     }
 
-    private func isAdd(_ l: String) -> Bool { l.hasPrefix("+") && !l.hasPrefix("+++") }
-    private func isDel(_ l: String) -> Bool { l.hasPrefix("-") && !l.hasPrefix("---") }
+    private func isAdd(_ l: String) -> Bool { DiffStats.isAdd(l) }
+    private func isDel(_ l: String) -> Bool { DiffStats.isDel(l) }
 
     private func gutter(for line: String) -> Color {
         if isAdd(line) { return Theme.added }

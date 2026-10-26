@@ -26,6 +26,12 @@ enum AppScheme {
 
     /// `celiador[-channel]://session/<id>` — deep link to a session (widgets, push).
     static func session(_ id: String) -> String { "\(scheme)://session/\(id)" }
+
+    /// `celiador[-channel]://task/<id>` — an agent task's run screen on the Queue tab.
+    static func task(_ id: String) -> String { "\(scheme)://task/\(id)" }
+
+    /// `celiador[-channel]://queue` — the Queue tab.
+    static var queue: String { "\(scheme)://queue" }
 }
 
 // MARK: - Live Activity (iOS only — ActivityKit is unavailable on macOS)

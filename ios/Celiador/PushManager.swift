@@ -45,11 +45,15 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
 
     /// A push tapped before the model existed (cold launch) — opened once it does.
     private var pendingSessionId: String?
+    private var pendingTaskId: String?
 
     /// Called once the signed-in model exists: install it and replay a pending tap.
     func attach(model: AppModel) {
         self.model = model
-        if let id = pendingSessionId {
+        if let id = pendingTaskId {
+            pendingTaskId = nil
+            model.open(taskId: id)
+        } else if let id = pendingSessionId {
             pendingSessionId = nil
             model.open(sessionId: id)
         }
@@ -71,6 +75,16 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
+        if let taskId = info["taskId"] as? String, !taskId.isEmpty {
+            // A task push: its run screen on the Queue tab.
+            if let model, case .signedIn = model.phase {
+                model.open(taskId: taskId)
+            } else {
+                pendingTaskId = taskId
+            }
+            return
+        }
+        // A session push: AppModel.open prefers the run screen when the session is a task's.
         if let id = (info["sessionId"] ?? info["activityId"]) as? String {
             if let model, case .signedIn = model.phase {
                 model.open(sessionId: id)

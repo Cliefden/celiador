@@ -279,6 +279,25 @@ enum RelativeTime {
         return [withFraction, plain]
     }()
 
+    /// Parse an ISO8601 timestamp (with or without fractional seconds).
+    static func date(_ iso: String?) -> Date? {
+        guard let iso, !iso.isEmpty else { return nil }
+        return parsers.lazy.compactMap { $0.date(from: iso) }.first
+    }
+
+    /// How long a run has taken: "1 min" / "12 min" / "1 h 5 min" — from `start`
+    /// to `end` (or now). Nil when the start is unknown.
+    static func elapsed(from start: String?, to end: String? = nil, now: Date = Date()) -> String? {
+        guard let from = date(start) else { return nil }
+        let secs = max(0, (date(end) ?? now).timeIntervalSince(from))
+        let mins = Int(secs / 60)
+        if mins < 1 { return "<1 min" }
+        if mins < 60 { return "\(mins) min" }
+        let hours = mins / 60, rest = mins % 60
+        if hours >= 24 { return "\(hours / 24) d" }
+        return rest == 0 ? "\(hours) h" : "\(hours) h \(rest) min"
+    }
+
     /// "now" / "4m" / "3h" / "2d" / "Mar 5" from an ISO8601 string.
     static func short(_ iso: String) -> String {
         guard let date = parsers.lazy.compactMap({ $0.date(from: iso) }).first else { return "" }

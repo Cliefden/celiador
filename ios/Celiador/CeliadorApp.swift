@@ -24,9 +24,17 @@ struct CeliadorApp: App {
                             model.didSignIn()
                         }
                     case "session":
-                        // From widgets, Live Activities, and push taps.
+                        // From widgets, Live Activities, and push taps. A task's session
+                        // opens the task's run screen (see AppModel.open(sessionId:)).
                         let id = url.lastPathComponent
-                        if !id.isEmpty { model.open(sessionId: id) }
+                        if !id.isEmpty && id != "/" { model.open(sessionId: id) }
+                    case "task":
+                        // `celiador://task/<id>` — from the GitHub "Picked up" comment
+                        // (via celiador.ai/api/open/task/<id>) and pushes.
+                        let id = url.lastPathComponent
+                        if !id.isEmpty && id != "/" { model.open(taskId: id) } else { model.openQueue() }
+                    case "queue":
+                        model.openQueue()
                     default:
                         break
                     }
@@ -122,7 +130,7 @@ struct ContentView: View {
     }
 }
 
-/// The signed-in shell: Queue (home) · Agents (live runs) · Explorer (files) · Activity (history).
+/// The signed-in shell: Queue (home) · Runs (live agent sessions) · Files · Activity (history).
 struct TabShell: View {
     @Environment(AppModel.self) private var model
 
@@ -132,19 +140,24 @@ struct TabShell: View {
             Tab("Queue", systemImage: "tray.full", value: AppModel.Tab.queue) {
                 NavigationStack(path: $model.queuePath) {
                     QueueView()
-                        .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
+                        .navigationDestination(for: AppModel.QueueRoute.self) { route in
+                            switch route {
+                            case .task(let id): TaskRunView(taskId: id)
+                            case .session(let id): SessionView(sessionId: id)
+                            }
+                        }
                 }
             }
-            .badge(model.needsYouCount)
+            .badge(model.queueNeedsYouCount)
 
-            Tab("Agents", systemImage: "sparkles", value: AppModel.Tab.agents) {
+            Tab("Runs", systemImage: "terminal", value: AppModel.Tab.agents) {
                 NavigationStack(path: $model.agentsPath) {
                     SessionsView()
                         .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
                 }
             }
 
-            Tab("Explorer", systemImage: "folder", value: AppModel.Tab.explorer) {
+            Tab("Files", systemImage: "folder", value: AppModel.Tab.explorer) {
                 NavigationStack { ExplorerView() }
             }
 
