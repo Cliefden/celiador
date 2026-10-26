@@ -174,7 +174,11 @@ export function taskRoutes(): Hono<AppEnv> {
       state,
       ...(typeof body?.sessionId === "string" ? { sessionId: body.sessionId.slice(0, 200) } : {}),
       ...(prUrl ? { prUrl } : {}),
-      ...(typeof body?.error === "string" ? { error: body.error.slice(0, 2000) } : {}),
+      // A running / pr-open report without an error means whatever went wrong before
+      // (e.g. a follow-up that couldn't push) is behind it: clear the stale message.
+      ...(typeof body?.error === "string"
+        ? { error: body.error.slice(0, 2000) }
+        : state === "running" || state === "pr-open" ? { error: undefined } : {}),
       ...(machine ? { machine } : {}),
       ...(pr ? { pr } : {}),
     })!;
