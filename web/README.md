@@ -1,9 +1,17 @@
 # celiador-web
 
-Marketing site for **Celiador** — the native macOS AI code editor (the new,
-Cursor-style product; a hard fork of VS Code). This is a fresh site for the new
-product. The previous product's site lives in `../celiador-web-old` (the old
-Lovable-style app builder, kept for reference).
+Marketing site for **Celiador**: issue in, pull request out. Label a GitHub issue
+`celiador` and an agent runs it on your Mac in its own git worktree, opens a pull
+request that closes the issue, and you review and merge from your phone. The site
+sells that loop; the Celiador editor (a VS Code fork), the Celiador Remote
+extension (VS Code or Cursor) and the cloud (in progress) are the runners it can
+run on, and the editor download is one path in, not the headline. The previous
+product's site lives in `../celiador-web-old` (the old Lovable-style app builder,
+kept for reference).
+
+Copy rule: never present something as live that isn't. Cloud runs, plan and
+question comments on the issue, CI fixes, per-run cost and the PR self-review
+section are in progress and carry a "coming" tag wherever they appear.
 
 ## Stack
 
@@ -23,9 +31,10 @@ npm start        # serve the build
 ## Structure
 
 ```
-src/app/            App Router pages: / (home), /features, /pricing,
-                    /download, /about, /contact, /changelog, /privacy, /terms
-src/components/     Navbar, Footer, EditorMock, FAQ, EmailCapture, ContactForm, ui, icons
+src/app/            App Router pages: / (home), /start, /features, /switch, /pricing,
+                    /download, /docs, /about, /contact, /changelog, /privacy, /terms
+src/components/     Navbar, Footer, LoopMock (issue + phone), EditorMock, FAQ,
+                    EmailCapture, ContactForm, ui, icons
 src/lib/site.ts     All marketing copy + config (nav, features, pricing, FAQ, footer)
 src/app/globals.css Tailwind v4 import + design tokens (colors, fonts, helpers)
 ```

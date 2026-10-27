@@ -24,7 +24,17 @@ export const metadata: Metadata = {
     template: `%s — ${site.name}`,
   },
   description: site.description,
-  keywords: ["AI code editor", "VS Code fork", "Celiador", "AI agent", "macOS editor", "Cursor alternative"],
+  keywords: [
+    "GitHub issue to pull request",
+    "AI agent pull requests",
+    "Celiador",
+    "Celiador Remote",
+    "VS Code extension",
+    "Cursor extension",
+    "AI code editor",
+    "VS Code fork",
+    "Cursor alternative",
+  ],
   openGraph: {
     title: `${site.name} — ${site.tagline}`,
     description: site.description,

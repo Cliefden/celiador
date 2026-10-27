@@ -1,11 +1,18 @@
 // Central content + config for the Celiador marketing site.
 // Edit copy here; components read from these constants so pages stay DRY.
+//
+// Positioning: the loop is the product. A GitHub issue goes in, a pull request
+// comes out; the editor is one runner, Celiador Remote (VS Code or Cursor) is
+// another, the cloud is the third; the phone is the review surface; GitHub is
+// where the run narrates itself. Copy must not promise what is not live: cloud
+// runs, plan/question comments, CI fixes, per-run cost and the self-review
+// section are in progress and are marked "coming" wherever they appear.
 
 export const site = {
   name: "Celiador",
-  tagline: "The AI editor for people who ship.",
+  tagline: "Issue in, pull request out.",
   description:
-    "Celiador is an AI code editor for macOS — a native app with an agent that reads, writes, and ships changes across your whole codebase. Built on VS Code.",
+    "Label a GitHub issue celiador and an agent runs it on your Mac in its own git worktree, opens a pull request that closes the issue, and narrates the run on the issue. Review and merge from your phone. Works from the Celiador editor, or from VS Code and Cursor with the Celiador Remote extension.",
   url: "https://celiador.ai",
   // The download page reads the live version from the daemon's release
   // listing (src/lib/releases.ts); this is only the fallback label shown
@@ -16,6 +23,10 @@ export const site = {
   // Public TestFlight link for the iPhone companion; empty until it exists.
   testflightUrl: "",
   github: "https://github.com/Cliefden/celiador",
+  // Celiador Remote: the loop for stock VS Code and Cursor.
+  remoteOpenVsx: "https://open-vsx.org/extension/celiador/celiador-remote",
+  remoteReleases: "https://github.com/Cliefden/celiador-remote/releases/latest",
+  githubApp: "https://github.com/apps/celiador/installations/new",
 };
 
 export const nav: { label: string; href: string }[] = [
@@ -31,53 +42,59 @@ export type Feature = {
   title: string;
   body: string;
   icon: string; // key into components/icons
+  // Parts of this feature that are being built and are not live yet. Rendered
+  // as a separate "Coming" line so the body only describes what works today.
+  coming?: string;
 };
 
 export const features: Feature[] = [
   {
-    title: "An agent that ships",
-    body: "Describe the change; the agent plans, edits across files, runs your tools, and shows you a reviewable diff before anything lands.",
+    title: "The loop",
+    body: "Label a GitHub issue celiador. An agent picks it up on your Mac, works in its own git worktree so your checkout is untouched, and opens a pull request that closes the issue.",
     icon: "bolt",
   },
   {
-    title: "Chat with your codebase",
-    body: "Ask questions in plain language. Celiador reads the whole repo for context and answers with the exact files and lines.",
-    icon: "chat",
+    title: "Review from your phone",
+    body: "Celiador for iPhone shows what the agent did, the diff, and what needs you. Send a follow-up, allow or deny a risky command, then approve and merge. The editor's Agents view shows the same runs.",
+    icon: "phone",
   },
   {
-    title: "Built on VS Code",
-    body: "A real hard fork of VS Code — your extensions, keybindings, themes, and muscle memory come with you. No new editor to learn.",
+    title: "Your runner, your choice",
+    body: "Run it in the Celiador editor, or keep VS Code or Cursor and install the Celiador Remote extension. Same loop, same account, same phone.",
     icon: "code",
+    coming: "Cloud runs for when your Mac is off. They need the Celiador GitHub App on the repository.",
   },
   {
-    title: "Native macOS app",
-    body: "Not a browser tab. A fast, signed native app that feels at home on your Mac, with menu bar, notifications, and deep OS integration.",
-    icon: "apple",
+    title: "GitHub is the cockpit",
+    body: "Every run narrates itself on the issue: a comment when it is picked up and on which branch, and the pull request link when it is done. Your team sees the work where they already look.",
+    icon: "github",
+    coming: "The agent's plan and its questions posted on the issue, answered by replying there.",
   },
   {
-    title: "Every edit is reviewable",
-    body: "Nothing is applied silently. Each write is a diff you accept or reject, so the agent stays fast without ever going rogue.",
+    title: "Every PR explains itself",
+    body: "The pull request says what the agent did and closes the issue it came from, so review starts from the agent's own account of the change.",
     icon: "diff",
+    coming: "A self-review section in every PR, per-run cost on the PR and on the card, and failed CI checks fixed by the agent.",
   },
   {
     title: "Our key, your privacy",
-    body: "The editor never holds a model key. Requests go through our server, which holds the key and meters usage with limits we publish. Your code isn't training data.",
+    body: "No client holds a model key. Requests go through our server, which holds the key and meters usage with limits we publish. Your code isn't training data.",
     icon: "shield",
   },
 ];
 
 export const steps: { title: string; body: string }[] = [
   {
-    title: "Describe it",
-    body: "Tell Celiador what you want — a feature, a refactor, a bug fix — in natural language, right inside the editor.",
+    title: "Label it",
+    body: "Write the issue the way you would brief a colleague, then add the celiador label. Within a minute the issue gets a comment saying it was picked up and on which branch.",
   },
   {
-    title: "Review the plan",
-    body: "The agent proposes a set of edits across your files. See the full diff, tweak the intent, and stay in control.",
+    title: "It runs in its own worktree",
+    body: "The agent reads, edits, runs your lint and tests, and commits on a fresh branch in a git worktree on your Mac. Routine commands run on their own; a risky one waits for you.",
   },
   {
-    title: "Ship it",
-    body: "Accept the changes, run your tests, and commit. From idea to merged PR without leaving the editor.",
+    title: "Review and merge from anywhere",
+    body: "The pull request shows up on your phone and in the editor's Agents view. Read the diff, send a follow-up if it needs another pass, then approve and merge.",
   },
 ];
 
@@ -140,19 +157,23 @@ export const tiers: Tier[] = [
 export const faqs: { q: string; a: string }[] = [
   {
     q: "What is Celiador?",
-    a: "Celiador is a native macOS AI code editor. It's a hard fork of VS Code with a built-in agent that can read your whole codebase, answer questions, and make multi-file edits that you review before they're applied.",
+    a: "Celiador turns GitHub issues into pull requests. You label an issue celiador; an agent runs it on your Mac in its own git worktree, comments on the issue, and opens a pull request that closes it. You review and merge from your phone or from the editor's Agents view. The agent is Claude, run through our server on our key.",
   },
   {
-    q: "How is it different from VS Code?",
-    a: "Everything you love about VS Code is still here — extensions, themes, keybindings. Celiador adds a first-class AI agent baked into the editor core, rather than bolted on as an extension, so it can move faster and see more context.",
+    q: "Do I have to switch editors?",
+    a: "No. The Celiador editor, a fork of VS Code, has the loop built in and is the nicest place to watch runs. If you want to keep VS Code or Cursor, install the Celiador Remote extension: same loop, same account, same phone. Cloud runs for when your Mac is off are being built and will need the Celiador GitHub App on the repository.",
+  },
+  {
+    q: "What does the agent do when it needs me?",
+    a: "Routine commands run on their own. A risky command or a question shows up under Needs you on the phone and in the Agents view, with Allow and Deny, and the run waits. Posting the same question on the issue, so you can answer by replying, is being built.",
   },
   {
     q: "Is it available now?",
-    a: "Yes, as early access. The macOS app is a signed, notarized download that updates itself; the iPhone companion follows on TestFlight.",
+    a: "Yes, as early access. The editor is a signed, notarized macOS download that updates itself, with Linux x64 packages too; Celiador Remote is on Open VSX; the iPhone app is on TestFlight by invite until the public link is on the download page.",
   },
   {
     q: "Which platforms are supported?",
-    a: "macOS on Apple Silicon today, with an iPhone companion for steering runs. Windows and Linux builds are on the roadmap — tell us on the download page which you need.",
+    a: "Runners: the Celiador editor on macOS (Apple Silicon) and Linux x64, or any VS Code or Cursor install with Celiador Remote. Review: iPhone, or the Agents view in the editor. A Windows build of the editor is on the roadmap; tell us on the download page if you need it.",
   },
   {
     q: "What does it cost?",
@@ -160,11 +181,7 @@ export const faqs: { q: string; a: string }[] = [
   },
   {
     q: "What happens to my code?",
-    a: "Your code stays yours. It is never used to train models. The editor never holds a model key; requests go through our server, which holds the key, and nothing is indexed server-side.",
-  },
-  {
-    q: "Do I need to learn a new editor?",
-    a: "No. Because Celiador is built on VS Code, your existing setup, shortcuts, and extensions carry over on day one.",
+    a: "Your code stays yours. Runs happen on your machine, in a worktree of your own clone. It is never used to train models. No client holds a model key; the agent's requests go through our server, which holds the key, and nothing is indexed server-side.",
   },
 ];
 
@@ -176,7 +193,7 @@ export const footerLinks: { heading: string; links: { label: string; href: strin
       { label: "Features", href: "/features" },
       { label: "Pricing", href: "/pricing" },
       { label: "Download", href: "/download" },
-      { label: "Switch from Cursor", href: "/switch" },
+      { label: "Keep Cursor or VS Code", href: "/switch" },
       { label: "Releases", href: "/releases" },
       { label: "Docs", href: "/docs" },
       { label: "Changelog", href: "/changelog" },

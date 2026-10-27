@@ -6,10 +6,11 @@ import { latestMacDmgHref, latestMacRelease } from "@/lib/releases";
 
 export const metadata: Metadata = {
   title: "Docs",
-  description: "Getting started with Celiador: install, sign in, the agent, the iPhone companion, Workspace Trust, limits, updates and your data.",
+  description: "Getting started with Celiador: the loop, the runners, install, sign in, the agent, the iPhone companion, Workspace Trust, limits, updates and your data.",
 };
 
 const sections: { id: string; title: string }[] = [
+  { id: "loop", title: "The loop" },
   { id: "install", title: "Install" },
   { id: "sign-in", title: "Sign in" },
   { id: "agent", title: "The agent" },
@@ -33,12 +34,13 @@ export default async function DocsPage() {
         <Eyebrow>Docs</Eyebrow>
         <h1 className="mt-6 text-4xl font-semibold tracking-tight sm:text-5xl">Getting started</h1>
         <p className="mt-4 text-lg text-fog">
-          Everything you need for the first hour with Celiador. Short on purpose; the editor itself
-          is VS Code, so what you already know still applies.
+          Everything you need for the first hour with Celiador. Short on purpose; the loop is three
+          steps, and the editor itself is VS Code, so what you already know still applies.
         </p>
         <p className="mt-4 text-fog">
           New here? Follow the{" "}
-          <Link href="/start" className="text-brand hover:underline">start guide</Link>.
+          <Link href="/start" className="text-brand hover:underline">start guide</Link>; it ends with
+          your first merged agent pull request.
         </p>
 
         <nav className="mt-8 flex flex-wrap gap-2">
@@ -50,9 +52,28 @@ export default async function DocsPage() {
         </nav>
 
         <div className="mt-10 space-y-6 text-sm leading-relaxed text-fog [&_h2]:mt-10 [&_h2]:scroll-mt-24 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:mt-6 [&_h3]:font-semibold [&_h3]:text-white [&_code]:rounded [&_code]:bg-white/[0.06] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_code]:text-white [&_kbd]:rounded [&_kbd]:border [&_kbd]:border-line [&_kbd]:bg-white/[0.04] [&_kbd]:px-1.5 [&_kbd]:py-0.5 [&_kbd]:font-mono [&_kbd]:text-[12px] [&_kbd]:text-white">
+          <h2 id="loop">The loop</h2>
+          <p>
+            Label a GitHub issue <code>celiador</code> on a repository you have linked from the phone. A
+            runner on your Mac picks it up, creates a git worktree on a fresh branch so your checkout is
+            untouched, and runs a Claude agent there. The issue gets a comment saying it was picked up and on
+            which branch. When the agent is done, the runner pushes the branch and opens a pull request that
+            closes the issue; the issue gets the link. You review the diff on the phone or in the
+            editor&apos;s Agents view, send a follow-up if it needs another turn, and approve and merge.
+          </p>
+          <p>
+            Runners: the Celiador editor (below), or VS Code and Cursor with the{" "}
+            <a href="https://open-vsx.org/extension/celiador/celiador-remote" className="text-brand hover:underline">Celiador Remote</a>{" "}
+            extension. Cloud runs for when your Mac is off are being built and will need the Celiador GitHub
+            App on the repository. Routine commands run on their own; a risky command or a question waits for
+            you under <strong className="text-white">Needs you</strong>, with Allow and Deny. The{" "}
+            <Link href="/start" className="text-brand hover:underline">start guide</Link> walks through the
+            GitHub App, the phone and the first issue.
+          </p>
+
           <h2 id="install">Install</h2>
           <p>
-            Celiador runs on Apple Silicon Macs with macOS 13 or later.{" "}
+            The Celiador editor runs on Apple Silicon Macs with macOS 13 or later, and on Linux x64.{" "}
             <a href={latestMacDmgHref} className="text-brand hover:underline">Download the DMG</a>
             {release ? ` (version ${release.productVersion})` : ""}, open it, drag Celiador to Applications,
             and open it from there. The app is signed with a Developer ID and notarized by Apple: you&apos;ll
@@ -61,9 +82,11 @@ export default async function DocsPage() {
             <Link href="/releases" className="text-brand hover:underline">releases page</Link>.
           </p>
           <p>
-            Windows and Linux are on the roadmap; the{" "}
-            <Link href="/download" className="text-brand hover:underline">download page</Link> has a notify-me
-            form for them.
+            Linux packages (.deb, .rpm, .tar.gz) are on the{" "}
+            <Link href="/download" className="text-brand hover:underline">download page</Link>; Windows is on
+            the roadmap and the same page has a notify-me form for it. Keeping VS Code or Cursor? Install
+            Celiador Remote instead; the <Link href="/switch" className="text-brand hover:underline">switching page</Link>{" "}
+            has the steps.
           </p>
 
           <h2 id="sign-in">Sign in</h2>
@@ -75,11 +98,12 @@ export default async function DocsPage() {
             editor. Your account is what the hosted agent and the iPhone companion share.
           </p>
 
-          <h2 id="agent">The agent</h2>
+          <h2 id="agent">The agent in the editor</h2>
           <p>
             Claude is built into the editor and runs through our server; there is no key to paste
-            and no extension to install. The first chat downloads the agent runtime (about a minute),
-            then three surfaces are yours:
+            and no extension to install. Labelled issues run through it without you doing anything (see
+            the loop above). The first chat downloads the agent runtime (about a minute), then three
+            surfaces are yours for work you start yourself:
           </p>
           <h3>Chat</h3>
           <p>
@@ -96,20 +120,22 @@ export default async function DocsPage() {
           </p>
           <h3>Agents window</h3>
           <p>
-            <code>Open Agents Window</code> from the Command Palette is the cockpit: several runs side by
-            side, each with its transcript, tool calls and diff. These are the same sessions the
-            iPhone app watches.
+            <code>Open Agents Window</code> from the Command Palette is the cockpit: the queue of labelled
+            issues and several runs side by side, each with its transcript, tool calls and diff. These are
+            the same sessions the iPhone app watches, and the pull requests can be reviewed and merged here
+            as well as on the phone.
           </p>
 
           <h2 id="phone">iPhone companion</h2>
           <p>
-            The companion app shows every run your editor is doing, live. You can send follow-ups,
-            approve or deny a tool call, answer the agent&apos;s questions, cancel, browse and edit files
-            of the session, review the diff, discard files, commit, push and open a pull request —
-            without touching the laptop. &ldquo;From your editor&rdquo; lists the repositories your Mac has
-            open, so a run can start from the phone on the local working copy; no cloning, no
-            tokens. Distribution is through TestFlight; the link appears on the download page when
-            it&apos;s live.
+            The companion app is the review surface for the loop: what needs you, what is running, and
+            the pull requests ready for review, from every runner on your account. Read the agent&apos;s
+            account of the change and the diff, send follow-ups, allow or deny a tool call, answer the
+            agent&apos;s questions, cancel, browse and edit files of the session, discard files, and approve
+            and merge the pull request, without touching the laptop. &ldquo;From your editor&rdquo; lists the
+            repositories your Mac has open, so a run can also start from the phone on the local working
+            copy; no cloning, no tokens. Distribution is through TestFlight; the link appears on the
+            download page when it&apos;s live.
           </p>
 
           <h2 id="workspace-trust">Workspace Trust</h2>

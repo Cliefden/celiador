@@ -48,7 +48,7 @@ export function Footer() {
 
         <div className="mt-14 flex flex-col items-center justify-between gap-4 border-t border-line pt-8 text-sm text-fog-dim sm:flex-row">
           <p>© {new Date().getFullYear()} Celiador. All rights reserved.</p>
-          <p className="font-mono text-xs">Built on VS Code · Made for the Mac</p>
+          <p className="font-mono text-xs">Issue in, pull request out · Built on VS Code</p>
         </div>
       </Container>
     </footer>

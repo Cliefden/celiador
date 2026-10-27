@@ -7,16 +7,17 @@ import { latestMacDmgHref, latestMacRelease } from "@/lib/releases";
 export const metadata: Metadata = {
   title: "Your first agent pull request",
   description:
-    "From download to a merged agent pull request in about ten minutes: install Celiador, sign in, connect GitHub, label an issue, review and merge from your phone.",
+    "From nothing to a merged agent pull request in about ten minutes: pick a runner (Celiador editor, or VS Code and Cursor with Celiador Remote), sign in, connect GitHub, label an issue, review and merge from your phone.",
 };
 
 // The page an outside developer gets sent. Every step below was exercised on a
 // clean profile in the loop tests (Oct 2026); the two preconditions people miss
 // — a GitHub sign-in for the pull request and a repository linked from the phone
 // — are called out as steps of their own, not footnotes. Keep it to one screen
-// per step and say what the person will see.
+// per step and say what the person will see. Step 1 names the three runners;
+// the cloud one is in progress and must stay marked as such until it is live.
 const steps: { id: string; title: string; minutes: number }[] = [
-  { id: "install", title: "Install and sign in", minutes: 2 },
+  { id: "install", title: "Pick a runner and sign in", minutes: 2 },
   { id: "github", title: "Connect GitHub", minutes: 2 },
   { id: "phone", title: "Put the queue on your phone", minutes: 2 },
   { id: "repo", title: "Open the repository and watch it", minutes: 1 },
@@ -37,7 +38,9 @@ export default async function StartPage() {
         <p className="mt-4 text-lg leading-relaxed text-fog">
           Celiador turns a GitHub issue into a pull request while you are away from the keyboard:
           you label the issue, an agent runs it on your Mac in its own git worktree, and you review and
-          merge from your phone. This page gets you from nothing to that first merge.
+          merge from your phone. The agent needs a runner on your Mac; the Celiador editor is one,
+          VS Code or Cursor with the Celiador Remote extension is another. This page gets you from
+          nothing to that first merge with either.
         </p>
 
         <ol className="mt-8 grid gap-2 sm:grid-cols-2">
@@ -55,9 +58,15 @@ export default async function StartPage() {
         </ol>
 
         <div className="mt-10 space-y-6 text-sm leading-relaxed text-fog [&_h2]:mt-12 [&_h2]:scroll-mt-24 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_code]:rounded [&_code]:bg-white/[0.06] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_code]:text-white [&_li]:ml-5 [&_li]:list-decimal">
-          <h2 id="install">1. Install and sign in</h2>
+          <h2 id="install">1. Pick a runner and sign in</h2>
           <p>
-            You need an Apple Silicon Mac (macOS 13 or later) or Linux x86_64.{" "}
+            A runner is the program on your Mac that does the work when an issue is labelled. There are
+            three; pick one.
+          </p>
+          <h3 className="mt-6 font-semibold text-white">The Celiador editor</h3>
+          <p>
+            The loop built into a VS Code fork, with an Agents view that shows every run. You need an Apple
+            Silicon Mac (macOS 13 or later) or Linux x86_64.{" "}
             <a href={latestMacDmgHref} className="text-brand hover:underline">Download the macOS DMG</a>
             {release ? ` (version ${release.productVersion})` : ""} or pick a Linux package on the{" "}
             <Link href="/download" className="text-brand hover:underline">download page</Link>. Open it, drag
@@ -67,18 +76,28 @@ export default async function StartPage() {
             editor, the phone app and the hosted agent; there is no API key to paste.
           </p>
           <p>
-            Coming from Cursor or VS Code? The first launch offers to import your settings, keybindings
-            and extensions; the <Link href="/switch" className="text-brand hover:underline">switching page</Link>{" "}
-            says what carries over.
+            Coming from Cursor or VS Code? Run <code>Celiador: Import Settings from Another Editor</code> from
+            the command palette to bring your settings, keybindings and extensions over; the{" "}
+            <Link href="/switch" className="text-brand hover:underline">switching page</Link> says what
+            carries over.
           </p>
+          <h3 className="mt-6 font-semibold text-white">VS Code or Cursor, with Celiador Remote</h3>
           <p>
-            Want to keep VS Code or Cursor? Install{" "}
+            Keep your editor and install the{" "}
             <a href="https://open-vsx.org/extension/celiador/celiador-remote" className="text-brand hover:underline">Celiador Remote</a>{" "}
-            instead. In Cursor, search for it in the Extensions view; in VS Code, download the VSIX from the{" "}
+            extension. In Cursor, search for it in the Extensions view; in VS Code, download the VSIX from the{" "}
             <a href="https://github.com/Cliefden/celiador-remote/releases/latest" className="text-brand hover:underline">latest release</a>{" "}
             and run <strong className="text-white">Extensions: Install from VSIX…</strong>. Sign in from its
             status bar item, then follow the same steps 2 to 6. Runs happen on your machine in a git
             worktree, the same way; the extension uses the Claude Code CLI you have installed, or downloads it once.
+            Without the Celiador editor you review in the phone app rather than an Agents view.
+          </p>
+          <h3 className="mt-6 font-semibold text-white">The cloud (being built)</h3>
+          <p>
+            A run that starts even when your Mac is off, on a server of ours, on a clone of the repository.
+            It is being built and is not live yet. It will need the Celiador GitHub App installed on the
+            repository (step 2), since the push and the pull request happen without your machine. Until then,
+            a labelled issue waits in the queue until a runner of yours is online.
           </p>
 
           <h2 id="github">2. Connect GitHub</h2>
@@ -150,15 +169,22 @@ export default async function StartPage() {
           <p>
             The pull request shows under <strong className="text-white">Ready for review</strong>. Tap it to
             read the diff, discard a file, or send a follow-up that starts another turn on the same branch.
-            Swipe the row to <strong className="text-white">Merge</strong>: the editor merges it with your
+            Swipe the row to <strong className="text-white">Merge</strong>: your runner merges it with your
             GitHub sign-in and the task moves to merged. That is the loop. The account panel keeps count of
             pull requests merged in the last seven days; it is the one number we steer the product by.
+          </p>
+          <p>
+            Being built, in the same release cycle: the agent&apos;s plan and its questions posted on the
+            issue, so you can answer by replying there; failed CI checks picked up and fixed by the agent; the
+            cost of each run shown on the pull request and on the card; and a self-review section in every
+            pull request. None of that is live yet; when it is, it appears in the{" "}
+            <Link href="/changelog" className="text-brand hover:underline">changelog</Link> first.
           </p>
 
           <h2 id="after">When something goes wrong</h2>
           <ol className="space-y-2">
             <li><strong className="text-white">The pull request is a compare link.</strong> The editor had no GitHub sign-in; see step 2.</li>
-            <li><strong className="text-white">Nothing happens after the label.</strong> The app is not installed on that repository (step 2) or the repository is not watched from the phone (step 4). The editor must also be running with the folder open.</li>
+            <li><strong className="text-white">Nothing happens after the label.</strong> The app is not installed on that repository (step 2) or the repository is not watched from the phone (step 4). A runner must also be online with the folder open: the Celiador editor, or VS Code or Cursor with Celiador Remote.</li>
             <li><strong className="text-white">The run failed.</strong> The task shows the error on the phone. Our limits are published and enforced per account; the current ones are on the <Link href="/pricing" className="text-brand hover:underline">pricing page</Link>.</li>
             <li><strong className="text-white">Anything else.</strong> <a href="https://github.com/Cliefden/celiador-editor/issues/new" className="text-brand hover:underline" target="_blank" rel="noreferrer">Open an issue</a> or write to the <Link href="/contact" className="text-brand hover:underline">contact page</Link>; a person answers.</li>
           </ol>

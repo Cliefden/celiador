@@ -118,6 +118,15 @@ export function SparkIcon(p: IconProps) {
   );
 }
 
+export function PhoneIcon(p: IconProps) {
+  return (
+    <svg {...base} {...p}>
+      <rect x="7" y="2.5" width="10" height="19" rx="2" />
+      <path d="M11 18.5h2" />
+    </svg>
+  );
+}
+
 export const iconMap: Record<string, (p: IconProps) => React.ReactElement> = {
   bolt: BoltIcon,
   chat: ChatIcon,
@@ -125,6 +134,8 @@ export const iconMap: Record<string, (p: IconProps) => React.ReactElement> = {
   apple: AppleIcon,
   diff: DiffIcon,
   shield: ShieldIcon,
+  phone: PhoneIcon,
+  github: GithubIcon,
 };
 
 export function BrandMark(p: IconProps) {

@@ -8,7 +8,7 @@ import { formatReleaseDate, latestHref, latestMacDmgHref, latestMacRelease, late
 
 export const metadata: Metadata = {
   title: "Download",
-  description: `Download ${site.name} for macOS — a notarized native app that updates itself.`,
+  description: `Download the ${site.name} editor for macOS or Linux, the nicest runner for the loop; or keep VS Code or Cursor and install Celiador Remote.`,
 };
 
 export default async function DownloadPage() {
@@ -29,12 +29,19 @@ export default async function DownloadPage() {
         <div className="mx-auto max-w-2xl text-center">
           <Eyebrow>{release ? "Early access" : "Private preview"}</Eyebrow>
           <h1 className="mt-6 text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
-            Download Celiador for Mac
+            Download the Celiador editor
           </h1>
           <p className="mt-4 text-lg leading-relaxed text-fog">
             {release
-              ? "A signed, notarized native app. Install once; it keeps itself up to date."
+              ? "The nicest runner for the loop: a VS Code fork with the agent and the Agents view built in. Signed, notarized, keeps itself up to date."
               : "The macOS app is in private preview. Leave your email and we'll send you the signed build the moment it's ready."}
+          </p>
+          <p className="mt-3 text-sm text-fog">
+            Keeping VS Code or Cursor?{" "}
+            <Link href="/switch" className="text-brand hover:underline">
+              Install Celiador Remote instead
+            </Link>
+            ; same loop, same account.
           </p>
         </div>
 
@@ -107,10 +114,21 @@ export default async function DownloadPage() {
             </div>
           </div>
 
-          {/* Companion + other platforms */}
+          {/* Other runners, the phone, other platforms */}
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface/60 px-4 py-3.5">
+              <span className="text-sm text-white">VS Code or Cursor</span>
+              <span className="flex items-center gap-3 font-mono text-xs">
+                <a href={site.remoteOpenVsx} className="text-brand hover:underline" target="_blank" rel="noreferrer">
+                  Open VSX
+                </a>
+                <a href={site.remoteReleases} className="text-brand hover:underline" target="_blank" rel="noreferrer">
+                  VSIX
+                </a>
+              </span>
+            </div>
             <div className="flex items-center justify-between rounded-xl border border-line bg-surface/60 px-4 py-3.5">
-              <span className="text-sm text-white">iPhone companion</span>
+              <span className="text-sm text-white">iPhone (review)</span>
               {site.testflightUrl ? (
                 <a href={site.testflightUrl} className="font-mono text-xs text-brand hover:underline" target="_blank" rel="noreferrer">
                   Join on TestFlight
@@ -150,12 +168,12 @@ export default async function DownloadPage() {
           </h3>
           <ul className="mt-6 grid gap-3 sm:grid-cols-2">
             {[
-              "Native macOS editor built on VS Code",
-              "Claude-powered agent across your whole codebase",
-              "Every edit reviewable before it lands",
-              "Steer runs from your iPhone",
-              "Your extensions, themes & keybindings",
-              "Automatic updates",
+              "The loop built in: label an issue, get a pull request",
+              "Agents view: the queue and every run, with transcript and diff",
+              "Runs in a git worktree; your checkout is untouched",
+              "Review and merge from your iPhone",
+              "Claude through our key; limits published",
+              "Your extensions, themes and keybindings, with automatic updates",
             ].map((t) => (
               <li key={t} className="flex items-start gap-3 rounded-xl border border-line bg-surface/40 px-4 py-3 text-sm text-fog">
                 <CheckIcon className="mt-0.5 h-5 w-5 shrink-0 text-brand" />

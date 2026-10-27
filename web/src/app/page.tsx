@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { Button, Container, Eyebrow, SectionHeading } from "@/components/ui";
-import { EditorMock } from "@/components/EditorMock";
+import { LoopMock, PhoneMock } from "@/components/LoopMock";
 import { FAQ } from "@/components/FAQ";
 import { EmailCapture } from "@/components/EmailCapture";
-import { iconMap, AppleIcon, ArrowIcon, CheckIcon, SparkIcon } from "@/components/icons";
-import { features, steps, site, tiers } from "@/lib/site";
+import { iconMap, ArrowIcon, CheckIcon, SparkIcon } from "@/components/icons";
+import { features, steps, tiers } from "@/lib/site";
 
 export default function HomePage() {
   return (
@@ -17,39 +17,39 @@ export default function HomePage() {
           <div className="animate-fade-up">
             <Eyebrow>
               <SparkIcon className="h-3.5 w-3.5 text-brand" />
-              Now in private preview
+              Early access · Celiador editor, VS Code or Cursor
             </Eyebrow>
           </div>
           <h1 className="animate-fade-up mx-auto mt-7 max-w-4xl text-balance text-5xl font-semibold leading-[1.05] tracking-tight sm:text-6xl md:text-7xl">
-            The AI editor for
+            Issue in,
             <br />
-            <span className="gradient-text">people who ship.</span>
+            <span className="gradient-text">pull request out.</span>
           </h1>
           <p className="animate-fade-up mx-auto mt-6 max-w-2xl text-pretty text-lg leading-relaxed text-fog">
-            Celiador is a native macOS code editor with an agent built into its core. Describe the
-            change — it reads your repo, edits across files, and hands you a diff to review. Built on
-            VS Code, so everything you already know comes with you.
+            Label a GitHub issue <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[15px] text-white">celiador</code>.
+            An agent runs it on your Mac in its own git worktree, opens a pull request that closes the
+            issue, and you review and merge from your phone.
           </p>
           <div className="animate-fade-up mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Button href="/download" variant="primary" icon="download" className="px-6 py-3.5">
-              Download for Mac
+            <Button href="/start" variant="primary" icon="arrow" className="px-6 py-3.5">
+              Get started
             </Button>
-            <Button href="/features" variant="secondary" icon="arrow" className="px-6 py-3.5">
-              See what it does
+            <Button href="/download" variant="secondary" icon="download" className="px-6 py-3.5">
+              Download for Mac
             </Button>
           </div>
           <p className="mt-4 font-mono text-xs text-fog-dim">
-            {site.minMacOS} · Free to start
+            Free in early access · Claude, on our key · Limits published
           </p>
           <p className="mt-4 text-sm text-fog">
-            Coming from Cursor or VS Code?{" "}
+            Keeping VS Code or Cursor?{" "}
             <Link href="/switch" className="text-brand hover:underline">
-              Here&apos;s what changes.
+              Add Celiador Remote and you get the loop.
             </Link>
           </p>
 
           <div className="animate-float mx-auto mt-16 max-w-4xl text-left">
-            <EditorMock />
+            <LoopMock />
           </div>
         </Container>
       </section>
@@ -57,15 +57,19 @@ export default function HomePage() {
       {/* ── Trust bar ────────────────────────────────────── */}
       <section className="border-y border-line bg-surface/40">
         <Container className="flex flex-wrap items-center justify-center gap-x-10 gap-y-3 py-6 text-sm text-fog-dim">
-          <span className="font-mono text-xs uppercase tracking-wider">Built for the way you already work</span>
-          {["VS Code core", "Open VSX extensions", "Your keybindings", "Your themes", "Apple Silicon"].map(
-            (t) => (
-              <span key={t} className="flex items-center gap-2">
-                <CheckIcon className="h-4 w-4 text-brand" />
-                {t}
-              </span>
-            ),
-          )}
+          <span className="font-mono text-xs uppercase tracking-wider">Fits the tools you already use</span>
+          {[
+            "GitHub issues and pull requests",
+            "A git worktree on your Mac",
+            "Celiador editor, VS Code or Cursor",
+            "Review on your iPhone",
+            "Claude, through our key",
+          ].map((t) => (
+            <span key={t} className="flex items-center gap-2">
+              <CheckIcon className="h-4 w-4 text-brand" />
+              {t}
+            </span>
+          ))}
         </Container>
       </section>
 
@@ -73,9 +77,9 @@ export default function HomePage() {
       <section id="features" className="py-24">
         <Container>
           <SectionHeading
-            eyebrow="Features"
-            title="An editor that does the work with you"
-            sub="Not autocomplete. A real agent that understands your whole codebase and makes changes you stay in control of."
+            eyebrow="What you get"
+            title="What happens when you add the label"
+            sub="An agent, a worktree, a pull request, and a phone to review it from. The editor is one way to run it, not the point."
           />
           <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {features.map((f) => {
@@ -87,6 +91,14 @@ export default function HomePage() {
                   </div>
                   <h3 className="mt-5 text-lg font-semibold tracking-tight">{f.title}</h3>
                   <p className="mt-2 text-sm leading-relaxed text-fog">{f.body}</p>
+                  {f.coming && (
+                    <p className="mt-3 text-xs leading-relaxed text-fog-dim">
+                      <span className="mr-1.5 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
+                        coming
+                      </span>
+                      {f.coming}
+                    </p>
+                  )}
                 </div>
               );
             })}
@@ -99,8 +111,8 @@ export default function HomePage() {
         <Container>
           <SectionHeading
             eyebrow="How it works"
-            title="From idea to merged, in three steps"
-            sub="The agent proposes; you decide. Every change is a reviewable diff — never a silent rewrite."
+            title="Three steps. Two of them are yours."
+            sub="You write the issue and you merge the pull request. The agent does the part in between, on a branch of its own."
           />
           <div className="mt-14 grid gap-6 md:grid-cols-3">
             {steps.map((s, i) => (
@@ -121,21 +133,22 @@ export default function HomePage() {
       <section className="py-24">
         <Container className="grid items-center gap-14 lg:grid-cols-2">
           <div>
-            <Eyebrow>Whole-repo context</Eyebrow>
+            <Eyebrow>Review from anywhere</Eyebrow>
             <h2 className="mt-5 text-3xl font-semibold tracking-tight sm:text-4xl">
-              It reads everything, so you don&apos;t have to explain everything.
+              The pull request comes to you.
             </h2>
             <p className="mt-4 text-base leading-relaxed text-fog">
-              Point Celiador at any repository and it builds a live understanding of your code —
-              modules, types, conventions, and how it all fits. Ask a question, request a change, or
-              hand it a bug; it works with the full picture, not just the file you have open.
+              You don&apos;t have to be at the Mac that ran it. Celiador for iPhone lists what needs
+              you, what is running and what is ready for review, with the agent&apos;s account of the
+              change and the diff. The same runs sit in the editor&apos;s Agents view, and the issue
+              on GitHub carries the record: picked up, the branch, the pull request.
             </p>
             <ul className="mt-7 space-y-3">
               {[
-                "Multi-file edits with a single reviewable diff",
-                "Runs your scripts, tests, and terminal commands",
-                "Understands your project's patterns and reuses them",
-                "Keeps your extensions, themes, and shortcuts",
+                "What the agent did, the diff, and what needs you, on your phone",
+                "A follow-up starts another turn on the same branch",
+                "Allow or deny a risky command without opening a laptop",
+                "Approve and merge from the phone; the editor merges with your GitHub sign-in",
               ].map((t) => (
                 <li key={t} className="flex items-start gap-3 text-sm text-fog">
                   <CheckIcon className="mt-0.5 h-5 w-5 shrink-0 text-brand" />
@@ -144,13 +157,13 @@ export default function HomePage() {
               ))}
             </ul>
             <div className="mt-8">
-              <Button href="/features" variant="secondary" icon="arrow">
-                Explore all features
+              <Button href="/start" variant="secondary" icon="arrow">
+                Read the start guide
               </Button>
             </div>
           </div>
           <div className="lg:pl-4">
-            <EditorMock />
+            <PhoneMock />
           </div>
         </Container>
       </section>
@@ -226,22 +239,25 @@ export default function HomePage() {
         <div className="pointer-events-none absolute inset-x-0 top-0 h-full hero-glow" />
         <Container className="relative text-center">
           <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-line bg-brand/10 text-brand">
-            <AppleIcon className="h-7 w-7" />
+            <SparkIcon className="h-7 w-7" />
           </div>
           <h2 className="mx-auto mt-6 max-w-2xl text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
-            Ship your next idea with Celiador.
+            Start with one issue.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-lg text-fog">
-            The macOS app is here — signed, notarized, and self-updating. Windows and Linux: say
-            the word and we&apos;ll tell you when yours ships.
+            Pick a runner, label an issue, and review the pull request from your phone. About ten
+            minutes from install to the first merge.
           </p>
-          <div className="mt-8 flex justify-center">
-            <Button href="/download" variant="primary" icon="download" className="px-6 py-3.5">
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Button href="/start" variant="primary" icon="arrow" className="px-6 py-3.5">
+              Get started
+            </Button>
+            <Button href="/download" variant="secondary" icon="download" className="px-6 py-3.5">
               Download for Mac
             </Button>
           </div>
           <div className="mt-8">
-            <EmailCapture subject="Celiador for Windows / Linux" hint="Tell us which platform you need; one email when it ships." />
+            <EmailCapture subject="Celiador for Windows" hint="Need the editor on Windows? One email when it ships." />
           </div>
         </Container>
       </section>

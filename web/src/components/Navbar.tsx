@@ -49,7 +49,7 @@ export function Navbar() {
           ))}
         </nav>
 
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="hidden items-center gap-4 md:flex">
           <Link
             href={site.github}
             target="_blank"
@@ -58,8 +58,11 @@ export function Navbar() {
           >
             GitHub
           </Link>
-          <Button href="/download" variant="primary" icon="download">
+          <Link href="/download" className="text-sm text-fog transition-colors hover:text-white">
             Download
+          </Link>
+          <Button href="/start" variant="primary" icon="arrow">
+            Get started
           </Button>
         </div>
 
@@ -85,8 +88,11 @@ export function Navbar() {
                 {item.label}
               </Link>
             ))}
-            <div className="mt-3">
-              <Button href="/download" variant="primary" icon="download" className="w-full">
+            <div className="mt-3 flex flex-col gap-2">
+              <Button href="/start" variant="primary" icon="arrow" className="w-full">
+                Get started
+              </Button>
+              <Button href="/download" variant="secondary" icon="download" className="w-full">
                 Download for Mac
               </Button>
             </div>
