@@ -36,6 +36,24 @@ export async function cloneRepo(url: string, branch: string | undefined, dir: st
   }
 }
 
+/**
+ * One git command in a workspace. `secret` (a token that rides in a URL argument)
+ * is scrubbed from any error, so it can't reach a log or a task's `error`.
+ */
+export async function git(dir: string, args: string[], opts: { timeout?: number; secret?: string; env?: NodeJS.ProcessEnv } = {}): Promise<string> {
+  try {
+    const { stdout } = await run("git", ["-C", dir, ...args], {
+      timeout: opts.timeout ?? 60_000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...opts.env },
+    });
+    return stdout;
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    throw new Error(opts.secret ? raw.split(opts.secret).join("***") : raw);
+  }
+}
+
 /** One changed file's patch. */
 export interface IFileDiff {
   readonly path: string;

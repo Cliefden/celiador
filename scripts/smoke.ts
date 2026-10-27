@@ -672,6 +672,298 @@ async function main(): Promise<void> {
 	// account deletion / boot sweep, not in executeServerRun's finally.
 	ok("workspace retained after run", fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-1")));
 
+	// ── Cost per run: gateway usage → session → task → /api/me ───────────────
+	console.log("\n== cost ==");
+	const { parseSelfReview, extractPlan, composePrBody } = await import("../src/tasks/prBody.ts");
+	const { overrideServerRunnerForTests } = await import("../src/runner/manager.ts");
+	const { overrideCloudRemoteForTests, WAITING_FOR_APP } = await import("../src/tasks/cloud.ts");
+	// A plain user token (no run id) — what the editor sends.
+	const userJwt = (() => {
+		const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
+		const now = Math.floor(Date.now() / 1000);
+		const input = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: "smoke-user", role: "authenticated", aud: "authenticated", iat: now, exp: now + 600 })}`;
+		return `${input}.${crypto.createHmac("sha256", process.env.SUPABASE_JWT_SECRET!).update(input).digest("base64url")}`;
+	})();
+	const userH = { "content-type": "application/json", authorization: `Bearer ${userJwt}` };
+	const gwBodyPlain = JSON.stringify({ model: AGENT_MODEL, max_tokens: 10, stream: true, messages: [{ role: "user", content: "hi" }] });
+	const until = async (pred: () => Promise<boolean> | boolean, ms = 10_000): Promise<boolean> => {
+		const t0 = Date.now();
+		while (Date.now() - t0 < ms) { if (await pred()) return true; await tick(40); }
+		return false;
+	};
+	type Usage = { requests: number; inputTokens: number; outputTokens: number; costUsd: number };
+	const getSession = async (id: string) => ((await (await app.request(`http://localhost/api/sessions/${id}`, { headers: authH })).json()) as { session?: { id: string; title: string; origin: string; runner: string; state: string; usage?: Usage } }).session;
+	const limits2 = (await (await app.request("http://localhost/api/limits")).json()) as { prices?: { currency: string; inputPerMtok: number; outputPerMtok: number } };
+	ok("GET /api/limits publishes the rate card (defaults 15 / 75 USD per Mtok)", limits2.prices?.currency === "USD" && limits2.prices.inputPerMtok === 15 && limits2.prices.outputPerMtok === 75, JSON.stringify(limits2.prices));
+	const CREPO = "https://github.com/Cliefden/cost-repo.git";
+	const costTask = ((await (await app.request(T, { method: "POST", headers: userH, body: JSON.stringify({ remoteUrl: CREPO, title: "Price the run" }) })).json()) as { task: ATask & { usage?: Usage } }).task;
+	const mirrored = ((await (await app.request("http://localhost/api/sessions", { method: "POST", headers: userH, body: JSON.stringify({ title: "Price the run", origin: "editor", runner: "editor", mirrorKey: "agent-host:mirror-1", taskId: costTask.id }) })).json()) as { session: { id: string } }).session;
+	await (await app.request(GW, { method: "POST", headers: { ...userH, "x-celiador-mirror": "agent-host:mirror-1" }, body: gwBodyPlain })).text();
+	const usage1 = (await getSession(mirrored.id))?.usage;
+	ok("gateway request with X-Celiador-Mirror → the mirrored session's usage, priced at the rate card", usage1?.requests === 1 && usage1.inputTokens === 5 && usage1.outputTokens === 3 && usage1.costUsd === 0.0003, JSON.stringify(usage1));
+	ok("task.usage mirrors the linked session's", JSON.stringify((await getTask(costTask.id) as ATask & { usage?: Usage })?.usage) === JSON.stringify(usage1));
+	await (await app.request(GW, { method: "POST", headers: { ...userH, "x-celiador-mirror": "agent-host:nobody" }, body: gwBodyPlain })).text();
+	await (await app.request(GW, { method: "POST", headers: userH, body: gwBodyPlain })).text();
+	ok("unknown / missing mirror header → counted for the user only", (await getSession(mirrored.id))?.usage?.requests === 1);
+	const runTok = { "content-type": "application/json", authorization: `Bearer ${mintRunnerToken("smoke-user", mirrored.id, 300)!}` };
+	await (await app.request(GW, { method: "POST", headers: runTok, body: gwBodyPlain })).text();
+	const usage2 = (await getSession(mirrored.id))?.usage;
+	ok("runner token → attributed by its run id (no header needed)", usage2?.requests === 2 && usage2.costUsd === 0.0006, JSON.stringify(usage2));
+	const sessOnDisk = JSON.parse(fs.readFileSync(path.join(HOME, "data", "sessions", "meta", "smoke-user.json"), "utf8")) as { sessions: Array<{ id: string; usage?: Usage }> };
+	await tick(300);
+	const sessOnDisk2 = JSON.parse(fs.readFileSync(path.join(HOME, "data", "sessions", "meta", "smoke-user.json"), "utf8")) as { sessions: Array<{ id: string; usage?: Usage }> };
+	ok("session usage is persisted (debounced)", (sessOnDisk2.sessions.find((s) => s.id === mirrored.id)?.usage?.requests ?? sessOnDisk.sessions.find((s) => s.id === mirrored.id)?.usage?.requests) === 2);
+	await postStatus(costTask.id, { state: "running", sessionId: mirrored.id });
+	await postStatus(costTask.id, { state: "pr-open", prUrl: "https://github.com/Cliefden/cost-repo/pull/3" });
+	const me = (await (await app.request("http://localhost/api/me", { headers: userH })).json()) as { tasks?: { costUsdLast7Days?: number; prOpen?: number } };
+	ok("GET /api/me → tasks.costUsdLast7Days sums pr-open + merged tasks finished in the window", me.tasks?.costUsdLast7Days === 0.0006, JSON.stringify(me.tasks));
+
+	// ── PR body helper (pure) ────────────────────────────────────────────────
+	console.log("\n== pr body ==");
+	const finalMsg = "Plan:\n1. Read the relay\n2. Add the header\n\nDid the thing.\n\n## Self-review\n### What changed\nAdded the mirror header to the proxy.\n### Unsure about\n- Whether the header survives the retry path.\n### Not run / verified\n- The iOS build (no simulator here).\n";
+	const review = parseSelfReview(finalMsg);
+	ok("self-review: headed sub-sections → paragraph + bullets", review.whatChanged === "Added the mirror header to the proxy." && review.unsure[0] === "Whether the header survives the retry path." && review.notVerified[0] === "The iOS build (no simulator here).", JSON.stringify(review));
+	const review2 = parseSelfReview("Done.\n\n**Self-review**\n- What changed: Renamed `foo` to `bar` in two files.\n- Unsure: nothing.\n- Not verified: didn't run the e2e suite.");
+	ok("self-review: bold heading + labelled bullets", review2.whatChanged === "Renamed `foo` to `bar` in two files." && review2.unsure[0] === "nothing." && review2.notVerified[0] === "didn't run the e2e suite.", JSON.stringify(review2));
+	ok("self-review: absent → empty", parseSelfReview("just text").whatChanged === undefined && parseSelfReview("just text").unsure.length === 0);
+	ok("plan: the lines under a Plan: heading, up to the blank line", extractPlan(finalMsg) === "1. Read the relay\n2. Add the header", JSON.stringify(extractPlan(finalMsg)));
+	ok("plan: bold inline form", extractPlan("**Plan:** look, then fix\n- a\n- b") === "look, then fix\n- a\n- b", JSON.stringify(extractPlan("**Plan:** look, then fix\n- a\n- b")));
+	ok("plan: none without the heading", extractPlan("I will plan to do x") === undefined);
+	const prBody = composePrBody({ issueNumber: 12, summary: finalMsg, runBy: "Stefan's MacBook Pro", changedFiles: 3, elapsedMs: 254_000, usage: { requests: 9, inputTokens: 12_345, outputTokens: 4_000, costUsd: 0.49 } });
+	ok("PR body: Closes, what the agent did, self-review bullets, footer", prBody === "Closes #12\n\n## What the agent did\nAdded the mirror header to the proxy.\n\n## Self-review\n- Unsure: Whether the header survives the retry path.\n- Not verified: The iOS build (no simulator here).\n\n---\nRun by Celiador on Stefan's MacBook Pro · 3 files · 4 min · $0.49 (12.3k in / 4.0k out tokens)", JSON.stringify(prBody));
+	const bareBody = composePrBody({ summary: "Just a sentence.", runBy: "the cloud" });
+	ok("PR body without an issue, review or numbers", bareBody === "## What the agent did\nJust a sentence.\n\n## Self-review\n_The agent flagged nothing it was unsure about or left unverified._\n\n---\nRun by Celiador on the cloud", JSON.stringify(bareBody));
+
+	// ── GitHub narration: plan, questions / approvals (+ answers from the issue), PR body, checks failed, failed ──
+	console.log("\n== narration ==");
+	const NREPO = "https://github.com/Cliefden/narrate-repo.git";
+	const nGhRepo = { name: "narrate-repo", owner: { login: "Cliefden" }, clone_url: NREPO };
+	const nBase = "/repos/Cliefden/narrate-repo";
+	const nCalls: GhCall[] = [];
+	ghHandler = (call) => {
+		nCalls.push(call);
+		if (call.path === `${nBase}/installation`) return { status: 200, json: { id: 9 } };
+		if (call.path === "/app/installations/9/access_tokens") return { status: 201, json: { token: "ghs_narrate" } };
+		if (call.path === nBase) return { status: 200, json: { default_branch: "main" } };
+		if (call.path.startsWith(`${nBase}/issues/`) && call.method === "POST") return { status: 201, json: { id: 1 } };
+		if (call.path === `${nBase}/pulls/31`) return { status: call.method === "PATCH" ? 200 : 200, json: { number: 31, html_url: "https://github.com/Cliefden/narrate-repo/pull/31", additions: 2, deletions: 1, changed_files: 1, mergeable: true, merged: false, head: { sha: "cafe01" } } };
+		if (call.path.startsWith(`${nBase}/commits/`)) return { status: 200, json: { total_count: 0, check_runs: [], state: "pending", statuses: [] } };
+		if (call.path === `${nBase}/check-suites/77/check-runs?per_page=50`) return { status: 200, json: { check_runs: [{ name: "build", conclusion: "failure", details_url: "https://ci.test/build/1" }, { name: "lint", conclusion: "success" }] } };
+		return { status: 404, json: { message: "Not Found" } };
+	};
+	resetGitHubAppForTests(smokeApp);
+	process.env.CELIADOR_TASK_CI_FIX_ATTEMPTS = "5";
+	await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: NREPO }) });
+	const nAbort = new AbortController();
+	const nStream = await app.request("http://localhost/api/presence/commands", { headers: authH, signal: nAbort.signal } as RequestInit);
+	void nStream.body!.getReader().read().catch(() => undefined);
+	await tick(30);
+	await app.request("http://localhost/api/presence/workspaces", { method: "PUT", headers: authH, body: JSON.stringify({ clientId: "ed-narrate", workspaces: [{ name: "narrate-repo", remoteUrl: NREPO }] }) });
+	const nTask = ((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: NREPO, issue: { number: 30, title: "Narrate the run", url: issueUrl(30, "narrate-repo") } }) })).json()) as { task: ATask }).task;
+	ok("narration task dispatched to the editor", nTask.state === "dispatched" && nTask.runner === "mac", JSON.stringify(nTask));
+	const nSess = ((await (await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ title: nTask.title, origin: "editor", runner: "editor", taskId: nTask.id }) })).json()) as { session: { id: string } }).session.id;
+	const nEv = (events: unknown[]) => app.request(`http://localhost/api/sessions/${nSess}/events`, { method: "POST", headers: authH, body: JSON.stringify(events) });
+	const issueComments = () => nCalls.filter((c) => c.path === `${nBase}/issues/30/comments` && c.method === "POST").map((c) => String(c.body?.body));
+	// The editor attaches as the session's runner (collects relayed commands; reattachable).
+	const nCmds: Array<{ kind?: string; requestId?: string; text?: string }> = [];
+	const attachRunner = async () => {
+		const abort = new AbortController();
+		const stream = await app.request(`http://localhost/api/sessions/${nSess}/commands`, { headers: authH, signal: abort.signal } as RequestInit);
+		const reader = (async () => {
+			const r = stream.body!.getReader();
+			const decoder = new TextDecoder();
+			let buf = "";
+			for (;;) {
+				const { done, value } = await r.read().catch(() => ({ done: true, value: undefined }));
+				if (done) return;
+				buf += decoder.decode(value, { stream: true });
+				const lines = buf.split("\n");
+				buf = lines.pop() ?? "";
+				for (const line of lines) if (line.startsWith("data:") && line.slice(5).trim()) nCmds.push(JSON.parse(line.slice(5)));
+			}
+		})();
+		await tick(30);
+		return { abort, reader };
+	};
+	let runner = await attachRunner();
+	await postStatus(nTask.id, { state: "running", sessionId: nSess, machine: "Stefan's MacBook Pro" });
+	await tick();
+	ok("picked up comment (editor)", issueComments().length === 1 && issueComments()[0]!.startsWith("**Picked up.** Running on Stefan's MacBook Pro"), JSON.stringify(issueComments()));
+	// Plan: streamed as deltas (the editor never sends a closing message), read when the reply ends.
+	await nEv([{ kind: "state", state: "running" }, { kind: "delta", text: "Plan:\n1. Look\n" }, { kind: "delta", text: "2. Fix\n\nLet me start." }, { kind: "tool", callId: "t1", name: "Read", input: {} }]);
+	await tick();
+	ok("streamed Plan: → one `**Plan.**` comment with the plan lines", issueComments()[1] === "**Plan.**\n1. Look\n2. Fix", JSON.stringify(issueComments()));
+	await nEv([{ kind: "message", role: "assistant", text: "Plan:\nagain" }]);
+	await tick();
+	ok("a later Plan: message does not post again", issueComments().length === 2, JSON.stringify(issueComments()));
+	// Question → comment with numbered choices; an owner's "2" picks the choice and gets a 👍.
+	await nEv([{ kind: "question", requestId: "q7", prompt: "Which port?", choices: ["4661", "4671"] }, { kind: "state", state: "awaiting" }]);
+	await tick();
+	ok("question → comment with choices + how to answer", issueComments()[2] === "**Question from the agent.** Which port?\n\n1. 4661\n2. 4671\n\nReply to this issue to answer (a number picks a choice), or answer in the Celiador queue.", JSON.stringify(issueComments()[2]));
+	const reply = (body: string, assoc: string, id = 555) => hook("issue_comment", { action: "created", repository: nGhRepo, comment: { id, body, author_association: assoc }, issue: { number: 30, title: "Narrate the run", body: "", html_url: issueUrl(30, "narrate-repo") } }, "appsec");
+	const outsider = (await (await reply("2", "NONE")).json()) as { ignored?: string };
+	ok("an outsider's reply is ignored", /not a collaborator/.test(outsider.ignored ?? ""), JSON.stringify(outsider));
+	const picked = (await (await reply("2", "OWNER")).json()) as { answered?: string; requestId?: string };
+	await tick();
+	ok("an owner's lone number → `answer` with that choice, relayed to the runner", picked.answered === "answer" && nCmds.some((c) => c.kind === "answer" && c.requestId === "q7" && c.text === "4671"), JSON.stringify({ picked, nCmds }));
+	ok("the reply is acknowledged with a 👍 reaction, not a comment", nCalls.some((c) => c.method === "POST" && c.path === `${nBase}/issues/comments/555/reactions` && c.body?.content === "+1") && issueComments().length === 3);
+	await nEv([{ kind: "state", state: "running" }]);
+	// Approval → comment with the preview; "Approve…" approves, "no" rejects, anything else is ignored.
+	await nEv([{ kind: "approval", requestId: "a8", approvalKind: "bash", title: "Run: npm test", preview: "npm test" }, { kind: "state", state: "awaiting" }]);
+	await tick();
+	ok("approval → comment with preview + approve/deny instructions", issueComments()[3] === "**Needs approval.** Run: npm test\n\n```\nnpm test\n```\n\nReply **approve** or **deny**, or decide in the Celiador queue.", JSON.stringify(issueComments()[3]));
+	const chatter = (await (await reply("looks fine to me", "MEMBER", 556)).json()) as { ignored?: string };
+	ok("a reply that isn't a decision is ignored", /approve/.test(chatter.ignored ?? ""), JSON.stringify(chatter));
+	const approved = (await (await reply("Approve, go ahead", "MEMBER", 557)).json()) as { answered?: string };
+	await tick();
+	ok("\"Approve…\" → approve relayed", approved.answered === "approve" && nCmds.some((c) => c.kind === "approve" && c.requestId === "a8"), JSON.stringify(approved));
+	await nEv([{ kind: "state", state: "running" }, { kind: "approval", requestId: "a9", approvalKind: "write_file", path: "src/x.ts" }, { kind: "state", state: "awaiting" }]);
+	await tick();
+	const denied = (await (await reply("no, leave that file", "COLLABORATOR", 558)).json()) as { answered?: string };
+	await tick();
+	ok("\"no\" → reject relayed; the second approval got its own comment", denied.answered === "reject" && nCmds.some((c) => c.kind === "reject" && c.requestId === "a9") && issueComments().length === 5, JSON.stringify({ denied, n: issueComments().length }));
+	await nEv([{ kind: "state", state: "running" }]);
+	// pr-open with the final message → the daemon composes the PR body and PATCHes it as the App.
+	await postStatus(nTask.id, { state: "pr-open", prUrl: "https://github.com/Cliefden/narrate-repo/pull/31", pr: { number: 31, additions: 2, deletions: 1, changedFiles: 1 }, summary: finalMsg });
+	await tick(120);
+	const patched = nCalls.find((c) => c.method === "PATCH" && c.path === `${nBase}/pulls/31`);
+	const patchedBody = String(patched?.body?.body ?? "");
+	ok("pr-open + summary → PATCH pulls/31 with the composed body", !!patched && patchedBody.startsWith("Closes #30\n\n## What the agent did\nAdded the mirror header to the proxy.\n\n## Self-review\n- Unsure: Whether the header survives the retry path.") && /Run by Celiador on Stefan's MacBook Pro · 1 file · \d+ s$/.test(patchedBody), JSON.stringify(patchedBody));
+	ok("…a run with no attributed usage gets no cost in the footer (nothing invented)", !patchedBody.includes("$"));
+	ok("pull request opened comment", issueComments()[5] === "Pull request opened: https://github.com/Cliefden/narrate-repo/pull/31", JSON.stringify(issueComments()));
+	// Checks failed → a fix follow-up (instruct) + comment; once per head sha; attempt cap; waits for a runner.
+	const checkRun = (sha: string, conclusion = "failure") => hook("check_run", { action: "completed", repository: nGhRepo, check_run: { name: "lint", head_sha: sha, conclusion, details_url: `https://ci.test/lint/${sha}`, check_suite: { head_branch: nTask.branch }, pull_requests: [{ number: 31, head: { ref: nTask.branch } }] } }, "appsec");
+	const ci1 = (await (await checkRun("cafe01")).json()) as { fixing?: string[] };
+	await tick(80);
+	ok("check_run failure on the PR branch → fix follow-up relayed to the run", ci1.fixing?.includes(nTask.id) === true && nCmds.some((c) => c.kind === "instruct" && c.text === "The CI checks failed on pull request #31 (lint). Details: https://ci.test/lint/cafe01. Investigate and fix, then commit."), JSON.stringify({ ci1, instructs: nCmds.filter((c) => c.kind === "instruct") }));
+	ok("checks failed comment: attempt 1 of 5", issueComments()[6] === "**Checks failed** — the agent is taking a look (attempt 1 of 5).", JSON.stringify(issueComments().slice(6)));
+	await checkRun("cafe01");
+	await tick(80);
+	ok("the same head sha again → nothing more", nCmds.filter((c) => c.kind === "instruct").length === 1 && issueComments().length === 7);
+	ok("a cancelled / neutral conclusion is not the agent's to fix", ((await (await checkRun("cafe09", "cancelled")).json()) as { fixing?: string[] }).fixing === undefined);
+	const suite = (await (await hook("check_suite", { action: "completed", repository: nGhRepo, check_suite: { id: 77, head_branch: nTask.branch, head_sha: "cafe02", conclusion: "failure", pull_requests: [{ number: 31, head: { ref: nTask.branch } }] } }, "appsec")).json()) as { fixing?: string[] };
+	await tick(120);
+	ok("check_suite failure → failed runs listed via the App, attempt 2", suite.fixing?.includes(nTask.id) === true && nCmds.some((c) => c.kind === "instruct" && c.text === "The CI checks failed on pull request #31 (build). Details: https://ci.test/build/1. Investigate and fix, then commit.") && issueComments()[7] === "**Checks failed** — the agent is taking a look (attempt 2 of 5).", JSON.stringify(issueComments().slice(7)));
+	runner.abort.abort();
+	await runner.reader;
+	await checkRun("cafe03");
+	await tick(80);
+	ok("no runner online → \"I'll retry when a runner is online\", nothing sent", issueComments()[8] === "**Checks failed** — I'll retry when a runner is online." && nCmds.filter((c) => c.kind === "instruct").length === 2, JSON.stringify(issueComments().slice(8)));
+	runner = await attachRunner();
+	await app.request("http://localhost/api/presence/workspaces", { method: "PUT", headers: authH, body: JSON.stringify({ clientId: "ed-narrate", workspaces: [{ name: "narrate-repo", remoteUrl: NREPO }] }) });
+	await tick(120);
+	ok("a runner comes back (editor heartbeat) → the parked fix is sent, attempt 3", nCmds.filter((c) => c.kind === "instruct").length === 3 && nCmds[nCmds.length - 1]?.text?.includes("cafe03") === true && issueComments()[9] === "**Checks failed** — the agent is taking a look (attempt 3 of 5).", JSON.stringify(issueComments().slice(9)));
+	process.env.CELIADOR_TASK_CI_FIX_ATTEMPTS = "3";
+	await checkRun("cafe04");
+	await tick(80);
+	ok("attempt cap reached → one give-up comment, nothing sent", issueComments()[10]?.startsWith("**Checks failed** — I've made 3 attempts") === true && nCmds.filter((c) => c.kind === "instruct").length === 3, JSON.stringify(issueComments().slice(10)));
+	await checkRun("cafe05");
+	await tick(80);
+	ok("…and only once", issueComments().length === 11);
+	delete process.env.CELIADOR_TASK_CI_FIX_ATTEMPTS;
+	ok("internal ci bookkeeping is not in the API", (await getTask(nTask.id) as ATask & { ci?: unknown })?.ci === undefined);
+	await postStatus(nTask.id, { state: "failed", error: "the push was rejected" });
+	await tick();
+	ok("failed → one `**Failed.**` comment with the error", issueComments()[11] === "**Failed.** the push was rejected\n\n[Open the queue](https://smoke.test/api/open/queue)", JSON.stringify(issueComments().slice(11)));
+	runner.abort.abort();
+	await runner.reader;
+	nAbort.abort();
+	await tick(30);
+
+	// ── Cloud fallback: no editor has the repo → sandboxed run → push → PR as the App ──
+	console.log("\n== cloud ==");
+	const seed = path.join(HOME, "cloud-seed");
+	fs.mkdirSync(seed, { recursive: true });
+	await run("git", ["init", "-q", "-b", "main", seed]);
+	await run("git", ["-C", seed, "config", "user.email", "s@smoke"]);
+	await run("git", ["-C", seed, "config", "user.name", "smoke"]);
+	fs.writeFileSync(path.join(seed, "README.md"), "# cloud\n");
+	await run("git", ["-C", seed, "add", "-A"]);
+	await run("git", ["-C", seed, "commit", "-q", "-m", "init"]);
+	const bare = path.join(HOME, "cloud-remote.git");
+	await run("git", ["clone", "-q", "--bare", seed, bare]);
+	overrideCloudRemoteForTests(() => `file://${bare}`);
+	let turns = 0;
+	const fakeAgent = async (ctx: { workspaceDir: string; userId: string; runId: string; publish: (e: unknown) => void }) => {
+		turns++;
+		fs.writeFileSync(path.join(ctx.workspaceDir, turns === 1 ? "fix.ts" : `followup-${turns}.ts`), `export const turn = ${turns};\n`);
+		// The agent's model calls go through the gateway with its runner token → attributed to the run.
+		await (await app.request(GW, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${mintRunnerToken(ctx.userId, ctx.runId, 300)!}` }, body: gwBodyPlain })).text();
+		ctx.publish({ kind: "message", role: "assistant", text: `Plan:\n1. Patch it\n\nPatched (turn ${turns}).\n\n## Self-review\n- What changed: Added fix.ts.\n- Unsure: nothing.\n- Not verified: tests (none in the repo).` });
+	};
+	overrideServerRunnerForTests({ agent: fakeAgent as never });
+	const CLREPO = "https://github.com/Cliefden/cloud-repo.git";
+	const cBase = "/repos/Cliefden/cloud-repo";
+	const cCalls: GhCall[] = [];
+	ghHandler = (call) => {
+		cCalls.push(call);
+		if (call.path === `${cBase}/installation`) return { status: 200, json: { id: 10 } };
+		if (call.path === "/app/installations/10/access_tokens") return { status: 201, json: { token: "ghs_cloud" } };
+		if (call.path === cBase) return { status: 200, json: { default_branch: "main" } };
+		if (call.path.startsWith(`${cBase}/issues/`) && call.method === "POST") return { status: 201, json: { id: 1 } };
+		if (call.path === `${cBase}/pulls` && call.method === "POST") return { status: 201, json: { number: 21, html_url: "https://github.com/Cliefden/cloud-repo/pull/21", additions: 1, deletions: 0, changed_files: 1 } };
+		if (call.path === `${cBase}/pulls/21`) return { status: 200, json: { number: 21, html_url: "https://github.com/Cliefden/cloud-repo/pull/21", additions: 1, deletions: 0, changed_files: 1, mergeable: true, merged: false, head: { sha: "c10ud" } } };
+		if (call.path.startsWith(`${cBase}/commits/`)) return { status: 200, json: { total_count: 0, check_runs: [], state: "pending", statuses: [] } };
+		return { status: 404, json: { message: "Not Found" } };
+	};
+	const cIssueComments = (n: number) => cCalls.filter((c) => c.path === `${cBase}/issues/${n}/comments` && c.method === "POST").map((c) => String(c.body?.body));
+	await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: CLREPO }) });
+	const cRes = await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: CLREPO, issue: { number: 40, title: "Fix it in the cloud", url: issueUrl(40, "cloud-repo") }, details: "Nobody's laptop is on." }) });
+	const cTask = ((await cRes.json()) as { task: ATask }).task;
+	ok("no editor has the repo → dispatched to the cloud at once", cRes.status === 201 && cTask.state === "dispatched" && cTask.runner === "cloud", JSON.stringify(cTask));
+	ok("…and the cloud run reaches pr-open", await until(async () => (await getTask(cTask.id))?.state === "pr-open"), JSON.stringify(await getTask(cTask.id)));
+	const cDone = (await getTask(cTask.id)) as ATask & { usage?: Usage; sessionId?: string };
+	const cSess = cDone.sessionId ? await getSession(cDone.sessionId) : undefined;
+	ok("linked relay session: origin phone, runner server, title = task, done", cSess?.origin === "phone" && cSess.runner === "server" && cSess.title === "Fix it in the cloud" && cSess.state === "done", JSON.stringify(cSess));
+	ok("the run's gateway usage is attributed to the task via the runner token", cDone.usage?.requests === 1 && cDone.usage.costUsd === 0.0003 && cSess?.usage?.requests === 1, JSON.stringify(cDone.usage));
+	const logLine = (await run("git", ["-C", bare, "log", "-1", "--format=%an <%ae>|%cn|%s", cTask.branch])).stdout.trim();
+	ok("branch pushed with the agent's work committed as Celiador <noreply@celiador.ai>, message \"<title> (#n)\"", logLine === "Celiador <noreply@celiador.ai>|Celiador|Fix it in the cloud (#40)", logLine);
+	ok("the pushed commit carries the agent's file", (await run("git", ["-C", bare, "ls-tree", "--name-only", cTask.branch])).stdout.includes("fix.ts"));
+	const prPost = cCalls.find((c) => c.method === "POST" && c.path === `${cBase}/pulls`);
+	const prPostBody = String(prPost?.body?.body ?? "");
+	ok("PR opened as the App: head = task branch, base = default branch, title = task", prPost?.body?.head === cTask.branch && prPost.body.base === "main" && prPost.body.title === "Fix it in the cloud", JSON.stringify(prPost?.body));
+	ok("PR body: Closes #40, the self-review's what-changed, run in the cloud with files + cost", prPostBody.startsWith("Closes #40\n\n## What the agent did\nAdded fix.ts.\n\n## Self-review\n- Unsure: nothing.\n- Not verified: tests (none in the repo).") && /Run by Celiador on the cloud · 1 file · \d+ s · \$0\.00 \(0\.0k in \/ 0\.0k out tokens\)$/.test(prPostBody), JSON.stringify(prPostBody));
+	ok("task pr-open with the PR's number, url and size", cDone.prUrl === "https://github.com/Cliefden/cloud-repo/pull/21" && cDone.pr?.number === 21 && cDone.pr.changedFiles === 1 && !!cDone.finishedAt, JSON.stringify(cDone.pr));
+	ok("issue comments: picked up (cloud), plan, PR opened", cIssueComments(40)[0] === `**Picked up.** Running in the Celiador cloud on its own branch, \`${cTask.branch}\`.\n\nI'll open a pull request against \`main\` and link it here. Approvals and questions go to the Celiador queue.\n\n[Watch the run](https://smoke.test/api/open/task/${cTask.id}) · [Open the queue](https://smoke.test/api/open/queue)` && cIssueComments(40)[1] === "**Plan.**\n1. Patch it" && cIssueComments(40)[2] === "Pull request opened: https://github.com/Cliefden/cloud-repo/pull/21", JSON.stringify(cIssueComments(40)));
+	// Follow-up: another turn in the same workspace, pushed onto the branch, PR body refreshed.
+	const cFu = await app.request(`${T}/${cTask.id}/followup`, { method: "POST", headers: authH, body: JSON.stringify({ text: "also add a test" }) });
+	ok("follow-up on a cloud task → 200 (runs again)", cFu.status === 200, `got ${cFu.status}`);
+	ok("…runs (running) and finishes (pr-open again)", await until(async () => (await getTask(cTask.id))?.state === "running") && await until(async () => (await getTask(cTask.id))?.state === "pr-open"), JSON.stringify(await getTask(cTask.id)));
+	const files2 = (await run("git", ["-C", bare, "ls-tree", "--name-only", cTask.branch])).stdout;
+	ok("the follow-up's commit is on the branch too (second turn in the retained workspace)", files2.includes("fix.ts") && files2.includes("followup-2.ts") && (await run("git", ["-C", bare, "rev-list", "--count", `main..${cTask.branch}`])).stdout.trim() === "2", files2);
+	ok("PR body refreshed via PATCH after the follow-up", cCalls.some((c) => c.method === "PATCH" && c.path === `${cBase}/pulls/21` && String(c.body?.body).includes("Closes #40") && String(c.body?.body).includes("Run by Celiador on the cloud")), JSON.stringify(cCalls.filter((c) => c.method === "PATCH").map((c) => c.body)));
+	const { sessionStores } = await import("../src/sessions/instance.ts");
+	const cEvents = sessionStores.for("smoke-user").replay(cDone.sessionId ?? "", 0).events;
+	ok("the follow-up is logged as the user's turn on the session", cEvents.some((e) => e.kind === "message" && e.role === "user" && e.text === "also add a test"), JSON.stringify(cEvents.filter((e) => e.kind === "message")));
+	ok("cloud run usage grew with the second turn", (await getTask(cTask.id) as ATask & { usage?: Usage })?.usage?.requests === 2, JSON.stringify((await getTask(cTask.id) as ATask & { usage?: Usage })?.usage));
+	// Cancel: a slow agent, cancelled from the queue → sandbox killed, task + session cancelled.
+	overrideServerRunnerForTests({ agent: ((ctx: { signal: AbortSignal }) => new Promise<void>((_, reject) => ctx.signal.addEventListener("abort", () => reject(new Error("killed"))))) as never });
+	const slow = ((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: CLREPO, issue: { number: 41, title: "Slow one", url: issueUrl(41, "cloud-repo") } }) })).json()) as { task: ATask }).task;
+	ok("second cloud task starts running", await until(async () => (await getTask(slow.id))?.state === "running"), JSON.stringify(await getTask(slow.id)));
+	await until(async () => (await getSession((await getTask(slow.id) as ATask & { sessionId?: string })?.sessionId ?? ""))?.state === "running");
+	const cancelled = await app.request(`${T}/${slow.id}/cancel`, { method: "POST", headers: authH });
+	ok("cancel → 200, task cancelled", cancelled.status === 200 && (await getTask(slow.id))?.state === "cancelled");
+	const slowSess = (await getTask(slow.id) as ATask & { sessionId?: string })?.sessionId ?? "";
+	ok("…and the run's session ends cancelled", await until(async () => (await getSession(slowSess))?.state === "cancelled"), JSON.stringify(await getSession(slowSess)));
+	// No changes → failed with a readable error (and a comment).
+	overrideServerRunnerForTests({ agent: (async () => undefined) as never });
+	const noop = ((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: CLREPO, issue: { number: 42, title: "Nothing to do", url: issueUrl(42, "cloud-repo") } }) })).json()) as { task: ATask }).task;
+	ok("an agent that changes nothing → task failed with a readable error", await until(async () => (await getTask(noop.id))?.state === "failed") && /finished without changing anything/.test((await getTask(noop.id) as ATask & { error?: string })?.error ?? ""), JSON.stringify(await getTask(noop.id)));
+	await tick();
+	ok("…and the issue is told", cIssueComments(42).some((c) => c.startsWith("**Failed.** The agent finished without changing anything.")), JSON.stringify(cIssueComments(42)));
+	// No App on the repo → stays queued with the waiting-for-an-editor reason, published once.
+	const NOAPP = "https://github.com/Cliefden/noapp-repo.git";
+	const noApp = ((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: NOAPP, title: "Private, no app" }) })).json()) as { task: ATask }).task;
+	ok("repo without the App → back to queued with the reason", await until(async () => { const t = await getTask(noApp.id) as ATask & { error?: string }; return t?.state === "queued" && t.error === WAITING_FOR_APP; }), JSON.stringify(await getTask(noApp.id)));
+	await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: NOAPP, title: "Another, same repo" }) });
+	await tick(60);
+	ok("the repo isn't asked about again right away (negative cache): the next task just queues", (await getTask(noApp.id))?.state === "queued" && cCalls.filter((c) => c.path === "/repos/Cliefden/noapp-repo/installation").length === 1, String(cCalls.filter((c) => c.path.includes("noapp-repo")).length));
+	ok("cancel on a server session without an active run → 409 (unchanged)", (await app.request(`http://localhost/api/sessions/${cDone.sessionId}/cancel`, { method: "POST", headers: authH })).status === 409);
+	overrideServerRunnerForTests(undefined);
+	overrideCloudRemoteForTests(undefined);
+	resetGitHubAppForTests();
+	ghHandler = () => ({ status: 404, json: { message: "Not Found" } });
+
 	console.log(`\n${pass} passed, ${fail} failed`);
 }
 

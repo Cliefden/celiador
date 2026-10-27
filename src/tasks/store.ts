@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import type { SessionUsage } from "../sessions/types";
 
 /**
  * Agent tasks: units of work that end in a pull request (Phase 1 of the
@@ -88,18 +89,43 @@ export interface Task {
   activity?: string;
   awaiting?: TaskAwaiting;
   pr?: TaskPullRequest;
+  /** What the run has spent: the linked session's usage, copied here as it grows (survives the session's reaping). */
+  usage?: SessionUsage;
   /** Daemon-internal: which issue comments the App already posted. Stripped from API output. */
-  posted?: { pickedUp?: boolean; prOpened?: boolean };
+  posted?: TaskPosted;
+  /** Daemon-internal: the checks-failed auto-fix bookkeeping. Stripped from API output. */
+  ci?: TaskCi;
+}
+
+/** One-time GitHub comments, so a re-sent report or a replayed event never posts twice. */
+export interface TaskPosted {
+  pickedUp?: boolean;
+  prOpened?: boolean;
+  plan?: boolean;
+  failed?: boolean;
+  /** The requestId of the approval / question last announced on the issue. */
+  awaiting?: string;
+  /** The head shas a "Checks failed" comment was posted for. */
+  checksFailed?: string[];
+  ciGaveUp?: boolean;
+}
+
+/** Checks-failed follow-ups: how many were sent, for which head shas, and one waiting for a runner. */
+export interface TaskCi {
+  attempts: number;
+  shas: string[];
+  /** A fix that couldn't be sent (no runner online); retried when one connects. */
+  pending?: { sha: string; text: string };
 }
 
 /** Fields a task update may set; an explicit `undefined` removes the field. */
 export type TaskPatch = Partial<
-  Pick<Task, "state" | "sessionId" | "prUrl" | "error" | "runner" | "machine" | "startedAt" | "finishedAt" | "activity" | "awaiting" | "pr" | "posted">
+  Pick<Task, "state" | "sessionId" | "prUrl" | "error" | "runner" | "machine" | "startedAt" | "finishedAt" | "activity" | "awaiting" | "pr" | "usage" | "posted" | "ci">
 >;
 
 /** A task as clients see it (internal bookkeeping removed). */
-export function publicTask(task: Task): Omit<Task, "posted"> {
-  const { posted: _posted, ...rest } = task;
+export function publicTask(task: Task): Omit<Task, "posted" | "ci"> {
+  const { posted: _posted, ci: _ci, ...rest } = task;
   return rest;
 }
 
@@ -127,6 +153,15 @@ export function branchFor(title: string, issueNumber?: number, id?: string): str
   return slug ? `${prefix}-${slug}` : prefix;
 }
 
+/**
+ * How the agent is asked to structure its reply. The daemon reads both parts
+ * back (tasks/prBody.ts): the plan becomes the issue's first comment, the
+ * self-review becomes the pull request body.
+ */
+const REPLY_SHAPE =
+  "Start your reply with a short plan, 3–6 lines under a \"Plan:\" heading, then do the work. " +
+  "End with a \"## Self-review\" section: what changed; what you're unsure about; what you did not run or verify, and why.";
+
 /** The instruction the agent gets. Kept plain: the issue is the spec. */
 export function promptFor(task: { repo: TaskRepo; issue?: TaskIssue; title: string }, body: string): string {
   const head = task.issue
@@ -136,7 +171,7 @@ export function promptFor(task: { repo: TaskRepo; issue?: TaskIssue; title: stri
   const footer = task.issue
     ? `\n\nKeep the change focused on this issue. When the work is done, commit it with a message that references #${task.issue.number}.`
     : "\n\nKeep the change focused. When the work is done, commit it.";
-  return `${head}${description}${footer}`;
+  return `${head}${description}${footer}\n\n${REPLY_SHAPE}`;
 }
 
 function readJson<T>(file: string): T | null {

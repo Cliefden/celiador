@@ -5,6 +5,7 @@ import { AGENT_MODEL, AGENT_MAX_TOKENS } from "./config";
 import { SYSTEM_PROMPT, TOOLS, validateMessages } from "./agent/policy";
 import { agentQuota } from "./agent/quota";
 import { authorizeAgent } from "./agent/authorize";
+import { attributeUsage, MIRROR_HEADER } from "./sessions/usage";
 
 let client: Anthropic | null = null;
 function getClient(): Anthropic {
@@ -41,7 +42,8 @@ export async function agentProxy(c: Context) {
     if (auth.retryAfter !== undefined) c.header("Retry-After", String(auth.retryAfter));
     return c.json({ error: auth.error }, auth.status);
   }
-  const { quotaKey, release } = auth;
+  const { quotaKey, user, release } = auth;
+  const mirrorKey = c.req.header(MIRROR_HEADER);
 
   const request = {
     model: AGENT_MODEL,
@@ -77,6 +79,7 @@ export async function agentProxy(c: Context) {
       }
     } finally {
       agentQuota.record(quotaKey, inputTokens, outputTokens);
+      attributeUsage(user, mirrorKey, inputTokens, outputTokens); // per-run cost (sessions/usage.ts)
       release();
     }
   });

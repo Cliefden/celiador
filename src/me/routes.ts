@@ -8,18 +8,21 @@ import { taskConcurrency, taskStores } from "../tasks/dispatch";
 
 /**
  * The one number the plan steers by, per user: agent pull requests merged in
- * the last seven days — plus what is open or running now. Computed from the
- * task store the daemon already keeps; nothing new is collected.
+ * the last seven days — plus what is open or running now, and what those runs
+ * cost (`costUsdLast7Days`: the usage of merged + pr-open tasks finished in the
+ * last seven days, at the published rates). Computed from the task store the
+ * daemon already keeps; nothing new is collected.
  */
-function taskSummary(userId: string): { running: number; prOpen: number; mergedLast7Days: number; concurrency: number } {
+function taskSummary(userId: string): { running: number; prOpen: number; mergedLast7Days: number; costUsdLast7Days: number; concurrency: number } {
   const since = Date.now() - 7 * 86_400_000;
-  let running = 0, prOpen = 0, mergedLast7Days = 0;
+  let running = 0, prOpen = 0, mergedLast7Days = 0, cost = 0;
   for (const t of taskStores.for(userId).list()) {
     if (t.state === "dispatched" || t.state === "running") running++;
     else if (t.state === "pr-open") prOpen++;
     else if (t.state === "merged" && Date.parse(t.updatedAt) >= since) mergedLast7Days++;
+    if ((t.state === "merged" || t.state === "pr-open") && t.finishedAt && Date.parse(t.finishedAt) >= since) cost += t.usage?.costUsd ?? 0;
   }
-  return { running, prOpen, mergedLast7Days, concurrency: taskConcurrency() };
+  return { running, prOpen, mergedLast7Days, costUsdLast7Days: Math.round(cost * 1_000_000) / 1_000_000, concurrency: taskConcurrency() };
 }
 
 /**

@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRunner, SessionState } from "./types";
+import { costUsd } from "../agent/pricing";
+import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRunner, SessionState, SessionUsage } from "./types";
 
 /** Max events retained per session (older ones fall out of the ring). */
 const RING = 2000;
@@ -150,6 +151,25 @@ export class SessionStore {
     session.runnerConnected = connected;
     session.updatedAt = new Date().toISOString();
     this.saveMetaNow();
+  }
+
+  /**
+   * Add one gateway request's tokens to the session's usage and re-price the
+   * total at the published rates. Debounced to disk like event appends — a run
+   * makes many requests, and the session's own updatedAt isn't touched (usage is
+   * not activity).
+   */
+  recordUsage(id: string, inputTokens: number, outputTokens: number): SessionUsage | undefined {
+    const session = this.get(id);
+    if (!session) return undefined;
+    const usage = session.usage ?? { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    usage.requests += 1;
+    usage.inputTokens += Math.max(0, inputTokens || 0);
+    usage.outputTokens += Math.max(0, outputTokens || 0);
+    usage.costUsd = costUsd(usage.inputTokens, usage.outputTokens);
+    session.usage = usage;
+    this.scheduleMetaSave();
+    return { ...usage };
   }
 
   /** Force-set state without an event (used when a runner drops mid-run). */
