@@ -3,13 +3,14 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
+import { cancelServerRun } from "../runner/manager";
 import { sessionBus } from "../sessions/bus";
 import { sessionStores } from "../sessions/instance";
-import { publishSessionEvent } from "../sessions/publish";
 import type { FsResult } from "../sessions/types";
 import { dispatchTasks, taskConcurrency, taskStores } from "./dispatch";
 import { onTaskChange, publishTaskChange } from "./events";
-import { mergeViaApp, postTaskComments, refreshPullRequest, refreshStalePullRequests } from "./pulls";
+import { followUpTask } from "./followup";
+import { applyPrBody, mergeViaApp, postTaskComments, refreshPullRequest, refreshStalePullRequests } from "./pulls";
 import { prNumberFromUrl, publicTask, TERMINAL_STATES, type Task, type TaskIssue, type TaskPullRequest, type TaskRepo, type TaskState } from "./store";
 
 const HEARTBEAT_MS = 25_000;
@@ -147,6 +148,8 @@ export function taskRoutes(): Hono<AppEnv> {
     if (TERMINAL_STATES.has(task.state)) return c.json({ error: "already finished" }, 409);
     const updated = store.update(task.id, { state: "cancelled" })!;
     publishTaskChange(userId, updated);
+    // A cloud run is the daemon's own: kill its sandbox (the editor cancels its own runs from the session).
+    if (updated.runner === "cloud" && updated.sessionId) cancelServerRun(updated.sessionId);
     dispatchTasks(userId);
     return c.json({ task: publicTask(updated) });
   });
@@ -160,7 +163,7 @@ export function taskRoutes(): Hono<AppEnv> {
     const task = store.get(c.req.param("id"));
     if (!task) return c.json({ error: "not found" }, 404);
     const body = (await c.req.json().catch(() => null)) as
-      | { state?: unknown; sessionId?: unknown; prUrl?: unknown; error?: unknown; machine?: unknown; pr?: unknown }
+      | { state?: unknown; sessionId?: unknown; prUrl?: unknown; error?: unknown; machine?: unknown; pr?: unknown; summary?: unknown }
       | null;
     const state = body?.state as TaskState;
     if (!EDITOR_STATES.has(state)) return c.json({ error: "state must be running, pr-open, merged or failed" }, 400);
@@ -184,6 +187,9 @@ export function taskRoutes(): Hono<AppEnv> {
     })!;
     publishTaskChange(userId, updated);
     postTaskComments(userId, updated.id);
+    // The run's final message: the daemon composes the PR body from it and writes it as the App.
+    const summary = typeof body?.summary === "string" ? body.summary.slice(0, 8000).trim() : "";
+    if (state === "pr-open" && summary) void applyPrBody(userId, updated.id, summary);
     if (state === "pr-open") void refreshPullRequest(userId, updated.id);
     if (TERMINAL_STATES.has(state)) dispatchTasks(userId);
     return c.json({ task: publicTask(updated) });
@@ -231,8 +237,9 @@ export function taskRoutes(): Hono<AppEnv> {
     return c.json({ ok: true, merged: true, sha: result.sha, url: result.url });
   });
 
-  // "Send back…": a follow-up instruction to the run's linked session, the same
-  // way the session message route does it (logged as the user turn, then relayed).
+  // "Send back…": a follow-up instruction to the run — an `instruct` on an editor
+  // run's session (logged as the user turn first, like the session message route),
+  // another sandbox turn in the retained workspace for a cloud run (tasks/followup.ts).
   app.post("/:id/followup", async (c) => {
     const userId = c.get("user").userId;
     const task = taskStores.for(userId).get(c.req.param("id"));
@@ -240,12 +247,8 @@ export function taskRoutes(): Hono<AppEnv> {
     const { text } = ((await c.req.json().catch(() => ({}))) ?? {}) as { text?: unknown };
     if (typeof text !== "string" || !text.trim()) return c.json({ error: "text is required" }, 400);
     if (text.length > 50_000) return c.json({ error: "text too long" }, 413);
-    if (task.state === "merged" || task.state === "cancelled") return c.json({ error: `the task is ${task.state}` }, 409);
-    const session = task.sessionId ? sessionStores.for(userId).get(task.sessionId) : undefined;
-    if (!session) return c.json({ error: "the task has no session yet" }, 409);
-    if (!sessionBus.hasRunner(session.id)) return c.json({ error: "editor offline" }, 409);
-    publishSessionEvent(userId, session.id, { kind: "message", role: "user", text: text.trim() });
-    sessionBus.sendCommand(session.id, { kind: "instruct", text: text.trim() });
+    const sent = await followUpTask(userId, task, text);
+    if ("error" in sent) return c.json({ error: sent.error }, sent.status);
     return c.json({ ok: true });
   });
 

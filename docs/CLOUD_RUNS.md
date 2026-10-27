@@ -39,7 +39,18 @@ If `dockerd-rootless-setuptool.sh` is missing, install Docker's `docker-ce-rootl
 
 ## What it means for the queue
 
-With `CELIADOR_RUNNER_AGENT=sandbox` the daemon routes a queued task to the editor when one is online with the repository open, and to the sandbox otherwise (the laptop-off case). Private repositories need the GitHub App (`docs/GITHUB_APP.md`) for the clone token; public ones work without it.
+With `CELIADOR_RUNNER_AGENT=sandbox` the daemon routes a queued task to the editor when one is online with the repository open, and to the sandbox otherwise (the laptop-off case). The **GitHub App must be installed on the repository** (`docs/GITHUB_APP.md`): the container has no network, so the daemon does the git work around it with the App's installation token — and that is what pushes the branch and opens the pull request. A repository without the App keeps its task `queued` with `error: "waiting for an editor: cloud runs need the Celiador GitHub App on this repo"` (the repo isn't asked about again for 10 minutes), until an editor with it open comes online. (`POST /api/sessions` with `runner: "server"` — a cloud run not tied to a task — still works as before, public repos included; it clones, runs and publishes diffs but pushes nothing.)
+
+A cloud task's run, step by step (`src/tasks/cloud.ts`):
+
+1. Dispatch marks the task `dispatched` / `runner: "cloud"`, creates a relay session (`origin: "phone"`, `runner: "server"`, title = the task) linked to it, and moves it to `running` — the "Picked up" comment says "in the Celiador cloud".
+2. Workspace: shallow clone of the default branch, `git switch -c <task.branch>` (or the branch's remote tip when an earlier attempt already pushed it). The agent runs in the container with the task prompt; its gateway requests are attributed to the session (`usage`).
+3. After the container exits: whatever the agent left uncommitted is committed as `"<title> (#n)"` by `Celiador <noreply@celiador.ai>`; the branch is pushed to `https://x-access-token:<token>@github.com/owner/name.git` with `--force-with-lease` against the sha the branch had when the turn started (the token is only ever in that one command's argv, never in `.git/config` — the workspace is browsable from the phone); the pull request is opened as the App (base = default branch, body per `docs/CLIENT_INTEGRATION.md`); the task is `pr-open` with the PR's size, the "Pull request opened" comment is posted and the PR card refreshed.
+4. An agent that changed nothing → `failed` ("The agent finished without changing anything.") with a **Failed.** comment; any other error → `failed` with a readable message.
+
+Follow-ups (`POST /api/tasks/:id/followup`, and the checks-failed auto-fix) run another turn in the same retained workspace — fast-forwarding onto the branch first if someone pushed to it — and finish the same way (PR body refreshed via PATCH). Cancel (`POST /api/tasks/:id/cancel` or the session's cancel) kills the container; the task and session end `cancelled`. Cloud runs count against the user's `CELIADOR_TASK_CONCURRENCY` slots like editor runs. Workspaces are swept at boot (`reapOrphanRuns`); a follow-up after a restart re-clones and picks the branch up from GitHub, and cloud tasks a dead daemon left `dispatched` / `running` go back to `queued` on the next dispatch.
+
+Without the runner image the daemon re-queues the task with the sandbox's own message and doesn't probe Docker again for a minute.
 
 ## Rollback
 

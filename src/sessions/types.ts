@@ -26,6 +26,18 @@ export type SessionRunner = "editor" | "server";
  */
 export type SessionState = "idle" | "running" | "awaiting" | "done" | "error" | "cancelled";
 
+/**
+ * Model usage attributed to one session (gateway requests the editor tagged with
+ * `X-Celiador-Mirror`, or a cloud run's runner token). `costUsd` is at the
+ * daemon's published rates (agent/pricing.ts). Persisted with the session.
+ */
+export interface SessionUsage {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
 /** Durable session metadata (persisted; the event log lives separately). */
 export interface Session {
   id: string;
@@ -46,6 +58,8 @@ export interface Session {
    * same agent session; the key lets the daemon keep it to one mirror.
    */
   mirrorKey?: string;
+  /** What this run has spent so far; absent until the first attributed request. */
+  usage?: SessionUsage;
 }
 
 /** A session summary as returned to list/get callers (identical shape today). */

@@ -150,6 +150,51 @@ export async function commentOnIssue(repo: Pick<TaskRepo, "owner" | "name">, iss
   return res?.status === 201;
 }
 
+/** Acknowledge an issue comment with a 👍 reaction (the answer-from-the-issue ack) instead of another comment. */
+export async function reactToComment(repo: Pick<TaskRepo, "owner" | "name">, commentId: number, content = "+1"): Promise<boolean> {
+  const res = await appRequest(repo, "POST", `/issues/comments/${commentId}/reactions`, { content });
+  return res?.status === 201 || res?.status === 200;
+}
+
+/** The fields of a pull request the daemon reads back. */
+export interface PullRequestInfo {
+  readonly number: number;
+  readonly url: string;
+  readonly additions?: number;
+  readonly deletions?: number;
+  readonly changedFiles?: number;
+}
+
+function pullInfo(json: any): PullRequestInfo | null {
+  if (typeof json?.number !== "number" || typeof json.html_url !== "string") return null;
+  const int = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined);
+  return { number: json.number, url: json.html_url, additions: int(json.additions), deletions: int(json.deletions), changedFiles: int(json.changed_files) };
+}
+
+/**
+ * Open a pull request as the app — or, when one is already open for `head`
+ * (GitHub answers 422), return that one. Null when the app can't act on the
+ * repo; throws with GitHub's message on any other refusal.
+ */
+export async function openPullRequest(repo: Pick<TaskRepo, "owner" | "name">, p: { title: string; head: string; base: string; body: string }): Promise<PullRequestInfo | null> {
+  const res = await appRequest(repo, "POST", "/pulls", p);
+  if (!res) return null;
+  if (res.status === 201) return pullInfo(res.json);
+  if (res.status === 422) {
+    const open = await appRequest(repo, "GET", `/pulls?head=${encodeURIComponent(`${repo.owner}:${p.head}`)}&state=open&per_page=1`);
+    const existing = open?.status === 200 && Array.isArray(open.json) ? pullInfo(open.json[0]) : null;
+    if (existing) return existing;
+  }
+  const detail = [res.json?.message, ...(Array.isArray(res.json?.errors) ? res.json.errors.map((e: any) => e?.message).filter(Boolean) : [])].filter(Boolean).join(": ");
+  throw new Error(`GitHub refused the pull request (${res.status}${detail ? `: ${detail}` : ""})`);
+}
+
+/** Replace a pull request's body as the app. False when the app can't (absent / not installed / refused). */
+export async function updatePullRequestBody(repo: Pick<TaskRepo, "owner" | "name">, number: number, body: string): Promise<boolean> {
+  const res = await appRequest(repo, "PATCH", `/pulls/${number}`, { body });
+  return res?.status === 200;
+}
+
 // ---- Setup flow (manifest) --------------------------------------------------
 
 /** One-time states handed to GitHub with the manifest, so a stray redirect can't register an app. */

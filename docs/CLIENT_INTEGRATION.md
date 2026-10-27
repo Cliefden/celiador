@@ -57,6 +57,91 @@ With the GitHub App on the repo the daemon posts the issue comments itself — t
 `commented: true`, so the editor skips its own comment. Without the App the editor
 posts the same "Picked up" text.
 
+## Cost, cloud fallback and the GitHub surface (the "stand out" round, 2026-10-27)
+
+Additive; old tasks and sessions simply lack the new fields.
+
+### Cost per run
+
+The daemon attributes every gateway request (`POST /api/agent/messages`,
+`POST /api/anthropic/v1/messages`) to a relay session:
+
+- **Editor runs**: send `X-Celiador-Mirror: <agent-host session resource string>`
+  on every gateway request of a session — the same value the relay bridge passes
+  as `mirrorKey` when it creates the session. Unknown or missing → the request is
+  only counted against the user's quota, as before.
+- **Cloud runs**: the runner token carries the run id (= the session id); no header.
+
+Usage accumulates on the session and is persisted with it:
+
+```json
+"usage": { "requests": 12, "inputTokens": 48210, "outputTokens": 6120, "costUsd": 1.1822 }
+```
+
+`costUsd` = tokens × the daemon's published rate card (`GET /api/limits` →
+`prices: { currency: "USD", inputPerMtok: 15, outputPerMtok: 75 }` by default;
+cache-read / cache-creation tokens count as input). Exposed as:
+
+| Where | Field |
+|---|---|
+| `GET /api/sessions`, `GET /api/sessions/:id` | `session.usage` |
+| `GET /api/tasks`, `GET /api/tasks/stream`, every task payload | `task.usage` — the linked session's usage, copied onto the task as it grows (survives the session's 7-day reaping; published throttled, at most every 2 s) |
+| `GET /api/me` | `tasks.costUsdLast7Days` — the sum over `merged` + `pr-open` tasks whose `finishedAt` is in the last 7 days |
+
+### Cloud fallback
+
+With `CELIADOR_RUNNER_AGENT=sandbox` on the daemon, a queued task whose repo no
+online editor has open is run in the sandboxed cloud runner — provided the
+Celiador GitHub App is installed on the repo (pushing and opening the PR need its
+token). Clients see: `runner: "cloud"`, no `machine`, a linked `sessionId` whose
+session has `origin: "phone"`, `runner: "server"` (so the existing session views
+work unchanged: live transcript, cancel, files), `dispatched → running → pr-open`
+with `pr` sizes from the PR the daemon opened. Without the App on the repo the
+task stays `queued` with `error: "waiting for an editor: cloud runs need the
+Celiador GitHub App on this repo"` until an editor takes it. `POST
+/api/tasks/:id/followup` on a cloud task runs another sandbox turn in the same
+workspace (`running` → `pr-open` again, PR body refreshed); `POST
+/api/tasks/:id/cancel` kills the sandbox. Cloud runs hold the user's parallel
+slots like editor runs. Clients never need to do anything to get a cloud run — it
+is the daemon's dispatch decision.
+
+### The pull request body (`summary`)
+
+The task prompt asks the agent to start with a `Plan:` block and end with a
+`## Self-review` section. The editor reports the run's final assistant message as
+`summary` (≤8000 chars) in its `pr-open` status body; with the App the daemon
+composes the PR body and PATCHes it:
+
+```
+Closes #<n>
+
+## What the agent did
+<the self-review's "what changed", or the final message trimmed to 2000 chars>
+
+## Self-review
+- Unsure: …
+- Not verified: …
+
+---
+Run by Celiador on <machine | the cloud> · <k> files · <elapsed> · $<cost> (<in>k in / <out>k out tokens)
+```
+
+Footer parts that aren't known are left out (no cost without attributed usage).
+Without the App the editor writes the same body itself (minus the cost) from the
+final message; keep its parser in step with `src/tasks/prBody.ts`.
+
+### What the issue shows (App only)
+
+With the App installed the issue narrates the run (each comment once): **Picked
+up** (names the machine, or "the Celiador cloud"), **Plan.** (the first assistant
+message with a `Plan:` heading, ≤1500 chars), **Question from the agent.** /
+**Needs approval.** whenever the task enters `awaiting` (a collaborator's reply on
+the issue answers it — a number picks a choice, `approve` / `deny` decide — and
+gets a 👍), **Pull request opened**, **Checks failed** (the agent is sent a fix,
+at most `CELIADOR_TASK_CI_FIX_ATTEMPTS` times), **Failed.** Phone and editor keep
+answering through the session's `approvals/:requestId` / `answers/:requestId`
+endpoints; `awaiting` clears as the session reports, whoever answered.
+
 Two layers, already wired end-to-end on the daemon: **relay = live**, **Supabase = durable**.
 As the editor (runner) publishes to `/api/sessions/:id/events`, the daemon fans out
 to watchers AND persists turns into `chats`/`messages`. So chat history fills itself

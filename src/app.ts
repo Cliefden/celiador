@@ -4,6 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { AGENT_MODEL, VERSION } from "./config";
 import { failureReport } from "./health";
 import { activeLimits } from "./agent/quota";
+import { prices } from "./agent/pricing";
 import { taskConcurrency } from "./tasks/dispatch";
 import { authMode, requireUser, type AppEnv } from "./auth";
 import { agentProxy } from "./anthropic";
@@ -33,7 +34,7 @@ export function createApp(): Hono<AppEnv> {
     "/api/*",
     cors({
       origin: "*",
-      allowHeaders: ["Authorization", "Content-Type"],
+      allowHeaders: ["Authorization", "Content-Type", "X-Celiador-Mirror"],
       allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     })
   );
@@ -63,6 +64,8 @@ export function createApp(): Hono<AppEnv> {
         limits: activeLimits(),
         // Agent tasks (queued GitHub issues) running at once per user — published like the rest.
         tasks: { concurrency: taskConcurrency() },
+        // The rate card a run's cost (Session.usage / Task.usage) is priced at.
+        prices: prices(),
         window: "Daily budgets reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
       },
       200,

@@ -4,6 +4,8 @@ import { AGENT_MODEL, AGENT_MAX_TOKENS } from "./config";
 import { validateGatewayRequest } from "./agent/policy";
 import { agentQuota } from "./agent/quota";
 import { authorizeAgent } from "./agent/authorize";
+import type { AuthResult } from "./auth";
+import { attributeUsage, MIRROR_HEADER } from "./sessions/usage";
 
 /**
  * First-party Anthropic-compatible gateway. Unlike the locked proxy
@@ -88,7 +90,10 @@ export async function anthropicGateway(c: Context) {
     if (auth.retryAfter !== undefined) c.header("Retry-After", String(auth.retryAfter));
     return c.json({ error: auth.error }, auth.status);
   }
-  const { quotaKey, isRunner, release } = auth;
+  const { quotaKey, isRunner, user, release } = auth;
+  // Which run this request belongs to (cost attribution): the runner token's run id,
+  // or the editor's mirror header. See sessions/usage.ts.
+  const mirrorKey = c.req.header(MIRROR_HEADER);
 
   // Gateway mode must be enabled globally, OR the caller is a daemon-minted runner.
   if (!gatewayEnabled() && !isRunner) {
@@ -131,8 +136,9 @@ export async function anthropicGateway(c: Context) {
       const text = await upstream.text();
       if (upstream.ok) {
         try {
-          const json = JSON.parse(text) as { usage?: { input_tokens?: number; output_tokens?: number } };
-          recordUsage(quotaKey, json.usage?.input_tokens, json.usage?.output_tokens);
+          const json = JSON.parse(text) as { usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } };
+          const input = (json.usage?.input_tokens ?? 0) + (json.usage?.cache_creation_input_tokens ?? 0) + (json.usage?.cache_read_input_tokens ?? 0);
+          recordUsage(quotaKey, user, mirrorKey, input, json.usage?.output_tokens);
         } catch {
           /* non-JSON body — skip accounting */
         }
@@ -161,7 +167,7 @@ export async function anthropicGateway(c: Context) {
     } catch (err) {
       if (!ac.signal.aborted) console.error("[gateway] stream error:", err instanceof Error ? err.message : err);
     } finally {
-      recordUsage(quotaKey, usage.inputTokens, usage.outputTokens);
+      recordUsage(quotaKey, user, mirrorKey, usage.inputTokens, usage.outputTokens);
       release();
     }
   });
@@ -187,8 +193,12 @@ export async function anthropicModels(c: Context) {
   }
 }
 
-function recordUsage(quotaKey: string, input?: number, output?: number): void {
-  agentQuota.record(quotaKey, Math.max(0, input ?? 0), Math.max(0, output ?? 0));
+/** Quota (per user) + run attribution (per session) for one request's tokens. */
+function recordUsage(quotaKey: string, user: AuthResult | null, mirrorKey: string | undefined, input?: number, output?: number): void {
+  const inputTokens = Math.max(0, input ?? 0);
+  const outputTokens = Math.max(0, output ?? 0);
+  agentQuota.record(quotaKey, inputTokens, outputTokens);
+  attributeUsage(user, mirrorKey, inputTokens, outputTokens);
 }
 
 /**

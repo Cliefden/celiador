@@ -143,7 +143,7 @@ export function sessionRoutes(): Hono<AppEnv> {
     // An editor run of an agent task: link the task to this session so the phone's
     // queue can open the live transcript.
     if (typeof taskId === "string" && taskId.length <= 100) {
-      const task = taskStores.for(userId).update(taskId, { sessionId: session.id });
+      const task = taskStores.for(userId).update(taskId, { sessionId: session.id, ...(session.usage ? { usage: { ...session.usage } } : {}) });
       if (task) publishTaskChange(userId, task);
     }
     return c.json({ session });

@@ -1,19 +1,21 @@
 # celiador-daemon (`Cliefden/daemon`)
 
-The **Celiador backend daemon** — the current, slim backend for the Celiador
-editor (`celiador-ai`) and the iOS companion app. It does three things:
+Celiador is the loop: label a GitHub issue `celiador` and an agent runs it in its
+own git worktree, comments on the issue, opens a pull request that closes it, and
+you review and merge from your phone. This daemon is the hub that loop runs
+through. It receives the GitHub App's webhooks and turns labelled issues into
+queued tasks, dispatches them to whichever runner has the repository open (the
+Celiador editor, or VS Code and Cursor with the Celiador Remote extension) — or to
+its own sandboxed cloud runner when none does (cloud runs need the GitHub App on
+the repository, to push and open the pull request), relays each run to the phone
+so it can be watched and steered, proxies the agent's requests to Anthropic on the
+server-held key with published per-user limits and a per-run cost, verifies
+Supabase sign-in, sends APNs pushes, keeps profile and chat history, and serves
+the editor's release feed. No client ever holds the model key.
 
-1. **Anthropic agent proxy** — `POST /api/agent/messages` streams a Claude
-   response over SSE. The daemon holds the API key and owns the request shape:
-   model, `max_tokens` cap, system prompt and tool allowlist are server-side
-   (`src/agent/policy.ts`); clients send only `messages` (validated). Every
-   caller is rate-limited and budgeted per user per day (`src/agent/quota.ts`),
-   optionally gated by plan (`CELIADOR_AGENT_PLANS`). No key ships in any client.
-2. **Auth** — Supabase HS256 JWT verification (multi-user), a shared-token mode,
-   or open localhost dev (only with `CELIADOR_ALLOW_NO_AUTH=1` on a loopback
-   HOST — otherwise the daemon refuses to start without auth configured).
-3. **APNs push** — device/Live-Activity registration and an ES256-signed APNs
-   sender for the iOS companion app.
+Auth is Supabase HS256 JWT verification (multi-user), a shared-token mode, or open
+localhost dev (only with `CELIADOR_ALLOW_NO_AUTH=1` on a loopback HOST — otherwise
+the daemon refuses to start without auth configured).
 
 > This replaces the previous monorepo backend, now archived at
 > [`Cliefden/daemon-old`](https://github.com/Cliefden/daemon-old) (local
@@ -47,19 +49,20 @@ curl -s localhost:4661/api/config
 |---|---|---|---|
 | GET | `/api/health` | none | Liveness + version |
 | GET | `/api/config` | none | `authMode` + Supabase client config |
-| GET | `/api/limits` | none | The per-user agent limits in force (same object `/api/me` returns) — what the pricing page shows |
-| GET | `/api/tasks` | user | The agent task queue (+ concurrency, linked repos); `GET /api/tasks/stream` = live changes (SSE). Tasks carry `runner`, `machine`, `startedAt`, `finishedAt`, live `activity` / `awaiting` (from the linked session) and `pr` (size, checks, mergeable — refreshed from GitHub with the App, lazily when older than 60 s) |
+| GET | `/api/limits` | none | The per-user agent limits in force (same object `/api/me` returns) — what the pricing page shows — plus `prices` (`{currency, inputPerMtok, outputPerMtok}`, the rate card a run's cost is priced at: `CELIADOR_PRICE_{INPUT,OUTPUT}_PER_MTOK`, default 15 / 75 USD) |
+| GET | `/api/me` | user | The signed-in account: identity, plan, today's usage vs. quota, and `tasks` (`running`, `prOpen`, `mergedLast7Days`, `costUsdLast7Days` = the cost of merged + pr-open tasks finished in the last 7 days, `concurrency`) |
+| GET | `/api/tasks` | user | The agent task queue (+ concurrency, linked repos); `GET /api/tasks/stream` = live changes (SSE). Tasks carry `runner` (`mac` / `cloud`), `machine`, `startedAt`, `finishedAt`, live `activity` / `awaiting` (from the linked session), `pr` (size, checks, mergeable — refreshed from GitHub with the App, lazily when older than 60 s) and `usage` (`{requests, inputTokens, outputTokens, costUsd}` — the linked session's, see §cost in `docs/CLIENT_INTEGRATION.md`) |
 | POST | `/api/tasks` | user | A task by hand: `{remoteUrl, title, details?}` or `{remoteUrl, issue: {number, title, url}, details?}` (github.com repos; an open task for the same issue is returned, `deduped: true`) |
-| POST | `/api/tasks/:id/cancel` | user | Cancel a queued or running task |
-| POST | `/api/tasks/:id/status` | user (editor) | The editor reports `running` / `pr-open` (+`prUrl`, `pr {number, additions, deletions, changedFiles}`) / `merged` / `failed`, + `machine`. `running` after `pr-open` = a follow-up turn; `pr-open` may be re-sent |
+| POST | `/api/tasks/:id/cancel` | user | Cancel a queued or running task (a cloud run's sandbox is killed) |
+| POST | `/api/tasks/:id/status` | user (editor) | The editor reports `running` / `pr-open` (+`prUrl`, `pr {number, additions, deletions, changedFiles}`, `summary` = the run's final assistant message, ≤8000 chars — with the App the daemon composes the PR body from it and PATCHes it) / `merged` / `failed`, + `machine`. `running` after `pr-open` = a follow-up turn; `pr-open` may be re-sent |
 | POST | `/api/tasks/:id/merge` | user | Merge the task's PR `{method?}`: as the GitHub App when installed, else relayed to the run's editor (`git.merge` with `head` = the task branch); 409 `{error}` otherwise |
-| POST | `/api/tasks/:id/followup` | user | `{text}` → an `instruct` to the task's linked session (409 when there is none or the editor is offline) |
+| POST | `/api/tasks/:id/followup` | user | `{text}` → an `instruct` to an editor run's session (409 when there is none or the editor is offline); on a cloud run, another sandbox turn in the retained workspace (409 while it is still working, 503 when the sandbox is unavailable) |
 | GET | `/api/open/task/:id`, `/api/open/queue` | none | Data-free pages that bounce to `celiador://task/<id>` / `celiador://queue` (the GitHub comment's links; scheme via `CELIADOR_APP_SCHEME`) |
 | POST/DELETE | `/api/tasks/repos` | user | Link / unlink a repo whose GitHub issues become tasks (one owner per repo) |
-| POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET` or the GitHub App's secret) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) within `CELIADOR_TASK_CONCURRENCY` (default 3); a merged `pull_request` on a task's branch → the task is `merged`; `pull_request` opened/synchronize/reopened, `check_suite`/`check_run` completed and `status` → the task's `pr` is refreshed |
-| GET | `/api/github/app/new`, `/api/github/app/setup` | none (GitHub enforces org ownership) | One-time creation of the Celiador GitHub App via GitHub's manifest flow; credentials land in `data/github-app.json`. With the app installed the daemon comments on issues as Celiador and clones private repos for cloud runs |
-| POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Locked Claude proxy, daemon-owned 3-tool set (SSE) |
-| POST | `/api/anthropic/v1/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | First-party gateway: forwards caller's own system + tools; daemon keeps key/model/caps/quota (SSE) |
+| POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET` or the GitHub App's secret) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) or, when no online editor has the repo and `CELIADOR_RUNNER_AGENT=sandbox`, run in the cloud (needs the App on the repo) — within `CELIADOR_TASK_CONCURRENCY` (default 3); a collaborator's comment on an issue whose task is `awaiting` → the answer / approve / deny, relayed to the run and acknowledged with a 👍; a merged `pull_request` on a task's branch → the task is `merged`; `pull_request` opened/synchronize/reopened, `check_suite`/`check_run` completed and `status` → the task's `pr` is refreshed; a `check_suite`/`check_run` that failed on a pr-open task → a fix follow-up (once per head sha, at most `CELIADOR_TASK_CI_FIX_ATTEMPTS` (default 2) per task) |
+| GET | `/api/github/app/new`, `/api/github/app/setup` | none (GitHub enforces org ownership) | One-time creation of the Celiador GitHub App via GitHub's manifest flow; credentials land in `data/github-app.json`. With the app installed the daemon narrates runs on the issue (picked up, plan, questions / approvals, PR opened, checks failed, failed), writes the PR body, pushes and opens PRs for cloud runs, and clones private repos |
+| POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Locked Claude proxy, daemon-owned 3-tool set (SSE). `X-Celiador-Mirror: <mirrorKey>` attributes the request's tokens to that relay session's `usage` |
+| POST | `/api/anthropic/v1/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | First-party gateway: forwards caller's own system + tools; daemon keeps key/model/caps/quota (SSE). Same `X-Celiador-Mirror` attribution; a runner token's run id attributes without the header |
 | GET | `/api/anthropic/v1/models` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Model list (proxied) |
 | POST | `/api/push/register` | user | Register an APNs device token |
 | DELETE | `/api/push/register` | user | Remove a device token |
@@ -84,16 +87,20 @@ src/
   config.ts      env-derived constants, version
   auth.ts        Supabase JWT verify + requireUser middleware + fail-closed guard
   anthropic.ts   agent proxy (SSE relay of the Anthropic stream)
-  agent/         policy.ts (server-owned system prompt + tool allowlist), quota.ts (per-user limits)
+  agent/         policy.ts (server-owned system prompt + tool allowlist), quota.ts (per-user limits), pricing.ts (the rate card)
   account/       DELETE /api/account
-  sessions/      relay (bus, store, routes, notify, persist)
+  sessions/      relay (bus, store, routes, notify, persist, usage = per-run cost attribution)
   data/, db/     profile + chat-history routes and Postgres access
   push/
     apns.ts      ES256 provider JWT + HTTP/2 APNs sender (dependency-free)
     store.ts     per-user device/activity token registry (data/push/<uid>.json)
     routes.ts    /api/push/* endpoints
   releases/      editor update feed + artifact downloads, read from releases/manifest.json
-  tasks/         agent task queue (store, routes, dispatch, GitHub webhook, live session link, PR refresh/merge/comments)
+  tasks/         agent task queue: store, routes, dispatch (editor or cloud), github (webhook: tasks, answers, CI),
+                 cloud (sandbox run → commit / push / PR as the App), followup, ci (checks-failed fixes),
+                 live (session → task fields), comments + pulls (the App's issue comments, PR refresh/merge/body),
+                 prBody (pure: plan + self-review parsing, PR body composition)
+  runner/        cloud runs: manager, run, sandbox (Docker, no network), workspace (clone / git helper), agent
   github/        the Celiador GitHub App (manifest setup, installation tokens)
   open/          /api/open/* deep-link bounce pages
 ```
@@ -114,8 +121,12 @@ Download URLs are built on `CELIADOR_PUBLIC_URL` (default `https://celiador.ai`)
 See `.env.example` (and `.env.{dev,staging,prod}.example`). Auth mode is chosen
 by which vars are set: `SUPABASE_JWT_SECRET` → supabase, else `CELIADOR_TOKEN` →
 token, else none (loopback dev with `CELIADOR_ALLOW_NO_AUTH=1` only). Push is a
-no-op unless the `APNS_*` vars are set. Under systemd `EnvironmentFile`, keep
-comments on their own lines — inline `# …` becomes part of the value.
+no-op unless the `APNS_*` vars are set. Cloud runs need `CELIADOR_RUNNER_AGENT=sandbox`
+(+ Docker and the runner image, `docs/CLOUD_RUNS.md`) and the GitHub App installed
+on the repo. The rate card is `CELIADOR_PRICE_INPUT_PER_MTOK` / `CELIADOR_PRICE_OUTPUT_PER_MTOK`
+(USD, default 15 / 75); the checks-failed fix cap is `CELIADOR_TASK_CI_FIX_ATTEMPTS`
+(default 2). Under systemd `EnvironmentFile`, keep comments on their own lines —
+inline `# …` becomes part of the value.
 
 ## Deploy (box)
 

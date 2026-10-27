@@ -1,6 +1,8 @@
-import { appRequest, commentOnIssue, githubApp, PUBLIC_URL } from "../github/app";
+import { appRequest, commentOnIssue, githubApp, PUBLIC_URL, updatePullRequestBody } from "../github/app";
+import { postFailedComment } from "./comments";
 import { dispatchTasks, taskStores } from "./dispatch";
 import { publishTaskChange } from "./events";
+import { composePrBody } from "./prBody";
 import { prNumberFromUrl, type Task, type TaskChecks, type TaskPullRequest } from "./store";
 
 /**
@@ -165,16 +167,17 @@ export async function mergeViaApp(
 }
 
 /** The repo's default branch as GitHub says, else "main". */
-async function defaultBranch(task: Task): Promise<string> {
+export async function defaultBranch(task: Task): Promise<string> {
   const res = await appRequest(task.repo, "GET", "").catch(() => null);
   return typeof res?.json?.default_branch === "string" ? res.json.default_branch : "main";
 }
 
 /** The "Picked up" comment body (the editor posts the same text without the App). */
-export function pickedUpComment(task: Pick<Task, "id" | "branch" | "machine">, base: string): string {
+export function pickedUpComment(task: Pick<Task, "id" | "branch" | "machine" | "runner">, base: string): string {
   const machine = task.machine?.trim() || "a Mac";
+  const where = task.runner === "cloud" ? `in the Celiador cloud on its own branch, \`${task.branch}\`.` : `on ${machine} in its own worktree, \`${task.branch}\`.`;
   return [
-    `**Picked up.** Running on ${machine} in its own worktree, \`${task.branch}\`.`,
+    `**Picked up.** Running ${where}`,
     "",
     `I'll open a pull request against \`${base}\` and link it here. Approvals and questions go to the Celiador queue.`,
     "",
@@ -204,4 +207,28 @@ export function postTaskComments(userId: string, taskId: string): void {
     store.update(task.id, { posted: { ...task.posted, prOpened: true } });
     void commentOnIssue(task.repo, issue, `Pull request opened: ${task.prUrl}`).catch(() => undefined);
   }
+  if (task.state === "failed") postFailedComment(userId, task);
+}
+
+/**
+ * The editor reported pr-open with the run's final message (`summary`): compose
+ * the pull request body (tasks/prBody.ts — what the agent did, its self-review,
+ * where/how long/how much) and replace GitHub's with it, as the App. Without
+ * the App the editor writes the same body itself (minus the cost). Resolves to
+ * whether the PATCH went through.
+ */
+export async function applyPrBody(userId: string, taskId: string, summary: string): Promise<boolean> {
+  if (!githubApp()) return false;
+  const task = taskStores.for(userId).get(taskId);
+  const number = task?.pr?.number ?? prNumberFromUrl(task?.prUrl);
+  if (!task || !number) return false;
+  const body = composePrBody({
+    issueNumber: task.issue?.number,
+    summary,
+    runBy: task.runner === "cloud" ? "the cloud" : task.machine?.trim() || "a Mac",
+    changedFiles: task.pr?.changedFiles,
+    elapsedMs: task.startedAt && task.finishedAt ? Date.parse(task.finishedAt) - Date.parse(task.startedAt) : undefined,
+    usage: task.usage,
+  });
+  return updatePullRequestBody(task.repo, number, body).catch(() => false);
 }
