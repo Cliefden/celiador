@@ -387,12 +387,25 @@ async function main(): Promise<void> {
 	ok("manual task → queued behind the running one, celiador-* branch", manual.status === 201 && manualTask?.state === "queued" && /^celiador-[0-9a-f]{6}-tidy-the-readme$/.test(manualTask.branch), JSON.stringify(manualTask));
 	ok("cancel a queued task", ((await (await app.request(`${T}/${manualTask?.id}/cancel`, { method: "POST", headers: authH })).json()) as { task?: { state: string } }).task?.state === "cancelled");
 	ok("cancel again → 409", (await app.request(`${T}/${manualTask?.id}/cancel`, { method: "POST", headers: authH })).status === 409);
+	// Several windows claim one agent session's mirror; the one that knows it is a
+	// task's run may lose the race (celiador-web#46). The losing claim still links.
+	{
+		const tStore = (await import("../src/tasks/dispatch.ts")).taskStores.for("smoke-user");
+		const raced = tStore.create({ repo: { owner: "Cliefden", name: "smoke-repo", url: REPO }, title: "Raced mirror", body: "", source: "manual" });
+		const S = "http://localhost/api/sessions";
+		const winner = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ title: "Raced mirror", origin: "editor", runner: "editor", mirrorKey: "agent-host:raced" }) })).json()) as { session: { id: string } }).session;
+		const loser = await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ title: "Raced mirror", origin: "editor", runner: "editor", mirrorKey: "agent-host:raced", taskId: raced.id }) });
+		ok("a second window's claim with the taskId → 409, task linked to the winning mirror", loser.status === 409 && tStore.get(raced.id)?.sessionId === winner.id, `${loser.status} ${tStore.get(raced.id)?.sessionId} vs ${winner.id}`);
+		await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ title: "Raced mirror", origin: "editor", runner: "editor", mirrorKey: "agent-host:raced", taskId: raced.id }) });
+		ok("a linked task is not moved by a later claim", tStore.get(raced.id)?.sessionId === winner.id);
+		await app.request(`${T}/${raced.id}/cancel`, { method: "POST", headers: authH });
+	}
 	const linkedRun = await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ title: "Comment task 43", origin: "editor", runner: "editor", taskId: second[1]?.taskId }) });
 	const linkedSession = ((await linkedRun.json()) as { session?: { id: string } }).session;
 	const afterLink = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; sessionId?: string }> }).tasks.find((t) => t.id === second[1]?.taskId);
 	ok("an editor run's relay session is linked to its task", !!linkedSession && afterLink?.sessionId === linkedSession.id, JSON.stringify(afterLink));
 	const taskList = (await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ state: string }>; concurrency: number };
-	ok("list: all tasks, concurrency published", taskList.tasks.length === 3 && taskList.concurrency === 1, JSON.stringify(taskList.tasks.map((t) => t.state)));
+	ok("list: all tasks, concurrency published", taskList.tasks.length === 4 && taskList.concurrency === 1, JSON.stringify(taskList.tasks.map((t) => t.state)));
 	edAbort.abort();
 	await edReader;
 	delete process.env.CELIADOR_TASK_CONCURRENCY;
@@ -731,6 +744,9 @@ async function main(): Promise<void> {
 	const review2 = parseSelfReview("Done.\n\n**Self-review**\n- What changed: Renamed `foo` to `bar` in two files.\n- Unsure: nothing.\n- Not verified: didn't run the e2e suite.");
 	ok("self-review: bold heading + labelled bullets", review2.whatChanged === "Renamed `foo` to `bar` in two files." && review2.unsure[0] === "nothing." && review2.notVerified[0] === "didn't run the e2e suite.", JSON.stringify(review2));
 	ok("self-review: absent → empty", parseSelfReview("just text").whatChanged === undefined && parseSelfReview("just text").unsure.length === 0);
+	// Bold run-in headings end in a full stop; it belongs to the label, not the text (seen on celiador-web#46: "What the agent did\n. I added…").
+	const review3 = parseSelfReview("## Self-review\n**What changed.** I added one file.\n- Unsure: . Whether the colours are intentional.\n**Not verified.** I did not start the dev server.");
+	ok("self-review: run-in headings' full stops are not leaked", review3.whatChanged === "I added one file." && review3.unsure[0] === "Whether the colours are intentional." && review3.notVerified[0] === "I did not start the dev server.", JSON.stringify(review3));
 	ok("plan: the lines under a Plan: heading, up to the blank line", extractPlan(finalMsg) === "1. Read the relay\n2. Add the header", JSON.stringify(extractPlan(finalMsg)));
 	ok("plan: bold inline form", extractPlan("**Plan:** look, then fix\n- a\n- b") === "look, then fix\n- a\n- b", JSON.stringify(extractPlan("**Plan:** look, then fix\n- a\n- b")));
 	ok("plan: none without the heading", extractPlan("I will plan to do x") === undefined);
