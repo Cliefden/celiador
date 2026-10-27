@@ -121,10 +121,12 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
 }
 
-/** "$1.23 (12.3k in / 4.0k out tokens)". */
+/** "$1.23 (12.3k in, 9.8k cached / 4.0k out tokens)" — the cached share explains why a big "in" number costs little. */
 export function formatUsage(usage: SessionUsage): string {
   const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
-  return `$${usage.costUsd.toFixed(2)} (${k(usage.inputTokens)} in / ${k(usage.outputTokens)} out tokens)`;
+  const cached = usage.cacheReadTokens ?? 0;
+  const input = cached > 0 ? `${k(usage.inputTokens)} in, ${k(cached)} cached` : `${k(usage.inputTokens)} in`;
+  return `$${usage.costUsd.toFixed(2)} (${input} / ${k(usage.outputTokens)} out tokens)`;
 }
 
 export interface PrBodyInput {

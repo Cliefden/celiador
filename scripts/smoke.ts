@@ -674,7 +674,8 @@ async function main(): Promise<void> {
 
 	// ── Cost per run: gateway usage → session → task → /api/me ───────────────
 	console.log("\n== cost ==");
-	const { parseSelfReview, extractPlan, composePrBody } = await import("../src/tasks/prBody.ts");
+	const { parseSelfReview, extractPlan, composePrBody, formatUsage } = await import("../src/tasks/prBody.ts");
+	const { costUsd } = await import("../src/agent/pricing.ts");
 	const { overrideServerRunnerForTests } = await import("../src/runner/manager.ts");
 	const { overrideCloudRemoteForTests, WAITING_FOR_APP } = await import("../src/tasks/cloud.ts");
 	// A plain user token (no run id) — what the editor sends.
@@ -691,10 +692,14 @@ async function main(): Promise<void> {
 		while (Date.now() - t0 < ms) { if (await pred()) return true; await tick(40); }
 		return false;
 	};
-	type Usage = { requests: number; inputTokens: number; outputTokens: number; costUsd: number };
+	type Usage = { requests: number; inputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; outputTokens: number; costUsd: number };
+	// The rate card: cache reads are most of an agent turn's input and must not be priced as fresh input.
+	ok("costUsd: uncached input + output at the card", costUsd({ input: 5, cacheRead: 0, cacheWrite: 0, output: 3 }) === 0.0003);
+	ok("costUsd: cache reads at the cache-read rate (456k in, 440k cached, 1.6k out → cents, not dollars)", costUsd({ input: 456_000, cacheRead: 440_000, cacheWrite: 10_000, output: 1_600 }) === Math.round((6_000 * 15 + 10_000 * 18.75 + 440_000 * 1.5 + 1_600 * 75) / 1_000_000 * 1_000_000) / 1_000_000 && costUsd({ input: 456_000, cacheRead: 440_000, cacheWrite: 10_000, output: 1_600 }) < 1.1);
+	ok("formatUsage shows the cached share", formatUsage({ requests: 9, inputTokens: 456_431, cacheReadTokens: 440_000, cacheWriteTokens: 0, outputTokens: 1_629, costUsd: 0.9 }) === "$0.90 (456.4k in, 440.0k cached / 1.6k out tokens)");
 	const getSession = async (id: string) => ((await (await app.request(`http://localhost/api/sessions/${id}`, { headers: authH })).json()) as { session?: { id: string; title: string; origin: string; runner: string; state: string; usage?: Usage } }).session;
-	const limits2 = (await (await app.request("http://localhost/api/limits")).json()) as { prices?: { currency: string; inputPerMtok: number; outputPerMtok: number } };
-	ok("GET /api/limits publishes the rate card (defaults 15 / 75 USD per Mtok)", limits2.prices?.currency === "USD" && limits2.prices.inputPerMtok === 15 && limits2.prices.outputPerMtok === 75, JSON.stringify(limits2.prices));
+	const limits2 = (await (await app.request("http://localhost/api/limits")).json()) as { prices?: { currency: string; inputPerMtok: number; cacheWritePerMtok: number; cacheReadPerMtok: number; outputPerMtok: number } };
+	ok("GET /api/limits publishes the rate card (defaults 15 / 18.75 / 1.5 / 75 USD per Mtok)", limits2.prices?.currency === "USD" && limits2.prices.inputPerMtok === 15 && limits2.prices.cacheWritePerMtok === 18.75 && limits2.prices.cacheReadPerMtok === 1.5 && limits2.prices.outputPerMtok === 75, JSON.stringify(limits2.prices));
 	const CREPO = "https://github.com/Cliefden/cost-repo.git";
 	const costTask = ((await (await app.request(T, { method: "POST", headers: userH, body: JSON.stringify({ remoteUrl: CREPO, title: "Price the run" }) })).json()) as { task: ATask & { usage?: Usage } }).task;
 	const mirrored = ((await (await app.request("http://localhost/api/sessions", { method: "POST", headers: userH, body: JSON.stringify({ title: "Price the run", origin: "editor", runner: "editor", mirrorKey: "agent-host:mirror-1", taskId: costTask.id }) })).json()) as { session: { id: string } }).session;
@@ -729,7 +734,7 @@ async function main(): Promise<void> {
 	ok("plan: the lines under a Plan: heading, up to the blank line", extractPlan(finalMsg) === "1. Read the relay\n2. Add the header", JSON.stringify(extractPlan(finalMsg)));
 	ok("plan: bold inline form", extractPlan("**Plan:** look, then fix\n- a\n- b") === "look, then fix\n- a\n- b", JSON.stringify(extractPlan("**Plan:** look, then fix\n- a\n- b")));
 	ok("plan: none without the heading", extractPlan("I will plan to do x") === undefined);
-	const prBody = composePrBody({ issueNumber: 12, summary: finalMsg, runBy: "Stefan's MacBook Pro", changedFiles: 3, elapsedMs: 254_000, usage: { requests: 9, inputTokens: 12_345, outputTokens: 4_000, costUsd: 0.49 } });
+	const prBody = composePrBody({ issueNumber: 12, summary: finalMsg, runBy: "Stefan's MacBook Pro", changedFiles: 3, elapsedMs: 254_000, usage: { requests: 9, inputTokens: 12_345, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 4_000, costUsd: 0.49 } });
 	ok("PR body: Closes, what the agent did, self-review bullets, footer", prBody === "Closes #12\n\n## What the agent did\nAdded the mirror header to the proxy.\n\n## Self-review\n- Unsure: Whether the header survives the retry path.\n- Not verified: The iOS build (no simulator here).\n\n---\nRun by Celiador on Stefan's MacBook Pro · 3 files · 4 min · $0.49 (12.3k in / 4.0k out tokens)", JSON.stringify(prBody));
 	const bareBody = composePrBody({ summary: "Just a sentence.", runBy: "the cloud" });
 	ok("PR body without an issue, review or numbers", bareBody === "## What the agent did\nJust a sentence.\n\n## Self-review\n_The agent flagged nothing it was unsure about or left unverified._\n\n---\nRun by Celiador on the cloud", JSON.stringify(bareBody));

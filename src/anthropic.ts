@@ -58,6 +58,8 @@ export async function agentProxy(c: Context) {
     const ac = new AbortController();
     c.req.raw.signal.addEventListener("abort", () => ac.abort());
     let inputTokens = 0;
+    let cacheRead = 0;
+    let cacheWrite = 0;
     let outputTokens = 0;
     try {
       const upstream = (await getClient().messages.create(request as never, {
@@ -66,7 +68,9 @@ export async function agentProxy(c: Context) {
       for await (const event of upstream) {
         if (event.type === "message_start") {
           const u = event.message?.usage;
-          inputTokens = (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
+          cacheWrite = u?.cache_creation_input_tokens ?? 0;
+          cacheRead = u?.cache_read_input_tokens ?? 0;
+          inputTokens = (u?.input_tokens ?? 0) + cacheWrite + cacheRead;
         } else if (event.type === "message_delta" && typeof event.usage?.output_tokens === "number") {
           outputTokens = event.usage.output_tokens; // cumulative
         }
@@ -79,7 +83,7 @@ export async function agentProxy(c: Context) {
       }
     } finally {
       agentQuota.record(quotaKey, inputTokens, outputTokens);
-      attributeUsage(user, mirrorKey, inputTokens, outputTokens); // per-run cost (sessions/usage.ts)
+      attributeUsage(user, mirrorKey, { input: inputTokens, cacheRead, cacheWrite, output: outputTokens }); // per-run cost (sessions/usage.ts)
       release();
     }
   });

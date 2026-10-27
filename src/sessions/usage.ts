@@ -1,3 +1,4 @@
+import type { TokenCounts } from "../agent/pricing";
 import type { AuthResult } from "../auth";
 import { taskSessionUsage } from "../tasks/live";
 import { sessionStores } from "./instance";
@@ -17,13 +18,13 @@ export const MIRROR_HEADER = "x-celiador-mirror";
  * Missing or unknown → nothing here; the per-user quota (agent/quota.ts) has
  * already counted it. Never throws: accounting must not fail a stream.
  */
-export function attributeUsage(user: AuthResult | null, mirrorKey: string | undefined, inputTokens: number, outputTokens: number): Session | undefined {
+export function attributeUsage(user: AuthResult | null, mirrorKey: string | undefined, tokens: TokenCounts): Session | undefined {
   if (!user) return undefined;
   try {
     const store = sessionStores.for(user.userId);
     const session = user.runId ? store.get(user.runId) : mirrorKey ? store.findMirror(mirrorKey.slice(0, 500)) : undefined;
     if (!session) return undefined;
-    const usage = store.recordUsage(session.id, inputTokens, outputTokens);
+    const usage = store.recordUsage(session.id, tokens);
     if (usage) taskSessionUsage(user.userId, session.id, usage);
     return session;
   } catch (err) {
