@@ -5,6 +5,7 @@ import { validateGatewayRequest } from "./agent/policy";
 import { agentQuota } from "./agent/quota";
 import { authorizeAgent } from "./agent/authorize";
 import type { AuthResult } from "./auth";
+import type { TokenCounts } from "./agent/pricing";
 import { attributeUsage, MIRROR_HEADER } from "./sessions/usage";
 
 /**
@@ -137,8 +138,9 @@ export async function anthropicGateway(c: Context) {
       if (upstream.ok) {
         try {
           const json = JSON.parse(text) as { usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } };
-          const input = (json.usage?.input_tokens ?? 0) + (json.usage?.cache_creation_input_tokens ?? 0) + (json.usage?.cache_read_input_tokens ?? 0);
-          recordUsage(quotaKey, user, mirrorKey, input, json.usage?.output_tokens);
+          const cacheWrite = json.usage?.cache_creation_input_tokens ?? 0;
+          const cacheRead = json.usage?.cache_read_input_tokens ?? 0;
+          recordUsage(quotaKey, user, mirrorKey, { input: (json.usage?.input_tokens ?? 0) + cacheWrite + cacheRead, cacheRead, cacheWrite, output: json.usage?.output_tokens ?? 0 });
         } catch {
           /* non-JSON body — skip accounting */
         }
@@ -167,7 +169,7 @@ export async function anthropicGateway(c: Context) {
     } catch (err) {
       if (!ac.signal.aborted) console.error("[gateway] stream error:", err instanceof Error ? err.message : err);
     } finally {
-      recordUsage(quotaKey, user, mirrorKey, usage.inputTokens, usage.outputTokens);
+      recordUsage(quotaKey, user, mirrorKey, usage.tokens);
       release();
     }
   });
@@ -194,11 +196,11 @@ export async function anthropicModels(c: Context) {
 }
 
 /** Quota (per user) + run attribution (per session) for one request's tokens. */
-function recordUsage(quotaKey: string, user: AuthResult | null, mirrorKey: string | undefined, input?: number, output?: number): void {
-  const inputTokens = Math.max(0, input ?? 0);
-  const outputTokens = Math.max(0, output ?? 0);
-  agentQuota.record(quotaKey, inputTokens, outputTokens);
-  attributeUsage(user, mirrorKey, inputTokens, outputTokens);
+function recordUsage(quotaKey: string, user: AuthResult | null, mirrorKey: string | undefined, tokens: TokenCounts): void {
+  const inputTokens = Math.max(0, tokens.input);
+  const outputTokens = Math.max(0, tokens.output);
+  agentQuota.record(quotaKey, inputTokens, outputTokens); // the quota counts every input token alike
+  attributeUsage(user, mirrorKey, { ...tokens, input: inputTokens, output: outputTokens });
 }
 
 /**
@@ -209,22 +211,20 @@ function recordUsage(quotaKey: string, user: AuthResult | null, mirrorKey: strin
  */
 function newUsageScanner() {
   let carry = "";
-  const state = { inputTokens: 0, outputTokens: 0, gotInput: false };
+  const state = { inputTokens: 0, cacheRead: 0, cacheWrite: 0, outputTokens: 0, gotInput: false };
   return {
-    get inputTokens() {
-      return state.inputTokens;
-    },
-    get outputTokens() {
-      return state.outputTokens;
+    /** Totals so far; `input` includes the cache tokens, which are also broken out. */
+    get tokens(): TokenCounts {
+      return { input: state.inputTokens, cacheRead: state.cacheRead, cacheWrite: state.cacheWrite, output: state.outputTokens };
     },
     scan(chunk: string) {
       const text = carry + chunk;
       if (!state.gotInput) {
         const input = /"input_tokens":\s*(\d+)/.exec(text);
         if (input) {
-          const cacheCreate = /"cache_creation_input_tokens":\s*(\d+)/.exec(text);
-          const cacheRead = /"cache_read_input_tokens":\s*(\d+)/.exec(text);
-          state.inputTokens = Number(input[1]) + Number(cacheCreate?.[1] ?? 0) + Number(cacheRead?.[1] ?? 0);
+          state.cacheWrite = Number(/"cache_creation_input_tokens":\s*(\d+)/.exec(text)?.[1] ?? 0);
+          state.cacheRead = Number(/"cache_read_input_tokens":\s*(\d+)/.exec(text)?.[1] ?? 0);
+          state.inputTokens = Number(input[1]) + state.cacheWrite + state.cacheRead;
           state.gotInput = true;
         }
       }

@@ -75,12 +75,14 @@ The daemon attributes every gateway request (`POST /api/agent/messages`,
 Usage accumulates on the session and is persisted with it:
 
 ```json
-"usage": { "requests": 12, "inputTokens": 48210, "outputTokens": 6120, "costUsd": 1.1822 }
+"usage": { "requests": 12, "inputTokens": 48210, "cacheReadTokens": 41900, "cacheWriteTokens": 3100, "outputTokens": 6120, "costUsd": 0.57 }
 ```
 
-`costUsd` = tokens × the daemon's published rate card (`GET /api/limits` →
-`prices: { currency: "USD", inputPerMtok: 15, outputPerMtok: 75 }` by default;
-cache-read / cache-creation tokens count as input). Exposed as:
+`inputTokens` is the total input, cache included; `cacheReadTokens` / `cacheWriteTokens`
+break it down (an agent turn re-reads its whole context on every request, so most input is
+cache reads). `costUsd` = tokens × the daemon's published rate card (`GET /api/limits` →
+`prices: { currency: "USD", inputPerMtok: 15, cacheWritePerMtok: 18.75, cacheReadPerMtok: 1.5, outputPerMtok: 75 }`
+by default). Exposed as:
 
 | Where | Field |
 |---|---|

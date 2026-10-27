@@ -33,7 +33,12 @@ export type SessionState = "idle" | "running" | "awaiting" | "done" | "error" | 
  */
 export interface SessionUsage {
   requests: number;
+  /** Total input tokens, prompt-cache reads and writes included. */
   inputTokens: number;
+  /** Of `inputTokens`: served from the prompt cache (priced far below fresh input). */
+  cacheReadTokens: number;
+  /** Of `inputTokens`: written to the prompt cache. */
+  cacheWriteTokens: number;
   outputTokens: number;
   costUsd: number;
 }

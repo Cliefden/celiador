@@ -160,6 +160,7 @@ export function branchFor(title: string, issueNumber?: number, id?: string): str
  */
 const REPLY_SHAPE =
   "Start your reply with a short plan, 3–6 lines under a \"Plan:\" heading, then do the work. " +
+  "Commit, but don't push or open a pull request: Celiador does that when you finish. " +
   "End with a \"## Self-review\" section: what changed; what you're unsure about; what you did not run or verify, and why.";
 
 /** The instruction the agent gets. Kept plain: the issue is the spec. */

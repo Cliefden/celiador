@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { costUsd } from "../agent/pricing";
+import { costUsd, type TokenCounts } from "../agent/pricing";
 import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRunner, SessionState, SessionUsage } from "./types";
 
 /** Max events retained per session (older ones fall out of the ring). */
@@ -159,14 +159,17 @@ export class SessionStore {
    * makes many requests, and the session's own updatedAt isn't touched (usage is
    * not activity).
    */
-  recordUsage(id: string, inputTokens: number, outputTokens: number): SessionUsage | undefined {
+  recordUsage(id: string, tokens: TokenCounts): SessionUsage | undefined {
     const session = this.get(id);
     if (!session) return undefined;
-    const usage = session.usage ?? { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    const usage = session.usage ?? { requests: 0, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, costUsd: 0 };
     usage.requests += 1;
-    usage.inputTokens += Math.max(0, inputTokens || 0);
-    usage.outputTokens += Math.max(0, outputTokens || 0);
-    usage.costUsd = costUsd(usage.inputTokens, usage.outputTokens);
+    usage.inputTokens += Math.max(0, tokens.input || 0);
+    // Records written before the cache split lack these two; treat them as 0.
+    usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + Math.max(0, tokens.cacheRead || 0);
+    usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + Math.max(0, tokens.cacheWrite || 0);
+    usage.outputTokens += Math.max(0, tokens.output || 0);
+    usage.costUsd = costUsd({ input: usage.inputTokens, cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, output: usage.outputTokens });
     session.usage = usage;
     this.scheduleMetaSave();
     return { ...usage };
