@@ -21,6 +21,14 @@ extension AgentTask {
     /// When the run started — `startedAt`, else (older daemon) when it was queued.
     var startedStamp: String { startedAt ?? createdAt }
 
+    /// "$0.38" once the run has stopped spending (pull request open, merged,
+    /// failed or cancelled); nil while it runs, when the figure is still growing,
+    /// and on an older daemon that attributes no usage.
+    var settledCost: String? {
+        guard isFinished || state == "pr-open" else { return nil }
+        return usage?.costLabel
+    }
+
     var stateLabel: String {
         switch state {
         case "queued": return "Queued"
@@ -137,9 +145,12 @@ struct TaskMetaRow: View {
     }
 }
 
-/// "+64 −11 3 files · checks passed" — every unknown piece is left out.
+/// "+64 −11 3 files · checks passed  $0.38" — every unknown piece is left out.
+/// The run's cost closes the line when the daemon attributed one (`showCost`
+/// lets the run screen leave it to its own pill).
 struct PullRequestStatsLine: View {
     var task: AgentTask
+    var showCost = true
 
     var body: some View {
         HStack(spacing: 10) {
@@ -148,6 +159,9 @@ struct PullRequestStatsLine: View {
             let rest = restParts
             if !rest.isEmpty {
                 Text(rest.joined(separator: " · ")).foregroundStyle(task.pr?.mergeable == false || task.pr?.checks == "failing" ? Theme.red : Theme.dim)
+            }
+            if showCost, let cost = task.settledCost {
+                Text(cost).foregroundStyle(Theme.dim)
             }
         }
         .font(.caption.monospaced())

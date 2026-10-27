@@ -337,9 +337,6 @@ struct TaskRunView: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 StatusPill(text: model.needsYou(task) ? "Needs you" : task.stateLabel, color: model.needsYou(task) ? Theme.attention : task.stateColor)
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    NeutralPill(text: runnerLine(task, now: context.date))
-                }
                 if let number = task.prNumber {
                     Button {
                         if let url = task.pullRequestURL { openURL(url) }
@@ -349,6 +346,17 @@ struct TaskRunView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open pull request \(number) on GitHub")
                 }
+                if let cost = task.settledCost {
+                    NeutralPill(text: cost)
+                        .accessibilityLabel("Cost \(cost)")
+                }
+            }
+            // "Ran on Stefan's MacBook Pro · 12 min · $0.38" / "Running in the cloud · 4 min".
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(runnerLine(task, now: context.date))
+                    .font(.footnote)
+                    .foregroundStyle(Theme.dim)
+                    .lineLimit(2)
             }
         }
         .padding(.top, 4)
@@ -358,15 +366,27 @@ struct TaskRunView: View {
         task.branch.isEmpty ? task.metaPrefix : "\(task.metaPrefix) · branch \(task.branch)"
     }
 
+    /// Where it ran, for how long, and what it cost once that figure is settled.
+    /// A cloud run never reads as "your Mac": the place follows `isCloud` first,
+    /// and the machine name only applies to an editor dispatch.
     private func runnerLine(_ task: AgentTask, now: Date) -> String {
         let finished = task.isFinished || task.state == "pr-open"
         let verb = finished ? "Ran" : (task.state == "queued" ? "Queued" : "Running")
-        let place = task.isCloud ? "in the cloud" : "on your Mac"
-        let end = finished ? (task.finishedAt ?? task.updatedAt) : nil
-        guard task.state != "queued", let elapsed = RelativeTime.elapsed(from: task.startedStamp, to: end, now: now) else {
-            return "\(verb) \(place)"
+        let place: String
+        if task.isCloud {
+            place = "in the cloud"
+        } else if let machine = task.machine, !machine.isEmpty {
+            place = "on \(machine)"
+        } else {
+            place = "on your Mac"
         }
-        return "\(verb) \(place) · \(elapsed)"
+        var parts = ["\(verb) \(place)"]
+        let end = finished ? (task.finishedAt ?? task.updatedAt) : nil
+        if task.state != "queued", let elapsed = RelativeTime.elapsed(from: task.startedStamp, to: end, now: now) {
+            parts.append(elapsed)
+        }
+        if let cost = task.settledCost { parts.append(cost) }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: Needs you
@@ -461,7 +481,7 @@ struct TaskRunView: View {
                     // Only the pull request's numbers are known (no streamed diffs).
                     Button { if let url = task.pullRequestURL { openURL(url) } } label: {
                         HStack {
-                            PullRequestStatsLine(task: task)
+                            PullRequestStatsLine(task: task, showCost: false) // the header pill has it
                             Spacer()
                             Text("View on GitHub").font(.footnote.weight(.medium))
                             Image(systemName: "arrow.up.right").font(.caption)
@@ -666,7 +686,7 @@ struct TaskRunView: View {
     }
 }
 
-/// A neutral metadata capsule ("Ran on your Mac · 12 min", "PR #8").
+/// A neutral metadata capsule ("PR #8", "$0.38").
 struct NeutralPill: View {
     var text: String
     var icon: String? = nil

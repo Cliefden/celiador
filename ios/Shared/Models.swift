@@ -31,9 +31,76 @@ struct Session: Codable, Identifiable, Equatable {
     let lastSeq: Int
     let createdAt: String
     let updatedAt: String
+    /// Gateway usage attributed to this run (absent on an older daemon).
+    var usage: RunUsage? = nil
+}
+
+extension Session {
+    enum CodingKeys: String, CodingKey {
+        case id, title, origin, runner, state, runnerConnected, lastSeq, createdAt, updatedAt, usage
+    }
+
+    /// Tolerant decoding: a malformed `usage` never drops the session.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        origin = try c.decode(String.self, forKey: .origin)
+        runner = try c.decode(String.self, forKey: .runner)
+        state = try c.decode(SessionState.self, forKey: .state)
+        runnerConnected = try c.decode(Bool.self, forKey: .runnerConnected)
+        lastSeq = try c.decode(Int.self, forKey: .lastSeq)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        updatedAt = try c.decode(String.self, forKey: .updatedAt)
+        usage = (try? c.decodeIfPresent(RunUsage.self, forKey: .usage)) ?? nil
+    }
 }
 
 typealias SessionSummary = Session
+
+/// What one run cost: the gateway requests the daemon attributed to its session,
+/// priced at the daemon's published rate card (`GET /api/limits` → `prices`, USD
+/// per million tokens; cache reads count as input). Shared by `Session.usage` and
+/// `Task.usage`.
+struct RunUsage: Codable, Hashable {
+    let requests: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let costUsd: Double
+
+    /// "$0.38", or "<$0.01" for a run that cost less than a cent.
+    var costLabel: String { RunUsage.formatCost(costUsd) }
+
+    /// Two decimals, with "<$0.01" under a cent so a cheap run never reads as free.
+    static func formatCost(_ usd: Double) -> String {
+        if usd > 0 && usd < 0.01 { return "<$0.01" }
+        return String(format: "$%.2f", usd)
+    }
+
+    enum CodingKeys: String, CodingKey { case requests, inputTokens, outputTokens, costUsd }
+
+    init(requests: Int, inputTokens: Int, outputTokens: Int, costUsd: Double) {
+        self.requests = requests
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.costUsd = costUsd
+    }
+
+    /// Tolerant: every field defaults to 0, and whole numbers may arrive as doubles.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func int(_ key: CodingKeys) -> Int {
+            if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+            if let d = try? c.decodeIfPresent(Double.self, forKey: key), d.isFinite { return Int(d) }
+            return 0
+        }
+        requests = int(.requests)
+        inputTokens = int(.inputTokens)
+        outputTokens = int(.outputTokens)
+        let cost = (try? c.decodeIfPresent(Double.self, forKey: .costUsd)) ?? nil
+        costUsd = (cost?.isFinite == true) ? cost! : 0
+    }
+}
 
 /// A repo open in the user's editor(s) right now (daemon presence). Feeds the
 /// phone's "from your editor" repo picker; `remoteUrl` is a normalised https
@@ -154,6 +221,9 @@ struct AgentTaskSummary: Codable {
     let mergedLast7Days: Int
     /// Tasks allowed to run at once (published like the other limits).
     let concurrency: Int
+    /// Agent spend over the merged + pr-open tasks finished in the last seven
+    /// days, in USD at the daemon's rate card (absent on an older daemon).
+    var costUsdLast7Days: Double? = nil
 }
 
 /// Today's agent usage (UTC day), as metered by the daemon's quota tracker.
@@ -330,6 +400,8 @@ struct AgentTask: Codable, Identifiable, Hashable {
     var activity: String? = nil
     var awaiting: Awaiting? = nil
     var pr: PullRequest? = nil
+    /// The linked session's gateway usage and cost (see `RunUsage`).
+    var usage: RunUsage? = nil
 
     /// queued / dispatched / running hold work; the rest are finished.
     var isActive: Bool { ["queued", "dispatched", "running"].contains(state) }
@@ -349,7 +421,7 @@ struct AgentTask: Codable, Identifiable, Hashable {
 extension AgentTask {
     enum CodingKeys: String, CodingKey {
         case id, repo, issue, title, branch, source, state, sessionId, prUrl, error, createdAt, updatedAt
-        case runner, machine, startedAt, finishedAt, activity, awaiting, pr
+        case runner, machine, startedAt, finishedAt, activity, awaiting, pr, usage
     }
 
     /// Tolerant decoding: the core fields are required, but a malformed or
@@ -375,6 +447,7 @@ extension AgentTask {
         activity = (try? c.decodeIfPresent(String.self, forKey: .activity)) ?? nil
         awaiting = (try? c.decodeIfPresent(Awaiting.self, forKey: .awaiting)) ?? nil
         pr = (try? c.decodeIfPresent(PullRequest.self, forKey: .pr)) ?? nil
+        usage = (try? c.decodeIfPresent(RunUsage.self, forKey: .usage)) ?? nil
     }
 }
 

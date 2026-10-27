@@ -84,7 +84,8 @@ enum DemoData {
     private static func task(
         _ id: String, _ number: Int, _ repoName: String, _ title: String, branch: String, state: String,
         session: String?, runner: String = "mac", started: TimeInterval, finished: TimeInterval? = nil,
-        activity: String? = nil, awaiting: AgentTask.Awaiting? = nil, pr: AgentTask.PullRequest? = nil, error: String? = nil
+        activity: String? = nil, awaiting: AgentTask.Awaiting? = nil, pr: AgentTask.PullRequest? = nil, error: String? = nil,
+        usage: RunUsage? = nil
     ) -> AgentTask {
         let r = repo(repoName)
         return AgentTask(
@@ -93,33 +94,47 @@ enum DemoData {
             title: title, branch: branch, source: "issue-label", state: state, sessionId: session,
             prUrl: pr?.url, error: error, createdAt: iso(started + 30), updatedAt: iso(finished ?? 20),
             runner: runner, machine: runner == "mac" ? "Stefan's MacBook Pro" : nil,
-            startedAt: iso(started), finishedAt: finished.map(iso), activity: activity, awaiting: awaiting, pr: pr
+            startedAt: iso(started), finishedAt: finished.map(iso), activity: activity, awaiting: awaiting, pr: pr,
+            usage: usage
         )
     }
 
+    /// Usage priced at the daemon's default rate card ($15 in / $75 out per Mtok).
+    private static func usage(_ requests: Int, in input: Int, out output: Int) -> RunUsage {
+        RunUsage(requests: requests, inputTokens: input, outputTokens: output,
+                 costUsd: Double(input) * 15 / 1_000_000 + Double(output) * 75 / 1_000_000)
+    }
+
     /// The queue as designed (Main.dc.html): two that need you, one ready to
-    /// merge, two running, plus a little finished history.
+    /// merge, two running, plus a little finished history. #58 is a cloud run.
     static let tasks: [AgentTask] = [
         task("t52", 52, "celiador-editor", "Retry the relay with backoff", branch: "52-relay-backoff", state: "running",
              session: "s1", started: 4 * 60 + 10,
-             awaiting: .init(kind: "permission", requestId: "r52", text: "Run command: npm test -- relay")),
+             awaiting: .init(kind: "permission", requestId: "r52", text: "Run command: npm test -- relay"),
+             usage: usage(3, in: 4_000, out: 800)),
         task("t58", 58, "daemon", "Add arm64 Linux to the release matrix", branch: "58-arm64-linux", state: "running",
              session: "s58", runner: "cloud", started: 9 * 60 + 5,
              awaiting: .init(kind: "question", requestId: "r58", text: "Build on a hosted arm64 runner, or cross-compile on x64?",
-                             choices: ["Hosted arm64 runner", "Cross-compile on x64"])),
+                             choices: ["Hosted arm64 runner", "Cross-compile on x64"]),
+             usage: usage(5, in: 7_000, out: 1_200)),
         task("t49", 49, "celiador-ios", "Show cloud-run cancel in the session view", branch: "49-cloud-run-cancel", state: "pr-open",
              session: "s49", started: 40 * 60, finished: 28 * 60,
              pr: .init(number: 8, url: "https://github.com/Cliefden/celiador-ios/pull/8", additions: 64, deletions: 11,
-                       changedFiles: 3, checks: "passing", mergeable: true, updatedAt: iso(60))),
+                       changedFiles: 3, checks: "passing", mergeable: true, updatedAt: iso(60)),
+             usage: usage(9, in: 12_000, out: 2_700)), // $0.38
         task("t61", 61, "celiador-web", "Security page from the docs", branch: "61-security-page", state: "running",
-             session: "s61", started: 6 * 60, activity: "Editing src/app/security/page.tsx"),
+             session: "s61", started: 6 * 60, activity: "Editing src/app/security/page.tsx",
+             usage: usage(2, in: 2_000, out: 270)),
         task("t63", 63, "daemon", "Self-hosted daemon guide", branch: "63-self-hosted-guide", state: "running",
-             session: "s63", runner: "cloud", started: 2 * 60, activity: "Reading deploy/ and README.md"),
+             session: "s63", runner: "cloud", started: 2 * 60, activity: "Reading deploy/ and README.md",
+             usage: usage(1, in: 600, out: 120)),
         task("t47", 47, "celiador-editor", "Agents view: group runs by repo", branch: "47-group-by-repo", state: "merged",
              session: "s47", started: 5 * 3600, finished: 4 * 3600,
-             pr: .init(number: 61, url: "https://github.com/Cliefden/celiador-editor/pull/61")),
+             pr: .init(number: 61, url: "https://github.com/Cliefden/celiador-editor/pull/61"),
+             usage: usage(18, in: 31_000, out: 5_900)), // $0.91
         task("t45", 45, "daemon", "Rate-limit the push test endpoint", branch: "45-push-rate-limit", state: "failed",
-             session: "s45", runner: "cloud", started: 7 * 3600, finished: 6 * 3600, error: "tests failed"),
+             session: "s45", runner: "cloud", started: 7 * 3600, finished: 6 * 3600, error: "tests failed",
+             usage: usage(1, in: 200, out: 40)), // under a cent → "<$0.01"
     ]
 
     /// The #49 run's session log: what the One-run checklist summarises.

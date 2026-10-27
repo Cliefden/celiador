@@ -291,12 +291,17 @@ struct QueueView: View {
         }
     }
 
+    /// "merged · $0.38" / "failed: tests failed · <$0.01" — the cost closes the line
+    /// when the daemon attributed one to the run.
     private func finishedLine(_ task: AgentTask) -> String {
+        let outcome: String
         switch task.state {
-        case "merged": return "merged"
-        case "failed": return task.error.map { "failed: \($0)" } ?? "failed"
-        default: return "cancelled"
+        case "merged": outcome = "merged"
+        case "failed": outcome = task.error.map { "failed: \($0)" } ?? "failed"
+        default: outcome = "cancelled"
         }
+        guard let cost = task.settledCost else { return outcome }
+        return "\(outcome) · \(cost)"
     }
 
     // MARK: - Actions
