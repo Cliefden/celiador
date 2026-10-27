@@ -79,6 +79,10 @@ export interface Task {
   updatedAt: string;
   /** Where it runs: "mac" = an editor took it at dispatch. */
   runner?: "mac" | "cloud";
+  /** When it was last handed to a Mac; the dispatcher reclaims it if no `running` follows. */
+  dispatchedAt?: string;
+  /** How many times a Mac was handed it (tasks/dispatch.ts gives up after a few silent ones). */
+  dispatches?: number;
   /** The editor's computer name, as it reported it. */
   machine?: string;
   /** First time the state became `running`. */
@@ -120,7 +124,7 @@ export interface TaskCi {
 
 /** Fields a task update may set; an explicit `undefined` removes the field. */
 export type TaskPatch = Partial<
-  Pick<Task, "state" | "sessionId" | "prUrl" | "error" | "runner" | "machine" | "startedAt" | "finishedAt" | "activity" | "awaiting" | "pr" | "usage" | "posted" | "ci">
+  Pick<Task, "state" | "sessionId" | "prUrl" | "error" | "runner" | "dispatchedAt" | "dispatches" | "machine" | "startedAt" | "finishedAt" | "activity" | "awaiting" | "pr" | "usage" | "posted" | "ci">
 >;
 
 /** A task as clients see it (internal bookkeeping removed). */
