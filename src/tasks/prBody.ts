@@ -38,10 +38,19 @@ function item(line: string): string {
   return line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim();
 }
 
-const CHANGED = /^(?:what\s+(?:i\s+)?changed|changes?|what\s+was\s+done|done)\b\s*[:—–-]?\s*(.*)$/i;
-const UNSURE = /^(?:(?:what\s+)?(?:i(?:'m|\s+am)\s+)?(?:unsure|uncertain|not\s+sure)(?:\s+about)?|open\s+questions?|doubts?|uncertaint(?:y|ies))\b\s*[:—–-]?\s*(.*)$/i;
-const NOT_VERIFIED =
-  /^(?:(?:what\s+(?:i\s+)?)?(?:did\s+not|didn'?t|not)\s+(?:run|verif(?:y|ied)|test(?:ed)?|check(?:ed)?)(?:\s*(?:\/|or|and)\s*(?:run|verif(?:y|ied)|test(?:ed)?|check(?:ed)?))*|unverified|not\s+verified|not\s+run|untested|skipped)\b\s*[:—–-]?\s*(.*)$/i;
+// The label's separator: a colon or dash, or the full stop of a bold run-in
+// heading ("**What changed.** I added…"), which must not leak into the text —
+// up to two of them, for a bullet that carries both ("- Unsure: . Whether…").
+const SEP = String.raw`\s*(?:[:.—–-]\s*){0,2}`;
+const CHANGED = new RegExp(String.raw`^(?:what\s+(?:i\s+)?changed|changes?|what\s+was\s+done|done)\b${SEP}(.*)$`, "i");
+const UNSURE = new RegExp(
+  String.raw`^(?:(?:what\s+)?(?:i(?:'m|\s+am)\s+)?(?:unsure|uncertain|not\s+sure)(?:\s+about)?|open\s+questions?|doubts?|uncertaint(?:y|ies))\b${SEP}(.*)$`,
+  "i",
+);
+const NOT_VERIFIED = new RegExp(
+  String.raw`^(?:(?:what\s+(?:i\s+)?)?(?:did\s+not|didn'?t|not)\s+(?:run|verif(?:y|ied)|test(?:ed)?|check(?:ed)?)(?:\s*(?:\/|or|and)\s*(?:run|verif(?:y|ied)|test(?:ed)?|check(?:ed)?))*|unverified|not\s+verified|not\s+run|untested|skipped)\b${SEP}(.*)$`,
+  "i",
+);
 
 /**
  * The "## Self-review" section of a final message, split into its three parts.

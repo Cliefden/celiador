@@ -12,7 +12,7 @@ import { taskStores } from "../tasks/dispatch";
 import { publishTaskChange } from "../tasks/events";
 import { removeWorkspace, workspaceDir } from "../runner/workspace";
 import { listDir, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
-import type { FsCommand, FsResult, FsResultInput, GitCommand, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
+import type { FsCommand, FsResult, FsResultInput, GitCommand, Session, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
 
 /** How often to send an SSE heartbeat so proxies/clients keep the stream open. */
 const HEARTBEAT_MS = 15000;
@@ -28,6 +28,20 @@ const MAX_BATCH = 500;
 /** How long a fresh mirror holds its claim before its window has attached the command channel. */
 const MIRROR_CLAIM_MS = 60_000;
 const MAX_TEXT = 200_000;
+
+/**
+ * An editor run of an agent task: link the task to its mirror session so the
+ * phone's queue can open the live transcript and the run's usage lands on the
+ * task. A task already linked keeps its session (a second window's claim, or a
+ * re-sent create, must not move it).
+ */
+function linkTask(userId: string, session: Session, taskId: unknown): void {
+  if (typeof taskId !== "string" || taskId.length > 100) return;
+  const store = taskStores.for(userId);
+  if (store.get(taskId)?.sessionId) return;
+  const task = store.update(taskId, { sessionId: session.id, ...(session.usage ? { usage: { ...session.usage } } : {}) });
+  if (task) publishTaskChange(userId, task);
+}
 
 const STATES = new Set<SessionState>(["idle", "running", "awaiting", "done", "error", "cancelled"]);
 
@@ -121,6 +135,11 @@ export function sessionRoutes(): Hono<AppEnv> {
     if (mirrorKey) {
       const existing = stores.for(userId).findMirror(mirrorKey);
       if (existing && (existing.runnerConnected || Date.now() - Date.parse(existing.createdAt) < MIRROR_CLAIM_MS)) {
+        // The window that lost the race may be the one that knows this is a task's
+        // run (task runs are recorded per window): link the task to the mirror that
+        // won, or the phone's queue card never leaves "starting" and the run's usage
+        // never reaches the task.
+        linkTask(userId, existing, taskId);
         return c.json({ error: "already mirrored by another window", session: existing }, 409);
       }
     }
@@ -142,10 +161,7 @@ export function sessionRoutes(): Hono<AppEnv> {
     }
     // An editor run of an agent task: link the task to this session so the phone's
     // queue can open the live transcript.
-    if (typeof taskId === "string" && taskId.length <= 100) {
-      const task = taskStores.for(userId).update(taskId, { sessionId: session.id, ...(session.usage ? { usage: { ...session.usage } } : {}) });
-      if (task) publishTaskChange(userId, task);
-    }
+    linkTask(userId, session, taskId);
     return c.json({ session });
   });
 
