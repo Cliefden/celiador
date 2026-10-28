@@ -1,8 +1,10 @@
 #include "Base.xcconfig"
 
-// DEV — points at a local daemon (simulator). Overriddable at runtime with the
-// CELIADOR_URL env var in the Xcode scheme.
+// DEV — the Celiador Dev app, pointed at the always-on dev environment (what a
+// push to main ships to TestFlight). For a daemon on this Mac, enable the
+// CELIADOR_URL env var in the "Celiador Dev" scheme (simulator only: on a phone
+// localhost is the phone).
 BUNDLE_ID_SUFFIX = .dev
 APP_NAME = Celiador Dev
 URL_SCHEME = celiador-dev
-CELIADOR_DAEMON_URL = http:/$()/localhost:4661
+CELIADOR_DAEMON_URL = https:/$()/dev.celiador.ai

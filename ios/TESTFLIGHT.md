@@ -1,62 +1,92 @@
 # Xcode Cloud + TestFlight
 
-How a push to `main` becomes a build, and a button press becomes a TestFlight
-build on a phone. Follows the portfolio standard (`_standard/PORTFOLIO_STANDARD.md`:
-exactly two workflows, automatic signing, XcodeGen hook) and the shared tooling in
-`Apps-AppStore/xcode-cloud-setup/`.
+How a push to `main` becomes a Dev build on a phone, a `vX.Y.Z` tag a Test
+build, and a button press an App Store build. Follows the portfolio standard
+(`_standard/PORTFOLIO_STANDARD.md`: automatic signing, XcodeGen hook) and the
+shared tooling in `Apps-AppStore/xcode-cloud-setup/`, extended with Celindor's
+two-app channel model (`CHANNELS.md`): this repo has two Xcode Cloud products
+and four workflows, not the standard two.
+
+## The channels
+
+| Xcode Cloud product (app) | Workflow | Starts on | Archives scheme | Goes to | Icon |
+|---|---|---|---|---|---|
+| **Celiador Dev** (`6828169951`) | **Dev** | push to `main` | `Celiador Dev` (Dev config → `dev.celiador.ai`) | TestFlight, internal | red, commit |
+| **Celiador** (`6819707590`) | **Test** | tag `v*` | `Celiador Test` (Test config → `test.celiador.ai`) | TestFlight | green, tag |
+| **Celiador** | **Archive - App Store** | manual | `Celiador` (Release config → `celiador.ai`) | TestFlight + App Store | plain |
+| **Celiador** | *Default* (Xcode's build-on-main) | push to `main` | `Celiador`, build only | nothing | — |
+
+Tags come from the daemon's release train (`daemon/scripts/release.sh`); the
+same `vX.Y.Z` that puts the daemon on test puts this app on TestFlight. The
+*Default* workflow is left as a compile check of the prod scheme; disable it in
+App Store Connect if the Dev workflow is enough.
 
 ## What is already in the repo
 
 - `ci_scripts/ci_post_clone.sh` — Xcode Cloud runs it after cloning: installs
-  XcodeGen and generates `Celiador.xcodeproj` (gitignored) from `project.yml`.
-  No Swift packages, so no `Package.resolved` seeding is needed yet; if a package
-  is ever added, follow the gotcha in `xcode-cloud-setup/README.md`.
-- `project.yml` — the **Celiador** scheme archives with the `Release` config:
-  `ai.celiador.companion`, `https://celiador.ai`, `Celiador/Celiador.production.entitlements`
-  (`aps-environment: production`, the shared App Group). Dev keeps development push.
+  XcodeGen, generates `Celiador.xcodeproj` (gitignored) from `project.yml`,
+  seeds the pinned `Package.resolved` (TelemetryDeck) into the generated
+  workspace, and stamps the icon banner by channel (`CI_TAG` → green with the
+  tag; otherwise red with the commit; a workflow whose name contains
+  "App Store" keeps the plain icon).
+- `project.yml` — three schemes, one per channel (`schemes:`): **Celiador**
+  archives Release (`ai.celiador.companion`, `https://celiador.ai`,
+  `Celiador/Celiador.production.entitlements`, `aps-environment: production`,
+  the shared App Group), **Celiador Test** archives Test (same app, test
+  daemon), **Celiador Dev** archives Dev (`ai.celiador.companion.dev`, dev
+  daemon, development push). Xcode Cloud archives with the scheme's archive
+  configuration, which is why each channel is a scheme and not a `-configuration`.
 - **Automatic signing in every config.** Xcode Cloud requires it ("Allow Xcode to
   manage signing for you", Apple's *Setting up your project to use Xcode Cloud*);
   it signs with cloud-managed distribution certificates. The App Store profiles
   under `signing/` (`7453QR5RN8` app, `LF9K4K32P2` widgets) are no longer referenced
   by the project; they remain usable for a manual `asc xcode` archive with an
   explicit export-options plist.
-- **TestFlight group** `Internal` (`5fd35a26-4b72-4f61-80c5-8531fb364bf8`) exists on
-  app `6819707590` with access to all builds, so every processed build is
-  immediately installable by its members.
+- **TestFlight groups** `Internal`, one per app, each with access to all builds,
+  so every processed build is immediately installable by its members:
+  `5fd35a26-4b72-4f61-80c5-8531fb364bf8` on Celiador,
+  `f8297a47-e0f3-49bc-abcd-7ae1eb8fb15f` on Celiador Dev.
 
 ## One-time onboarding (Stefan)
 
 Xcode Cloud "products" and the GitHub connection cannot be created through the
-App Store Connect API; this is the only manual part.
+App Store Connect API; this is the only manual part. The **Celiador** product
+exists (onboarded 2026-10-18, with *Default* + *Archive - App Store*). The
+**Celiador Dev** product is the one still to create:
 
-1. **Let Xcode Cloud see the repo.** github.com → Settings → Applications →
-   *Xcode Cloud* → Repository access → add `Cliefden/celiador-ios` (it is private;
-   the other apps' repos are already granted).
-2. **Create the product in Xcode.**
+1. **Repo access** is already granted (github.com → Settings → Applications →
+   *Xcode Cloud* → Repository access → `Cliefden/celiador-ios`).
+2. **Create the Dev product in Xcode.**
    ```sh
    cd celiador-ios && DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodegen generate
    open Celiador.xcodeproj
    ```
-   Product ▸ Xcode Cloud ▸ Create Workflow… → app **Celiador**, team
-   `XPNFDWPFAV` → accept the default build-on-`main` workflow → grant source
-   control access when asked. This creates the `Celiador` ciProduct.
-3. **Add the manual archive workflow** (API, from any session):
+   Select the **Celiador Dev** scheme, then Product ▸ Xcode Cloud ▸ Create
+   Workflow… → app **Celiador dev** (`ai.celiador.companion.dev`), team
+   `XPNFDWPFAV` → accept the default workflow → grant source control access if
+   asked. This creates the `Celiador Dev` ciProduct.
+3. **Add the channel workflows** (API, from any session, idempotent):
    ```sh
-   python3 ../../xcode-cloud-setup/create_workflows.py celiador
+   python3 ../../xcode-cloud-setup/create_workflows.py celiador       # adds "Test" (tag v* → TestFlight)
+   python3 ../../xcode-cloud-setup/create_workflows.py celiador-dev   # adds "Dev" (main → TestFlight), disables Xcode's "Default"
    ```
-   Idempotent; prints the product, repository and workflow names. If Xcode's
-   default build workflow is missing, add `--force-build`.
+   Each prints the product, repository and workflow names. The Dev product's
+   automatic signing adds push + App Group to the `.dev` App IDs on the first run.
 
-## Cutting a TestFlight build
+## Cutting builds
 
-```sh
-python3 ../../xcode-cloud-setup/start_archive.py celiador     # starts "Archive - App Store" on main
-python3 ../../xcode-cloud-setup/poll_runs.py <runId>          # waits for the run
-```
-
-or App Store Connect → Xcode Cloud → *Archive - App Store* → Start Build. The
-archive uploads to App Store Connect; once processed, the `Internal` group can
-install it from the TestFlight app (sign in with the same Apple ID as the team).
+- **Dev:** merge to `main`. The Dev app updates on the phone through TestFlight
+  (internal group, no beta review).
+- **Test:** `daemon/scripts/release.sh <patch|minor|major>` and push the tag, as
+  in `daemon/RELEASING.md`; the **Test** workflow archives the tag.
+- **App Store:**
+  ```sh
+  python3 ../../xcode-cloud-setup/start_archive.py celiador     # starts "Archive - App Store" on main
+  python3 ../../xcode-cloud-setup/poll_runs.py <runId>          # waits for the run
+  ```
+  or App Store Connect → Xcode Cloud → *Archive - App Store* → Start Build. The
+  archive uploads to App Store Connect; once processed, the `Internal` group can
+  install it from the TestFlight app (sign in with the same Apple ID as the team).
 
 Then attach **What to Test** notes (template: `testflight/WHAT_TO_TEST.md`):
 
@@ -67,8 +97,8 @@ asc builds test-notes create --build-id <BUILD_ID> --locale en-US --whats-new @f
 
 ## Verifying the first build (ios#2 checklist)
 
-- Install from TestFlight on the iPhone (the Dev build installed via Xcode stays
-  side by side: different bundle id).
+- Install from TestFlight on the iPhone (the Dev app stays side by side:
+  different bundle id).
 - Sign in against prod; the phone must appear in the editor's presence picker and
   receive a push when a run needs you (production APNs now, so the daemon's
   `APNS_ENV` must be `production` for this bundle id).
