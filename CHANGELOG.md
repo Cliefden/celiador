@@ -6,6 +6,8 @@ the section into a version on release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-28
+
 - Environments: dev (`dev.celiador.ai`) and test (`test.celiador.ai`) beside
   prod, each with its own daemon, Postgres and GoTrue; `/api/health` reports
   `env` and `commit` (#41).
