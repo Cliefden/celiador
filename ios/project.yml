@@ -67,7 +67,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "0.2.0"
+        MARKETING_VERSION: "0.2.1"
         CURRENT_PROJECT_VERSION: "1"
       configs:
         Test:
@@ -91,7 +91,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: CeliadorWidgets/CeliadorWidgets.entitlements
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "0.2.0"
+        MARKETING_VERSION: "0.2.1"
         CURRENT_PROJECT_VERSION: "1"
     dependencies:
       - sdk: WidgetKit.framework
@@ -114,7 +114,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "4"
-        MARKETING_VERSION: "0.2.0"
+        MARKETING_VERSION: "0.2.1"
         CURRENT_PROJECT_VERSION: "1"
     scheme: {}
 
