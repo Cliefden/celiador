@@ -9,10 +9,11 @@
 # Secrets are NOT touched: they live in ~/envs/<env>/daemon/.env, written by
 # deploy/provision-env.sh.
 #
-# This is the manual path. The GitHub Actions workflow (deploy.yml, issue #42)
-# runs the same steps from a hosted runner: push to main → dev, tag → test,
-# dispatch → prod. Prod needs the cutover to celiador-daemon@prod first
-# (ENVIRONMENTS.md); until then deploy prod the old way (~/daemon + the plain unit).
+# This is the manual path. The GitHub Actions workflow
+# (.github/workflows/deploy.yml, RELEASING.md) runs the same steps from a hosted
+# runner: push to main → dev, tag → test, dispatch → prod. Prod needs the
+# cutover to celiador-daemon@prod first (ENVIRONMENTS.md); until then deploy
+# prod the old way (~/daemon + the plain unit).
 set -euo pipefail
 
 ENV="${1:-}"

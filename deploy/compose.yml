@@ -19,8 +19,9 @@ services:
   postgres:
     # The same image family as prod's celiador-db, so the `auth` schema,
     # auth.uid() and the supabase_auth_admin role exist as GoTrue and the
-    # daemon's migrations (db/migrations) expect. Match prod's tag when it moves.
-    image: ${POSTGRES_IMAGE:-supabase/postgres:15.8.1.135}
+    # daemon's migrations (db/migrations) expect. The default is prod's
+    # celiador-db tag (checked 2026-10-28); match it when prod moves.
+    image: ${POSTGRES_IMAGE:-supabase/postgres:15.8.1.085}
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
@@ -36,11 +37,16 @@ services:
       # Gives the image's service roles (supabase_auth_admin, …) the password
       # GoTrue connects with. Runs once, when the volume is first initialised.
       - ./db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+      # GoTrue must own the auth schema's functions to replace them (db/auth-owner.sql).
+      - ./db/auth-owner.sql:/docker-entrypoint-initdb.d/migrations/99-celiador-auth-owner.sql:ro
+    # First start runs the image's own migrations for a couple of minutes
+    # before the server accepts connections; give `up --wait` that long.
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 60
+      start_period: 180s
 
   gotrue:
     # Standalone GoTrue (no kong / rest / storage / realtime: Celiador uses

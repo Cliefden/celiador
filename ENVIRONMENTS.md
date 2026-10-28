@@ -39,9 +39,12 @@ that env's web preview. DNS A records for `dev.` and `test.` exist since
 Repo artifacts backing this:
 
 - `.env.{prod,test,dev}.example` — per-env key templates (no secrets).
-- `deploy/compose.yml` + `deploy/db/roles.sql` — one non-prod env's Postgres
-  (`supabase/postgres`, the prod image family, so `auth.uid()` and the service
-  roles exist) and standalone GoTrue.
+- `deploy/compose.yml` + `deploy/db/{roles,auth-owner}.sql` — one non-prod
+  env's Postgres (`supabase/postgres`, prod's image tag, so `auth.uid()` and the
+  service roles exist; the init scripts give the service roles the env's
+  password and hand the auth schema's functions to `supabase_auth_admin`, or
+  GoTrue's first migration fails with "must be owner of function uid") and
+  standalone GoTrue.
 - `deploy/provision-env.sh <test|dev>` — stands up or refreshes one env: secrets,
   compose stack, daemon checkout + `.env` + `BUILD_INFO`, migrations, unit.
   Idempotent; prod untouched.
@@ -110,8 +113,9 @@ Actions → Deploy → env=prod tag=vX.Y.Z → prod  (manual, required reviewer)
 The daemon is the release train: its `vX.Y.Z` tags are the Celiador releases
 and name what test and prod run. Rollback is a redeploy of the previous tag.
 Editor and iOS builds follow the same triggers in their own repos (`main` →
-dev channel, tag → test channel, manual → prod). Until the workflow exists
-(issue #42), `deploy/deploy.sh <env>` does the same steps from a laptop.
+dev channel, tag → test channel, manual → prod). `RELEASING.md` has the
+workflow (`.github/workflows/deploy.yml`) and the GitHub setup behind it;
+`deploy/deploy.sh <env>` does the same steps by hand from a laptop.
 
 ## First-time box setup (once)
 
