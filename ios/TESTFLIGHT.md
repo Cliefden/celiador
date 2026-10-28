@@ -16,8 +16,8 @@ and four workflows, not the standard two.
 | **Celiador** | **Archive - App Store** | manual | `Celiador` (Release config → `celiador.ai`) | TestFlight + App Store | plain |
 | **Celiador** | *Default* (Xcode's build-on-main) | push to `main` | `Celiador`, build only | nothing | — |
 
-Tags come from the daemon's release train (`daemon/scripts/release.sh`); the
-same `vX.Y.Z` that puts the daemon on test puts this app on TestFlight. The
+Tags are per repo: the daemon's release train tags the daemon, and
+`scripts/release.sh` tags this app (its versions move on their own). The
 *Default* workflow is left as a compile check of the prod scheme; disable it in
 App Store Connect if the Dev workflow is enough.
 
@@ -36,6 +36,8 @@ App Store Connect if the Dev workflow is enough.
   daemon), **Celiador Dev** archives Dev (`ai.celiador.companion.dev`, dev
   daemon, development push). Xcode Cloud archives with the scheme's archive
   configuration, which is why each channel is a scheme and not a `-configuration`.
+- `scripts/release.sh` — bumps `MARKETING_VERSION`, commits `Release vX.Y.Z`
+  and tags; never pushes (see *Cutting builds*).
 - **Automatic signing in every config.** Xcode Cloud requires it ("Allow Xcode to
   manage signing for you", Apple's *Setting up your project to use Xcode Cloud*);
   it signs with cloud-managed distribution certificates. The App Store profiles
@@ -51,8 +53,8 @@ App Store Connect if the Dev workflow is enough.
 
 Xcode Cloud "products" and the GitHub connection cannot be created through the
 App Store Connect API; this is the only manual part. The **Celiador** product
-exists (onboarded 2026-10-18, with *Default* + *Archive - App Store*). The
-**Celiador Dev** product is the one still to create:
+exists (onboarded 2026-10-18) with *Default*, *Archive - App Store* and *Test*.
+The **Celiador Dev** product is the one still to create:
 
 1. **Repo access** is already granted (github.com → Settings → Applications →
    *Xcode Cloud* → Repository access → `Cliefden/celiador-ios`).
@@ -67,7 +69,7 @@ exists (onboarded 2026-10-18, with *Default* + *Archive - App Store*). The
    asked. This creates the `Celiador Dev` ciProduct.
 3. **Add the channel workflows** (API, from any session, idempotent):
    ```sh
-   python3 ../../xcode-cloud-setup/create_workflows.py celiador       # adds "Test" (tag v* → TestFlight)
+   python3 ../../xcode-cloud-setup/create_workflows.py celiador       # adds "Test" (tag v* → TestFlight) — done
    python3 ../../xcode-cloud-setup/create_workflows.py celiador-dev   # adds "Dev" (main → TestFlight), disables Xcode's "Default"
    ```
    Each prints the product, repository and workflow names. The Dev product's
@@ -77,8 +79,18 @@ exists (onboarded 2026-10-18, with *Default* + *Archive - App Store*). The
 
 - **Dev:** merge to `main`. The Dev app updates on the phone through TestFlight
   (internal group, no beta review).
-- **Test:** `daemon/scripts/release.sh <patch|minor|major>` and push the tag, as
-  in `daemon/RELEASING.md`; the **Test** workflow archives the tag.
+- **Test:** on a clean `main` equal to `origin/main`:
+  ```sh
+  scripts/release.sh patch            # or minor / major / X.Y.Z — commit + tag, not pushed
+  git push origin main
+  git push origin vX.Y.Z              # the Test workflow archives the tag → TestFlight
+  ```
+  The build appears in App Store Connect as `X.Y.Z (<Xcode Cloud build number>)`
+  with the green tag banner on its icon. A tester who installs it has the real
+  app pointed at test: a session kept from prod gets a 401 and the app asks to
+  sign in again (against test's own GoTrue). To go back to prod, install the
+  latest *Archive - App Store* build from TestFlight's previous builds, or the
+  App Store version.
 - **App Store:**
   ```sh
   python3 ../../xcode-cloud-setup/start_archive.py celiador     # starts "Archive - App Store" on main
@@ -106,7 +118,7 @@ asc builds test-notes create --build-id <BUILD_ID> --locale en-US --whats-new @f
 
 ## Versioning
 
-`MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` live in `project.yml` (app and
-widgets must match). Xcode Cloud can manage the build number itself (App Store
-Connect → Xcode Cloud → workflow → *Next build number*); bump `MARKETING_VERSION`
-in `project.yml` for a new version.
+`MARKETING_VERSION` lives in `project.yml` (app, widgets and watch must match;
+`scripts/release.sh` keeps them in step). Xcode Cloud numbers the builds itself
+(every upload so far: `0.2.0 (10…22)`), so `CURRENT_PROJECT_VERSION` in
+`project.yml` is only the local default.
