@@ -37,6 +37,8 @@ services:
       # Gives the image's service roles (supabase_auth_admin, …) the password
       # GoTrue connects with. Runs once, when the volume is first initialised.
       - ./db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+      # GoTrue must own the auth schema's functions to replace them (db/auth-owner.sql).
+      - ./db/auth-owner.sql:/docker-entrypoint-initdb.d/migrations/99-celiador-auth-owner.sql:ro
     # First start runs the image's own migrations for a couple of minutes
     # before the server accepts connections; give `up --wait` that long.
     healthcheck:
