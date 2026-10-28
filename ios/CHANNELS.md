@@ -32,6 +32,18 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 
 Regenerate the project after editing `project.yml`/xcconfigs: `xcodegen generate`.
 
+## Icon banner
+
+As on Celindor, Xcode Cloud builds carry a banner across the app icon so they
+are told apart on the home screen: `ci_scripts/ci_post_clone.sh` stamps
+`AppIcon.appiconset` with `scripts/icon-banner.swift` (Swift only, no
+ImageMagick) — **green with the tag** for a tag-started build (the Test
+workflow), **red with the short commit** for everything else (the Dev
+workflow). A workflow whose name contains "App Store" keeps the plain icon.
+Only the Xcode Cloud checkout is stamped; the committed icons never change.
+Locally: `swift scripts/icon-banner.swift "#c62828" 1a2b3c4 Celiador/Assets.xcassets/AppIcon.appiconset/*.png`,
+undo with `git checkout Celiador/Assets.xcassets`.
+
 ## Telemetry
 
 `Celiador/Telemetry.swift` sends in TelemetryDeck test mode from the Dev app

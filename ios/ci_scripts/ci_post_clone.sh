@@ -12,6 +12,13 @@
 # dependency change with: xcodegen generate && xcodebuild
 # -resolvePackageDependencies -project Celiador.xcodeproj -scheme Celiador &&
 # cp Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved .
+#
+# Icon banner (CHANNELS.md, like Celindor): builds that are not the App Store
+# archive get a coloured banner across the app icon so they are told apart on
+# the home screen — green with the tag for a tag-started build (the Test
+# workflow), red with the commit for everything else (the Dev workflow). The
+# "Archive - App Store" workflow keeps the plain icon. Only this checkout is
+# stamped; the committed icons never change.
 
 set -e
 
@@ -29,5 +36,20 @@ xcodegen generate
 echo "→ seeding Package.resolved into the generated workspace"
 mkdir -p Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 cp Package.resolved Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+case "${CI_WORKFLOW:-}" in
+  *"App Store"*)
+    echo "→ App Store archive: plain icon"
+    ;;
+  *)
+    if [ -n "${CI_TAG:-}" ]; then
+      colour="#2e7d32"; label="$CI_TAG"
+    else
+      colour="#c62828"; label="$(printf '%s' "${CI_COMMIT:-$(git rev-parse HEAD)}" | cut -c1-7)"
+    fi
+    echo "→ stamping the app icon: $label on $colour"
+    swift scripts/icon-banner.swift "$colour" "$label" Celiador/Assets.xcassets/AppIcon.appiconset/*.png
+    ;;
+esac
 
 echo "→ done"
