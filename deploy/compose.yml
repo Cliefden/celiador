@@ -19,8 +19,9 @@ services:
   postgres:
     # The same image family as prod's celiador-db, so the `auth` schema,
     # auth.uid() and the supabase_auth_admin role exist as GoTrue and the
-    # daemon's migrations (db/migrations) expect. Match prod's tag when it moves.
-    image: ${POSTGRES_IMAGE:-supabase/postgres:15.8.1.135}
+    # daemon's migrations (db/migrations) expect. The default is prod's
+    # celiador-db tag (checked 2026-10-28); match it when prod moves.
+    image: ${POSTGRES_IMAGE:-supabase/postgres:15.8.1.085}
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
