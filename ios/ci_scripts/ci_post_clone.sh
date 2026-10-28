@@ -28,7 +28,19 @@ export HOMEBREW_NO_INSTALL_CLEANUP=1
 cd "$(dirname "$0")/.."
 
 echo "→ installing xcodegen"
-brew install xcodegen
+# The bottle comes from ghcr.io; the download is occasionally reset mid-way
+# (Test run 30 on v0.2.1: "curl: (35) Recv failure: Connection reset by peer"),
+# so try a few times before giving up.
+attempt=1
+until brew install xcodegen; do
+  if [ "$attempt" -ge 4 ]; then
+    echo "✘ brew install xcodegen failed $attempt times" >&2
+    exit 1
+  fi
+  echo "→ brew install xcodegen failed (attempt $attempt), retrying in 15s"
+  attempt=$((attempt + 1))
+  sleep 15
+done
 
 echo "→ generating Celiador.xcodeproj from project.yml"
 xcodegen generate
