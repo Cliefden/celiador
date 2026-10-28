@@ -4,8 +4,9 @@ import { editorControl } from "../presence/control";
 import { workspacePresence } from "../presence/workspaces";
 import { retryPendingCiFixes } from "./ci";
 import { cloudEligible, recoverOrphanedCloudTasks, startCloudRun } from "./cloud";
+import { postFailedComment } from "./comments";
 import { publishTaskChange } from "./events";
-import { ACTIVE_STATES, repoKey, TaskStores, type Task } from "./store";
+import { ACTIVE_STATES, repoKey, TaskStores, type Task, type TaskStore } from "./store";
 
 /** Process-wide task stores (shared by the webhook, the routes and account deletion). */
 export const taskStores = new TaskStores(ROOT);
@@ -14,6 +15,36 @@ export const taskStores = new TaskStores(ROOT);
 export function taskConcurrency(): number {
   const n = Number(process.env.CELIADOR_TASK_CONCURRENCY ?? 3);
   return Number.isFinite(n) && n >= 0 ? n : 3;
+}
+
+/** A Mac that got a task but hasn't reported `running` this long after didn't start it. */
+export const DISPATCH_GRACE_MS = 90_000;
+/** Silent hand-offs before the task fails instead of being offered to the Mac again. */
+export const MAX_SILENT_DISPATCHES = 2;
+
+/**
+ * Tasks a Mac was handed but never started: back to the queue, and after
+ * {@link MAX_SILENT_DISPATCHES} silent hand-offs failed with the likely cause.
+ * An editor too old to know `start-task` ignores the command (presence/control.ts),
+ * and nothing else would ever move the task — the phone showed "starting on your
+ * Mac" indefinitely. Runs on every dispatch, so an editor's heartbeat is the clock.
+ */
+function reclaimSilentDispatches(userId: string, store: TaskStore, now = Date.now()): void {
+  for (const task of store.list()) {
+    if (task.state !== "dispatched" || task.runner !== "mac" || !task.dispatchedAt) continue;
+    if (now - Date.parse(task.dispatchedAt) < DISPATCH_GRACE_MS) continue;
+    const silent = task.dispatches ?? 1;
+    const updated =
+      silent >= MAX_SILENT_DISPATCHES
+        ? store.update(task.id, {
+            state: "failed",
+            error: "your Mac got the task but never started it — update Celiador on the Mac that has this repo open, then queue it again",
+          })
+        : store.update(task.id, { state: "queued", runner: undefined, error: "your Mac got the task but didn't start it; trying again" });
+    if (!updated) continue;
+    publishTaskChange(userId, updated);
+    if (updated.state === "failed") postFailedComment(userId, updated);
+  }
 }
 
 /**
@@ -27,6 +58,7 @@ export function taskConcurrency(): number {
 export function dispatchTasks(userId: string): Task[] {
   const store = taskStores.for(userId);
   recoverOrphanedCloudTasks(userId, store);
+  reclaimSilentDispatches(userId, store);
   const all = store.list();
   const limit = taskConcurrency();
   let active = all.filter((t) => ACTIVE_STATES.has(t.state)).length;
@@ -53,7 +85,13 @@ export function dispatchTasks(userId: string): Task[] {
         commented,
       });
       if (delivered === 0) break;
-      store.update(task.id, { state: "dispatched", runner: "mac", error: undefined });
+      store.update(task.id, {
+        state: "dispatched",
+        runner: "mac",
+        error: undefined,
+        dispatchedAt: new Date().toISOString(),
+        dispatches: (task.dispatches ?? 0) + 1,
+      });
     } else if (cloudEligible(task)) {
       // Marked synchronously so a second dispatch can't start it twice; the
       // network checks (sandbox, App on the repo) happen in startCloudRun, which
