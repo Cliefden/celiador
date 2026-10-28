@@ -391,7 +391,7 @@ private struct NewTaskSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Repository") {
+                Section {
                     if repos.isEmpty {
                         Text("Open the repo in Celiador on your Mac first.").font(.footnote).foregroundStyle(.secondary)
                     } else {
@@ -399,6 +399,12 @@ private struct NewTaskSheet: View {
                             ForEach(repos) { ws in Text(ws.name).tag(ws.remoteUrl) }
                         }
                     }
+                } header: {
+                    Text("Repository")
+                } footer: {
+                    // Say where the list comes from even when it is not empty: the
+                    // repo you want is missing because no Mac has it open, not lost.
+                    Text("Repos open in Celiador on your Mac. Missing one? Open it there and it shows up here.")
                 }
                 .listRowBackground(Theme.panel)
                 Section("Task") {
