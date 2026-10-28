@@ -8,14 +8,15 @@ options:
 # Three build channels pointing at the matching daemon environment (see
 # daemon/ENVIRONMENTS.md). The xcconfigs define CELIADOR_DAEMON_URL +
 # BUNDLE_ID_SUFFIX + APP_NAME + URL_SCHEME; targets below reference those so all
-# three install side-by-side. Build staging/dev with `-configuration Staging|Dev`.
+# Dev installs beside the prod app; Test IS the prod app (same bundle id) pointed
+# at test.celiador.ai — see CHANNELS.md. Build with `-configuration Test|Dev`.
 configs:
   Dev: debug
-  Staging: release
+  Test: release
   Release: release
 configFiles:
   Dev: Config/Dev.xcconfig
-  Staging: Config/Staging.xcconfig
+  Test: Config/Test.xcconfig
   Release: Config/Prod.xcconfig
 settings:
   base:
@@ -60,7 +61,7 @@ targets:
         # same way. The App Store profiles under signing/ are not referenced here;
         # see TESTFLIGHT.md.
         CODE_SIGN_STYLE: Automatic
-        # aps-environment: Dev keeps development; Staging/Release use production
+        # aps-environment: Dev keeps development; Test/Release use production
         # (distribution builds are only authorized for production push).
         CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -69,7 +70,7 @@ targets:
         MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: "1"
       configs:
-        Staging:
+        Test:
           CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.production.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.production.entitlements

@@ -7,7 +7,7 @@ import Foundation
 // MARK: - URL scheme (channel-aware deep links)
 
 /// The app's custom URL scheme for this build channel — `celiador`,
-/// `celiador-dev`, or `celiador-staging`. Read from Info.plist (populated from
+/// or `celiador-dev` (the Test build keeps `celiador`). Read from Info.plist (populated from
 /// the xcconfig's `URL_SCHEME` via the `CELIADOR_URL_SCHEME` key) so the app and
 /// widget agree per channel and deep links open the matching installed app —
 /// otherwise a Dev build's magic link / widget tap would target the prod app.

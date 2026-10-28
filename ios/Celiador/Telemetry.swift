@@ -11,8 +11,9 @@ import TelemetryDeck
 /// content, repository names, paths, session ids, or the account's email.
 ///
 /// Off switch: `isEnabled`, surfaced as "Share anonymous usage data" in
-/// Account. Dev and Staging builds send in test mode so dogfood signals stay
-/// out of the production view. Lives in the app target on purpose — `Shared/`
+/// Account. The Dev app and any build pointed at a non-prod daemon (a Test
+/// build on TestFlight) send in test mode so dogfood signals stay out of the
+/// production view. Lives in the app target on purpose — `Shared/`
 /// must stay dependency-free for the widgets.
 enum Telemetry {
     /// The same TelemetryDeck app as the editor (`product.json` → `telemetryDeck.appId`).
@@ -68,9 +69,12 @@ enum Telemetry {
         TelemetryDeck.signal(event.rawValue, parameters: parameters)
     }
 
-    /// Dev and Staging install side by side with their own bundle id suffix.
+    /// The Dev app has its own bundle id suffix; the Test build is the prod
+    /// bundle pointed at test.celiador.ai (CHANNELS.md), so the daemon host is
+    /// what tells a dogfood build from the real thing.
     private static var isTestChannel: Bool {
         let id = Bundle.main.bundleIdentifier ?? ""
-        return id.hasSuffix(".dev") || id.hasSuffix(".staging")
+        if id.hasSuffix(".dev") { return true }
+        return Api.shared.baseURL.host != "celiador.ai"
     }
 }
