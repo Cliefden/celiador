@@ -1,0 +1,168 @@
+name: Deploy
+
+# Deploys the marketing site to one environment on the box (the same shape as
+# the daemon's deploy.yml — daemon/ENVIRONMENTS.md):
+#
+#   push to main         → dev   (dev.celiador.ai, celiador-web@dev :3103)
+#   push tag vX.Y.Z      → test  (test.celiador.ai, celiador-web@test :3102)
+#   workflow_dispatch    → any environment from the chosen ref; prod is refused
+#                          unless the repository variable PROD_ENABLED is 'true'
+#                          (set after the prod cutover to celiador-web@prod)
+#
+# The runner builds the site (`next build`), rsyncs the checkout + .next to
+# ~/envs/<env>/web over the deploy key, installs runtime deps there and restarts
+# the unit; the health gate then checks the page through the public host.
+# Settings per environment live on the box (~/envs/<env>/web.env, written by
+# deploy/provision-web.sh), not in GitHub.
+#
+# GitHub Environments dev, test and prod each hold VPS_HOST, VPS_USER and
+# VPS_SSH_KEY; prod has a required reviewer. Results are mailed through the
+# repository secrets SMTP_USER / SMTP_PASS (Migadu) to the repository variable
+# NOTIFY_TO: failures always, successes until NOTIFY_SUCCESS is 'false'.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Environment
+        type: choice
+        options: [dev, test, prod]
+        default: dev
+
+permissions:
+  contents: read
+
+concurrency:
+  # One deploy per environment at a time; a second one waits.
+  group: deploy-${{ inputs.env || (github.ref_type == 'tag' && 'test' || 'dev') }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.plan.outputs.env }}
+      host: ${{ steps.plan.outputs.host }}
+      port: ${{ steps.plan.outputs.port }}
+    steps:
+      - id: plan
+        env:
+          INPUT_ENV: ${{ inputs.env }}
+          PROD_ENABLED: ${{ vars.PROD_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then env="$INPUT_ENV"
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then env=test
+          else env=dev
+          fi
+          case "$env" in
+            prod) host=celiador.ai; port=3100 ;;
+            test) host=test.celiador.ai; port=3102 ;;
+            dev)  host=dev.celiador.ai; port=3103 ;;
+          esac
+          if [[ "$env" == prod && "$PROD_ENABLED" != true ]]; then
+            echo "::error::prod is not on the templated unit yet. Do the cutover (daemon/ENVIRONMENTS.md) and set the repository variable PROD_ENABLED=true."
+            exit 1
+          fi
+          { echo "env=$env"; echo "host=$host"; echo "port=$port"; } >> "$GITHUB_OUTPUT"
+          echo "::notice::deploying ${GITHUB_SHA::7} to $env (https://$host)"
+
+  deploy:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.plan.outputs.env }}
+      url: https://${{ needs.plan.outputs.host }}
+    env:
+      TARGET_ENV: ${{ needs.plan.outputs.env }}
+      HOST: ${{ needs.plan.outputs.host }}
+      PORT: ${{ needs.plan.outputs.port }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        env:
+          CELIADOR_ENV: ${{ env.TARGET_ENV }}
+          CELIADOR_RELEASES_API: https://${{ env.HOST }}/api/releases
+        run: npm run build
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SSH_KEY" && -n "$VPS_HOST" ]] || { echo "::error::VPS_SSH_KEY / VPS_HOST missing from the '$TARGET_ENV' Environment"; exit 1; }
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 30 -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          test -s ~/.ssh/known_hosts
+
+      - name: Upload
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          printf 'commit=%s\ndeployed_at=%s\n' "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > BUILD_INFO
+          rsync -az --delete --timeout=120 -e "ssh -i $HOME/.ssh/deploy_key -o ConnectTimeout=60" \
+            --exclude '/.git' --exclude '/node_modules' --exclude '/.claude' --exclude '.DS_Store' --exclude '/.env*' \
+            ./ "$VPS_USER@$VPS_HOST:envs/$TARGET_ENV/web/"
+
+      - name: Install, restart, health gate
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=60 "$VPS_USER@$VPS_HOST" \
+            "cd ~/envs/$TARGET_ENV/web && npm ci --omit=dev --no-audit --no-fund && sudo systemctl restart celiador-web@$TARGET_ENV"
+          for _ in $(seq 1 30); do
+            if body="$(curl -fsS -m 10 "https://$HOST/")" && grep -q Celiador <<<"$body"; then
+              echo "✔ https://$HOST serves ${GITHUB_SHA::7}"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::https://$HOST did not come back after the restart"
+          exit 1
+
+  notify:
+    needs: [plan, deploy]
+    if: always() && !cancelled() && (contains(needs.*.result, 'failure') || vars.NOTIFY_SUCCESS != 'false')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mail the result
+        continue-on-error: true
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          NOTIFY_TO: ${{ vars.NOTIFY_TO || 'stefan@celiador.ai' }}
+          FAILED: ${{ contains(needs.*.result, 'failure') }}
+          TARGET_ENV: ${{ needs.plan.outputs.env }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" ]]; then
+            echo "::warning::SMTP_USER / SMTP_PASS are not set; the result was not mailed"
+            exit 0
+          fi
+          if [[ "$FAILED" == true ]]; then subject="✗ celiador-web: ${TARGET_ENV:-?} deploy failed (${GITHUB_SHA::7})"
+          else subject="✓ celiador-web: ${GITHUB_SHA::7} deployed to $TARGET_ENV"; fi
+          printf 'machine smtp.migadu.com login %s password %s\n' "$SMTP_USER" "$SMTP_PASS" > ~/.netrc
+          chmod 600 ~/.netrc
+          {
+            printf 'From: Celiador builds <%s>\nTo: %s\nSubject: %s\n\n' "$SMTP_USER" "$NOTIFY_TO" "$subject"
+            printf '%s\non %s by %s\n\n%s\n\n%s\n' "$subject" "$GITHUB_REF_NAME" "$GITHUB_ACTOR" "${COMMIT_MESSAGE%%$'\n'*}" "$RUN_URL"
+          } > "$RUNNER_TEMP/mail.txt"
+          curl -sS --url smtps://smtp.migadu.com:465 --ssl-reqd --netrc \
+            --mail-from "$SMTP_USER" --mail-rcpt "$NOTIFY_TO" --upload-file "$RUNNER_TEMP/mail.txt"
