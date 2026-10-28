@@ -400,12 +400,31 @@ async function main(): Promise<void> {
 		ok("a linked task is not moved by a later claim", tStore.get(raced.id)?.sessionId === winner.id);
 		await app.request(`${T}/${raced.id}/cancel`, { method: "POST", headers: authH });
 	}
+	// A Mac that was handed a task but never reported running (an editor too old for
+	// start-task ignores it): reclaimed on the next dispatch, failed after the second time.
+	{
+		const { taskStores: ts, dispatchTasks: dispatch, DISPATCH_GRACE_MS: grace } = await import("../src/tasks/dispatch.ts");
+		const tStore = ts.for("smoke-user");
+		const silent = tStore.create({ repo: { owner: "Cliefden", name: "smoke-repo", url: REPO }, title: "Silent Mac", body: "", source: "manual" });
+		const stale = new Date(Date.now() - grace - 1000).toISOString();
+		tStore.update(silent.id, { state: "dispatched", runner: "mac", dispatchedAt: new Date().toISOString(), dispatches: 1 });
+		dispatch("smoke-user");
+		ok("a fresh dispatch is left alone", tStore.get(silent.id)?.state === "dispatched", tStore.get(silent.id)?.state);
+		tStore.update(silent.id, { dispatchedAt: stale });
+		dispatch("smoke-user");
+		const reclaimed = tStore.get(silent.id);
+		ok("silent for the grace period → back to queued with a reason", reclaimed?.state === "queued" && reclaimed.runner === undefined && /didn't start it/.test(reclaimed.error ?? ""), JSON.stringify(reclaimed));
+		tStore.update(silent.id, { state: "dispatched", runner: "mac", dispatchedAt: stale, dispatches: 2 });
+		dispatch("smoke-user");
+		const given = tStore.get(silent.id);
+		ok("silent a second time → failed, names the likely cause", given?.state === "failed" && /update Celiador/.test(given.error ?? "") && !!given.finishedAt, JSON.stringify(given));
+	}
 	const linkedRun = await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ title: "Comment task 43", origin: "editor", runner: "editor", taskId: second[1]?.taskId }) });
 	const linkedSession = ((await linkedRun.json()) as { session?: { id: string } }).session;
 	const afterLink = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; sessionId?: string }> }).tasks.find((t) => t.id === second[1]?.taskId);
 	ok("an editor run's relay session is linked to its task", !!linkedSession && afterLink?.sessionId === linkedSession.id, JSON.stringify(afterLink));
 	const taskList = (await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ state: string }>; concurrency: number };
-	ok("list: all tasks, concurrency published", taskList.tasks.length === 4 && taskList.concurrency === 1, JSON.stringify(taskList.tasks.map((t) => t.state)));
+	ok("list: all tasks, concurrency published", taskList.tasks.length === 5 && taskList.concurrency === 1, JSON.stringify(taskList.tasks.map((t) => t.state)));
 	edAbort.abort();
 	await edReader;
 	delete process.env.CELIADOR_TASK_CONCURRENCY;
