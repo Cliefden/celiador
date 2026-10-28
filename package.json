@@ -8,6 +8,7 @@
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
+    "migrate": "tsx src/db/migrate.ts",
     "smoke": "tsx scripts/smoke.ts",
     "metrics": "tsx scripts/metrics.ts"
   },

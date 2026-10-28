@@ -1,43 +1,53 @@
-# Caddy vhosts for the staging + dev environments — mirror the live celiador.ai
-# block, but point /auth/* at the env's STANDALONE GoTrue (no kong/rest/storage/
-# realtime for the lightweight stacks) and /api,/p at the env's daemon.
-# Merge into /etc/caddy/Caddyfile (back it up first), add DNS A records for the
-# subdomains, then: sudo systemctl reload caddy
+# Caddy vhosts for the test and dev environments — one block each, mirroring
+# the live celiador.ai block but pointing at that environment's standalone
+# GoTrue, daemon and web preview (ENVIRONMENTS.md). Merge into
+# /etc/caddy/Caddyfile (back it up first; DNS for both hosts exists since
+# 2026-10-28), then:
+#
+#   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+#   host              gotrue   daemon   web
+#   test.celiador.ai  9997     4672     3102
+#   dev.celiador.ai   9996     4673     3103
+#
+# Usage: `import celiador_env <gotrue_port> <daemon_port> <web_port>`.
+(celiador_env) {
+	# Preview hosts are never indexed.
+	header X-Robots-Tag "noindex, nofollow"
 
-staging.celiador.ai {
-	encode zstd gzip
+	# Standalone GoTrue serves at its root; prod's kong strips /auth/v1 the same
+	# way, so the clients' <supabaseUrl>/auth/v1/otp works unchanged.
+	handle_path /auth/v1/* {
+		reverse_proxy 127.0.0.1:{args[0]}
+	}
 
-	@auth path /auth/*
-	handle @auth {
-		reverse_proxy 127.0.0.1:9997
+	# SSE must not go through `encode`: compression buffers the stream.
+	@sse path /api/sessions/*/events /api/tasks/stream
+	handle @sse {
+		reverse_proxy 127.0.0.1:{args[1]} {
+			transport http {
+				versions 1.1
+			}
+		}
 	}
 
 	@daemon path /api/* /p/*
 	handle @daemon {
-		reverse_proxy 127.0.0.1:4672
+		encode zstd gzip
+		reverse_proxy 127.0.0.1:{args[1]}
 	}
 
-	# No per-env web service yet → point root at the prod marketing site, or
-	# swap to a staging celiador-web service (e.g. :3101) when one exists.
+	# The environment's own marketing-site preview (celiador-web@<env>).
 	handle {
-		reverse_proxy 127.0.0.1:3100
+		encode zstd gzip
+		reverse_proxy 127.0.0.1:{args[2]}
 	}
 }
 
+test.celiador.ai {
+	import celiador_env 9997 4672 3102
+}
+
 dev.celiador.ai {
-	encode zstd gzip
-
-	@auth path /auth/*
-	handle @auth {
-		reverse_proxy 127.0.0.1:9996
-	}
-
-	@daemon path /api/* /p/*
-	handle @daemon {
-		reverse_proxy 127.0.0.1:4673
-	}
-
-	handle {
-		reverse_proxy 127.0.0.1:3100
-	}
+	import celiador_env 9996 4673 3103
 }

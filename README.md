@@ -118,7 +118,7 @@ Download URLs are built on `CELIADOR_PUBLIC_URL` (default `https://celiador.ai`)
 
 ## Env
 
-See `.env.example` (and `.env.{dev,staging,prod}.example`). Auth mode is chosen
+See `.env.example` (and `.env.{dev,test,prod}.example`). Auth mode is chosen
 by which vars are set: `SUPABASE_JWT_SECRET` → supabase, else `CELIADOR_TOKEN` →
 token, else none (loopback dev with `CELIADOR_ALLOW_NO_AUTH=1` only). Push is a
 no-op unless the `APNS_*` vars are set. Cloud runs need `CELIADOR_RUNNER_AGENT=sandbox`
@@ -131,6 +131,10 @@ inline `# …` becomes part of the value.
 
 ## Deploy (box)
 
-Live since 2026-09-24. Per-environment deploys (prod/staging/dev) go through
-`deploy/deploy.sh <env>` — see `ENVIRONMENTS.md`. `tsx` is a runtime dependency
-(the unit runs `npm run start` → `tsx src/main.ts`), so `npm ci --omit=dev` works.
+Live since 2026-09-24. Three environments — dev, test, prod — each with its
+own daemon instance, Postgres and GoTrue; `ENVIRONMENTS.md` is the map,
+`deploy/provision-env.sh` stands a non-prod one up, `deploy/deploy.sh <env>`
+ships code by hand (the Actions workflow does the same on push/tag). `tsx` is a
+runtime dependency (the unit runs `npm run start` → `tsx src/main.ts`), so
+`npm ci --omit=dev` works. Schema changes are `db/migrations/*.sql`, applied
+forward-only by `npm run migrate`.

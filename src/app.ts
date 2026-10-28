@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
-import { AGENT_MODEL, VERSION } from "./config";
+import { AGENT_MODEL, COMMIT, ENV, VERSION } from "./config";
 import { failureReport } from "./health";
 import { activeLimits } from "./agent/quota";
 import { prices } from "./agent/pricing";
@@ -39,9 +39,18 @@ export function createApp(): Hono<AppEnv> {
     })
   );
 
-  // Health — clients verify compatibility here. `name` kept for compatibility.
+  // Health — clients verify compatibility here; deploys verify `env` + `commit`
+  // (deploy/README.md's health gate). `name` kept for compatibility.
   app.get("/api/health", (c) =>
-    c.json({ ok: true, name: "celiador-daemon", version: VERSION, pid: process.pid, failures: failureReport() })
+    c.json({
+      ok: true,
+      name: "celiador-daemon",
+      version: VERSION,
+      env: ENV,
+      commit: COMMIT || null,
+      pid: process.pid,
+      failures: failureReport(),
+    })
   );
 
   // What a client needs to boot: auth mode + Supabase client config.

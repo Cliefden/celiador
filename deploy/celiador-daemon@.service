@@ -1,20 +1,20 @@
-# Templated systemd unit for the Celiador daemon — one instance per environment.
-# Mirrors the live prod unit (celiador-daemon.service) but parameterized by %i
-# (the env slug: prod|staging|dev). Each instance runs from its own checkout and
-# reads its own ~/envs/%i/daemon/.env (the daemon's loadDotEnv reads .env from
-# CELIADOR_HOME / the working dir — same mechanism prod uses from ~/daemon/.env).
+# Templated systemd unit for the Celiador daemon — one instance per environment
+# (%i = prod | test | dev). Each instance runs from its own checkout under
+# ~/envs/%i/daemon and reads that directory's .env (the daemon's loadDotEnv) —
+# the same mechanism prod's plain unit uses from ~/daemon/.env.
 #
-# Install:
+# Install (deploy/provision-env.sh does this):
 #   sudo cp celiador-daemon@.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now celiador-daemon@staging
+#   sudo systemctl enable --now celiador-daemon@test
 #   sudo systemctl enable --now celiador-daemon@dev
-# (Prod keeps the existing celiador-daemon.service until a deliberate cutover to
-#  celiador-daemon@prod.)
+#
+# Prod keeps the plain celiador-daemon.service (~/daemon, :4671) until the
+# deliberate cutover to celiador-daemon@prod (ENVIRONMENTS.md § Prod cutover).
 
 [Unit]
 Description=Celiador daemon (%i)
-After=network.target
+After=network.target docker.service
 
 [Service]
 Type=simple
