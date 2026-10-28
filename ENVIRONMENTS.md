@@ -110,8 +110,9 @@ Actions → Deploy → env=prod tag=vX.Y.Z → prod  (manual, required reviewer)
 The daemon is the release train: its `vX.Y.Z` tags are the Celiador releases
 and name what test and prod run. Rollback is a redeploy of the previous tag.
 Editor and iOS builds follow the same triggers in their own repos (`main` →
-dev channel, tag → test channel, manual → prod). Until the workflow exists
-(issue #42), `deploy/deploy.sh <env>` does the same steps from a laptop.
+dev channel, tag → test channel, manual → prod). `RELEASING.md` has the
+workflow (`.github/workflows/deploy.yml`) and the GitHub setup behind it;
+`deploy/deploy.sh <env>` does the same steps by hand from a laptop.
 
 ## First-time box setup (once)
 

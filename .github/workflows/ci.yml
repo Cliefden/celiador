@@ -1,15 +1,19 @@
 name: CI
 
-# Validate the daemon on every push and pull request: typecheck + the offline
-# smoke test (gateway + session relay + server runner, no network / no real key).
+# Validate the daemon: typecheck + the offline smoke test (gateway + session
+# relay + server runner, no network / no real key). Runs on pull requests and
+# on pushes to other branches; the Deploy workflow calls it for every push to
+# main and every release tag, so nothing reaches an environment unchecked.
 on:
-  push:
   pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_call:
 
 # One in-flight run per ref; a push and its PR share a group so we don't run twice.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
 jobs:
   check:
