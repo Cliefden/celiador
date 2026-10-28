@@ -39,9 +39,12 @@ that env's web preview. DNS A records for `dev.` and `test.` exist since
 Repo artifacts backing this:
 
 - `.env.{prod,test,dev}.example` — per-env key templates (no secrets).
-- `deploy/compose.yml` + `deploy/db/roles.sql` — one non-prod env's Postgres
-  (`supabase/postgres`, the prod image family, so `auth.uid()` and the service
-  roles exist) and standalone GoTrue.
+- `deploy/compose.yml` + `deploy/db/{roles,auth-owner}.sql` — one non-prod
+  env's Postgres (`supabase/postgres`, prod's image tag, so `auth.uid()` and the
+  service roles exist; the init scripts give the service roles the env's
+  password and hand the auth schema's functions to `supabase_auth_admin`, or
+  GoTrue's first migration fails with "must be owner of function uid") and
+  standalone GoTrue.
 - `deploy/provision-env.sh <test|dev>` — stands up or refreshes one env: secrets,
   compose stack, daemon checkout + `.env` + `BUILD_INFO`, migrations, unit.
   Idempotent; prod untouched.
