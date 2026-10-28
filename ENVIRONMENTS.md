@@ -140,20 +140,49 @@ Then the deliberately manual, prod-touching steps:
 
 ### Prod cutover
 
-After test and dev have both deployed through the pipeline once:
+Test and dev both deployed through the pipeline on 2026-10-28; prod is the
+last one on the old rails. Facts that shape the recipe: `~/daemon/releases` is
+9 GB (move, don't copy); the plain unit carries `PORT=4671` and
+`HOST=127.0.0.1` as `Environment=` lines, which the templated unit does not
+(they go in `.env`); the editor's release script and docs still name
+`cliefden.com:daemon/releases` (a symlink keeps that true); a backup of code +
+data + env (no node_modules / releases) exists at
+`~/daemon-pre-cutover-20261028.tgz`. Downtime is the seconds between the stop
+and the start.
 
 ```sh
-# on the box
-rsync -a --exclude node_modules ~/daemon/ ~/envs/prod/daemon/      # code + data + .env + releases
-sed -i 's|^CELIADOR_HOME=.*|CELIADOR_HOME=/home/stefan/envs/prod/daemon|' ~/envs/prod/daemon/.env
-grep -q '^CELIADOR_ENV=' ~/envs/prod/daemon/.env || echo 'CELIADOR_ENV=prod' >> ~/envs/prod/daemon/.env
-cd ~/envs/prod/daemon && npm ci --omit=dev && npm run migrate -- --baseline
-sudo systemctl disable --now celiador-daemon && sudo systemctl enable --now celiador-daemon@prod
-curl -s https://celiador.ai/api/health          # env=prod, same :4671, Caddy unchanged
+# 1. from a laptop, with the daemon checkout on the release to run (e.g. `git checkout v0.2.0`):
+#    bring prod's tree to that code in place — data/, releases/ and .env are untouched
+rsync -az --delete --exclude /.git --exclude /node_modules --exclude /data --exclude /releases \
+  --exclude '/.env' --exclude '/.env.*' --exclude /BUILD_INFO --exclude /.claude --exclude '.DS_Store' \
+  ./ stefan@cliefden.com:daemon/
+# 2. on the box
+mkdir -p ~/envs/prod
+sudo systemctl stop celiador-daemon
+mv ~/daemon ~/envs/prod/daemon
+ln -s /home/stefan/envs/prod/daemon ~/daemon            # old paths keep working
+cd ~/envs/prod/daemon
+printf 'PORT=4671\nHOST=127.0.0.1\nCELIADOR_ENV=prod\nCELIADOR_HOME=/home/stefan/envs/prod/daemon\n' >> .env
+printf 'commit=%s\ndeployed_at=%s\n' "$(git -C <laptop checkout> rev-parse HEAD)" "$(date -u +%FT%TZ)" > BUILD_INFO   # the commit from step 1
+npm ci --omit=dev
+npm run migrate -- --baseline                            # records 0001 + 0002, applied by hand earlier
+sudo systemctl disable celiador-daemon
+sudo systemctl enable --now celiador-daemon@prod
+curl -s https://celiador.ai/api/health                   # env=prod, commit=<step 1>, same :4671, Caddy unchanged
+# 3. from the laptop
+gh variable set PROD_ENABLED --body true -R Cliefden/daemon
 ```
 
-Rollback: `systemctl disable --now celiador-daemon@prod && systemctl enable --now celiador-daemon`.
-Keep `~/daemon` until prod has deployed through the workflow twice.
+From then on prod deploys only through the workflow (`RELEASING.md`):
+**Actions → Deploy → Run workflow**, tag `vX.Y.Z`, env `prod`, approved by the
+`prod` Environment's reviewer. Rollback of the cutover itself:
+`sudo systemctl disable --now celiador-daemon@prod && rm ~/daemon && mv ~/envs/prod/daemon ~/daemon && sudo systemctl enable --now celiador-daemon`.
+Keep the backup tarball until prod has deployed through the workflow twice.
+
+The marketing site follows the same shape (`celiador-web/deploy/provision-web.sh prod`
+builds into `~/envs/prod/web` beside the live unit; then
+`sudo systemctl disable --now celiador-web && sudo systemctl enable --now celiador-web@prod`,
+and `PROD_ENABLED=true` on `Cliefden/celiador-web`).
 
 ## Verification
 
