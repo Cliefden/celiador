@@ -74,16 +74,7 @@ targets:
           CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.production.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.production.entitlements
-    scheme:
-      # On a physical device `localhost` (the Dev xcconfig default) resolves to
-      # the phone, not the Mac — so Run against the live daemon. Api.swift reads
-      # CELIADOR_URL first (overrides CELIADOR_DAEMON_URL). NOTE: scheme env vars
-      # apply only when launched FROM Xcode; a standalone relaunch falls back to
-      # the xcconfig. To point back at a local daemon, disable this in Edit Scheme.
-      environmentVariables:
-        - variable: CELIADOR_URL
-          value: https://celiador.ai
-          isEnabled: true
+    # Schemes are defined at the top level (one per channel) — see `schemes:`.
   CeliadorWidgets:
     type: app-extension
     platform: iOS
@@ -126,3 +117,68 @@ targets:
         MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: "1"
     scheme: {}
+
+# One scheme per channel (CHANNELS.md / TESTFLIGHT.md). Xcode Cloud archives
+# with the scheme's archive configuration, so the scheme is how a workflow
+# selects a channel: "Dev" archives `Celiador Dev`, "Test" archives
+# `Celiador Test`, "Archive - App Store" archives `Celiador`.
+#
+# Running from Xcode always builds the Dev config (the debug build of the Dev
+# app). Api.swift reads CELIADOR_URL first (overrides CELIADOR_DAEMON_URL from
+# the xcconfig); scheme env vars apply only when launched FROM Xcode — a
+# standalone relaunch falls back to the xcconfig.
+schemes:
+  Celiador:
+    build:
+      targets:
+        Celiador: all
+    run:
+      config: Dev
+      # The long-standing dogfooding setup: run against the live prod daemon.
+      # Disable in Edit Scheme to use the Dev xcconfig's dev.celiador.ai.
+      environmentVariables:
+        - variable: CELIADOR_URL
+          value: https://celiador.ai
+          isEnabled: true
+    test:
+      config: Dev
+    profile:
+      config: Release
+    analyze:
+      config: Dev
+    archive:
+      config: Release
+  Celiador Dev:
+    build:
+      targets:
+        Celiador: all
+    run:
+      config: Dev
+      # Enable for a daemon on this Mac (simulator only — on a phone,
+      # localhost is the phone).
+      environmentVariables:
+        - variable: CELIADOR_URL
+          value: http://localhost:4661
+          isEnabled: false
+    test:
+      config: Dev
+    profile:
+      config: Dev
+    analyze:
+      config: Dev
+    archive:
+      config: Dev
+  Celiador Test:
+    build:
+      targets:
+        Celiador: all
+    run:
+      config: Test
+    test:
+      config: Test
+    profile:
+      config: Test
+    analyze:
+      config: Test
+    archive:
+      config: Test

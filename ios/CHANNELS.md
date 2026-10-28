@@ -3,13 +3,15 @@
 Two App Store Connect apps, the way Celindor does it (`Celindor/celindor/RELEASING.md`
 § App Store), pointed at the daemon environments in `daemon/ENVIRONMENTS.md`.
 Three Xcode build configurations, defined in `project.yml` (`configs` +
-`configFiles`) and `Config/*.xcconfig`:
+`configFiles`) and `Config/*.xcconfig`, each archived by its own scheme —
+Xcode Cloud archives with the scheme's archive configuration, so the scheme is
+how a workflow picks a channel:
 
-| Config | App | Bundle ID | Daemon (`CELIADOR_DAEMON_URL`) | URL scheme | Built when |
-|---|---|---|---|---|---|
-| **Dev** (debug) | Celiador Dev | `ai.celiador.companion.dev` | `http://localhost:4661` (Xcode) / `https://dev.celiador.ai` (TestFlight) | `celiador-dev` | push to `main` → TestFlight |
-| **Test** (release) | Celiador | `ai.celiador.companion` | `https://test.celiador.ai` | `celiador` | tag `vX.Y.Z` → TestFlight |
-| **Release** (release) | Celiador | `ai.celiador.companion` | `https://celiador.ai` | `celiador` | manual → App Store |
+| Config | Scheme | App | Bundle ID | Daemon (`CELIADOR_DAEMON_URL`) | URL scheme | Xcode Cloud workflow |
+|---|---|---|---|---|---|---|
+| **Dev** (debug) | `Celiador Dev` | Celiador Dev | `ai.celiador.companion.dev` | `https://dev.celiador.ai` | `celiador-dev` | **Dev**: push to `main` → TestFlight (Dev app) |
+| **Test** (release) | `Celiador Test` | Celiador | `ai.celiador.companion` | `https://test.celiador.ai` | `celiador` | **Test**: tag `vX.Y.Z` → TestFlight |
+| **Release** (release) | `Celiador` | Celiador | `ai.celiador.companion` | `https://celiador.ai` | `celiador` | **Archive - App Store**: manual |
 
 The Dev app installs beside the real one (own bundle id, own name, own URL
 scheme). The Test config is the real app pointed at the test environment: a
@@ -17,20 +19,29 @@ TestFlight build of it replaces the App Store build on a tester's phone, and
 a token it kept from test is refused by prod (401) — the app then asks to sign
 in again. There is no `.test` bundle id.
 
-The app reads the daemon URL as: `CELIADOR_URL` env var (scheme override in the
-simulator) → `CELIADOR_DAEMON_URL` from `Info.plist` (the build channel) →
+The app reads the daemon URL as: `CELIADOR_URL` env var (scheme override) →
+`CELIADOR_DAEMON_URL` from `Info.plist` (the build channel) →
 `https://celiador.ai` (`Shared/Api.swift`). The Dev suffix flows to the app,
 widgets and watch bundle IDs (and the watch's `WKCompanionAppBundleIdentifier`).
 
-Build a channel by selecting the configuration:
+Running from Xcode: the `Celiador` scheme runs the Dev config (debug build of
+the Dev app) with `CELIADOR_URL=https://celiador.ai` enabled, i.e. against
+prod — the long-standing dogfooding setup. The `Celiador Dev` scheme runs the
+same build against `dev.celiador.ai`, with a disabled
+`CELIADOR_URL=http://localhost:4661` to flip on for a daemon on this Mac
+(simulator only). Scheme env vars apply only when launched from Xcode; a
+standalone relaunch falls back to the xcconfig.
+
+Build a channel by selecting its scheme:
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
-  xcodebuild -scheme Celiador -configuration Test \
+  xcodebuild -scheme "Celiador Test" \
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
 Regenerate the project after editing `project.yml`/xcconfigs: `xcodegen generate`.
+The workflows themselves are described in `TESTFLIGHT.md`.
 
 ## Icon banner
 
@@ -52,11 +63,12 @@ TestFlight stays out of the production dashboard).
 
 ## Notes / follow-ups for device + TestFlight
 
-- **App Store Connect:** the `ai.celiador.companion.dev` bundle id exists; the
-  **Celiador Dev** app record, its widgets App ID
-  (`ai.celiador.companion.dev.widgets`, push + App Group) and a TestFlight
-  group on it are created in Phase 3 of the environments plan, with the Xcode
-  Cloud workflows (Dev on `main`, Test on tags, Archive - App Store manual).
+- **App Store Connect:** two app records — **Celiador** (`6819707590`,
+  `ai.celiador.companion`) and **Celiador dev** (`6828169951`,
+  `ai.celiador.companion.dev`); both bundle ids and their `.widgets` App IDs are
+  registered, and each app has an `Internal` TestFlight group with access to
+  all builds. Push and App Group capabilities on the dev App IDs are added by
+  automatic signing on the first Xcode Cloud build. Workflows: `TESTFLIGHT.md`.
 - **App Group stays shared** (`group.ai.celiador.companion`) across channels —
   it's hardcoded in `Shared/WidgetShared.swift`, and the auth/isolation boundary
   is the daemon's per-env JWT secret, not widget storage.
