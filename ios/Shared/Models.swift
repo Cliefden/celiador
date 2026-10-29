@@ -179,6 +179,15 @@ struct DaemonConfig: Codable {
     let authMode: String
     let supabaseUrl: String?
     let supabaseAnonKey: String?
+    /// Which sign-in methods this daemon's environment offers. Absent on an
+    /// older daemon or when it couldn't ask GoTrue — then show every method.
+    let signIn: SignInMethods?
+
+    struct SignInMethods: Codable {
+        let password: Bool?
+        let magicLink: Bool?
+        let github: Bool?
+    }
 }
 
 // MARK: - App data (served by the daemon: /api/profile, /api/chats)

@@ -29,6 +29,27 @@ export type AuthorizeResult =
   | { ok: true; user: AuthResult | null; quotaKey: string; isRunner: boolean; release: () => void }
   | { ok: false; status: 401 | 403 | 429 | 503; error: string; retryAfter?: number };
 
+export type AuthorizeRefusal = Extract<AuthorizeResult, { ok: false }>;
+
+/**
+ * Anthropic's error envelope for a refusal, so SDK clients pointed at the
+ * gateway (the Claude Agent SDK in the editor and the runner) surface the
+ * reason instead of "unexpected response shape". The `type` follows the
+ * status the way Anthropic's own API does.
+ */
+export function refusalEnvelope(auth: AuthorizeRefusal) {
+  const type = (
+    { 401: "authentication_error", 403: "permission_error", 429: "rate_limit_error", 503: "overloaded_error" } as const
+  )[auth.status];
+  return { type: "error" as const, error: { type, message: auth.error }, request_id: null };
+}
+
+/** The refusal response: envelope body, status and (for 429) `Retry-After`. */
+export function refuse(c: Context, auth: AuthorizeRefusal) {
+  if (auth.retryAfter !== undefined) c.header("Retry-After", String(auth.retryAfter));
+  return c.json(refusalEnvelope(auth), auth.status);
+}
+
 export async function authorizeAgent(c: Context): Promise<AuthorizeResult> {
   const bearer = bearerFrom(c);
   const user = authenticateToken(bearer);

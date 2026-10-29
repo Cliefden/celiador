@@ -4,7 +4,7 @@ import { streamSSE } from "hono/streaming";
 import { AGENT_MODEL, AGENT_MAX_TOKENS } from "./config";
 import { SYSTEM_PROMPT, TOOLS, validateMessages } from "./agent/policy";
 import { agentQuota } from "./agent/quota";
-import { authorizeAgent } from "./agent/authorize";
+import { authorizeAgent, refuse } from "./agent/authorize";
 import { attributeUsage, MIRROR_HEADER } from "./sessions/usage";
 
 let client: Anthropic | null = null;
@@ -38,10 +38,7 @@ export async function agentProxy(c: Context) {
   if (invalid) return c.json({ error: invalid }, 400);
 
   const auth = await authorizeAgent(c);
-  if (!auth.ok) {
-    if (auth.retryAfter !== undefined) c.header("Retry-After", String(auth.retryAfter));
-    return c.json({ error: auth.error }, auth.status);
-  }
+  if (!auth.ok) return refuse(c, auth);
   const { quotaKey, user, release } = auth;
   const mirrorKey = c.req.header(MIRROR_HEADER);
 

@@ -8,8 +8,8 @@ key and the DB connection — clients never hold either.
 
 | Area | Endpoint | Who | Notes |
 |---|---|---|---|
-| Health/boot | `GET /api/health`, `GET /api/config` | any | config → authMode + Supabase client cfg |
-| Agent | `POST /api/agent/messages` | editor | Claude proxy, SSE. Server-owned system prompt + tools; client sends `messages` only; per-user quota (429 + Retry-After) |
+| Health/boot | `GET /api/health`, `GET /api/config` | any | config → authMode + Supabase client cfg + `signIn {password, magicLink, github}` — hide the sign-in buttons whose flag is `false`; the field is absent on an older daemon or when GoTrue is unreachable (show them all) |
+| Agent | `POST /api/agent/messages` | editor | Claude proxy, SSE. Server-owned system prompt + tools; client sends `messages` only; per-user quota (429 + Retry-After). Refusals (401/403/429/503) use Anthropic's error envelope `{type:"error", error:{type, message}, request_id:null}` — same on `/api/anthropic/v1/*` |
 | Relay | `POST /api/sessions`, `GET /:id/events`, `GET /:id/commands`, `POST /:id/events`, `POST /:id/{message,approvals/:rid,answers/:rid,cancel}` | editor=runner, phone=watcher | live, ephemeral |
 | Profile | `GET /api/profile`, `PATCH /api/profile` | both | durable |
 | Chat history | `GET /api/chats`, `GET /api/chats/:id`, `PATCH/DELETE /api/chats/:id` | both | durable; rows written by the relay persister |
@@ -158,17 +158,18 @@ in — no extra write path needed from clients.
 ## Current state
 
 - **Daemon**: all endpoints live; DB wired (`DATABASE_URL`), verified end-to-end.
-- **macOS editor (`celiador-ai`)**: runner-side relay **DONE** — `src/relay.ts`
-  (`SessionRelay`) is wired into the agent loop in `src/extension.ts` (mirrors
-  delta/tool/toolResult/reply/state/done, approvals via `waitForApproval`, command
-  channel for instruct/cancel/approve/reject). Auth done (`src/auth.ts`).
-  **Missing**: profile + chat-history reads.
-- **iOS (`celiador-ios`)**: rebuilt as a watcher and **builds on simulator**. Has
-  auth, session list/open, live transcript view with approve/instruct/cancel, and
-  Live Activity + widget on sessions (`Shared/Api.swift`, `Events.swift`, `Models.swift`,
-  `SessionsView`/`SessionView`). NOT done: profile + chat-history screens, full
-  cross-process live E2E, git commit, and TestFlight/device deploy. (The old
-  `daemon-old/apps/apple` companion is retired.)
+- **macOS editor (`celiador-editor`)**: the runner-side relay lives in the
+  workbench — `src/vs/workbench/contrib/chat/browser/celiadorRelayClient.ts`
+  mirrors the agent session (delta/tool/toolResult/reply/state/done, approvals,
+  command channel for instruct/cancel/approve/reject) to the daemon. The
+  `celiador-ai` extension's own agent loop and its `src/relay.ts` were retired;
+  the extension keeps auth + account/past-chats reads.
+- **iOS (`ios/`)**: the watcher — auth (`LoginView`), session list/open, live
+  transcript with approve/instruct/cancel, Live Activity + widget
+  (`Shared/Api.swift`, `Events.swift`, `Models.swift`, `SessionsView`/`SessionView`),
+  plus account (`AccountView.swift`) and durable history (`HistoryView.swift`).
+  Shipped via TestFlight (`ios/TESTFLIGHT.md`). (The old `daemon-old/apps/apple`
+  companion is retired.)
 
 ## Plan — macOS editor (`celiador-ai`)
 

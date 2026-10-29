@@ -7,6 +7,7 @@ import { activeLimits } from "./agent/quota";
 import { prices } from "./agent/pricing";
 import { taskConcurrency } from "./tasks/dispatch";
 import { authMode, requireUser, type AppEnv } from "./auth";
+import { signInMethods } from "./signin";
 import { agentProxy } from "./anthropic";
 import { completeHandler } from "./complete/routes";
 import { anthropicGateway, anthropicModels } from "./gateway";
@@ -53,14 +54,17 @@ export function createApp(): Hono<AppEnv> {
     })
   );
 
-  // What a client needs to boot: auth mode + Supabase client config.
-  app.get("/api/config", (c) =>
-    c.json({
+  // What a client needs to boot: auth mode + Supabase client config, plus which
+  // sign-in methods are on here (signin.ts; absent when GoTrue is unreachable).
+  app.get("/api/config", async (c) => {
+    const signIn = await signInMethods();
+    return c.json({
       authMode: authMode(),
       supabaseUrl: process.env.SUPABASE_URL ?? null,
       supabaseAnonKey: process.env.SUPABASE_ANON_KEY ?? null,
-    })
-  );
+      ...(signIn ? { signIn } : {}),
+    });
+  });
 
   // The per-user limits the agent proxy enforces, public: the pricing page
   // shows these, the signed-in account panel shows the same object via

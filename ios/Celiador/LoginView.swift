@@ -10,12 +10,16 @@ struct LoginView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var info: String?
+    /// What the daemon says this environment offers (nil = older daemon: show all).
+    @State private var methods: DaemonConfig.SignInMethods?
     @FocusState private var focus: Field?
 
     private enum Field { case email, password }
 
     private var canSubmit: Bool { !busy && !email.isEmpty && !password.isEmpty }
     private var headline: String { isSignUp ? "Create your account" : "Sign in" }
+    private var showsMagicLink: Bool { methods?.magicLink != false }
+    private var showsGitHub: Bool { methods?.github != false }
 
     var body: some View {
         ScrollView {
@@ -71,18 +75,24 @@ struct LoginView: View {
                     .disabled(busy)
                 }
 
-                VStack(spacing: 10) {
-                    Button(action: { Haptics.tap(); sendMagicLink() }) {
-                        Label("Email me a sign-in link", systemImage: "envelope").frame(maxWidth: .infinity)
-                    }
-                    .secondaryButton()
-                    .disabled(busy || email.isEmpty)
+                if showsMagicLink || showsGitHub {
+                    VStack(spacing: 10) {
+                        if showsMagicLink {
+                            Button(action: { Haptics.tap(); sendMagicLink() }) {
+                                Label("Email me a sign-in link", systemImage: "envelope").frame(maxWidth: .infinity)
+                            }
+                            .secondaryButton()
+                            .disabled(busy || email.isEmpty)
+                        }
 
-                    Button(action: { Haptics.tap(); continueWithGitHub() }) {
-                        Label("Continue with GitHub", systemImage: "chevron.left.forwardslash.chevron.right").frame(maxWidth: .infinity)
+                        if showsGitHub {
+                            Button(action: { Haptics.tap(); continueWithGitHub() }) {
+                                Label("Continue with GitHub", systemImage: "chevron.left.forwardslash.chevron.right").frame(maxWidth: .infinity)
+                            }
+                            .secondaryButton()
+                            .disabled(busy)
+                        }
                     }
-                    .secondaryButton()
-                    .disabled(busy)
                 }
 
                 if let error {
@@ -104,6 +114,7 @@ struct LoginView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(CeliadorBackground())
         .onAppear { Telemetry.onboarding(.signInShown) }
+        .task { methods = try? await Api.shared.loadConfig().signIn }
     }
 
     /// `signInFailed` — the failure's fixed code, never its message.
