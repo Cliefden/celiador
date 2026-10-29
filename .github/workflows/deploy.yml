@@ -1,0 +1,219 @@
+name: Deploy daemon
+
+# One workflow deploys the daemon (daemon/) to every environment on the box
+# (ENVIRONMENTS.md); the site has web-deploy.yml, the iOS app Xcode Cloud:
+#
+#   push to main         → CI, deploy dev (with migrations) — only when the
+#                          push touches daemon/ or these workflows
+#   push tag vX.Y.Z      → CI, deploy test (with migrations); the tag must be
+#                          the version daemon/package.json carries and sit on
+#                          main (path filters never apply to tags: a release
+#                          deploys everything)
+#   workflow_dispatch    → deploy any environment from the chosen ref (Run
+#                          workflow → "Use workflow from" picks the tag or
+#                          branch); prod is refused unless the repository
+#                          variable PROD_ENABLED is 'true' (set at the prod
+#                          cutover to celiador-daemon@prod)
+#
+# Cut releases with scripts/release.sh, push main first and let it go green,
+# then push the tag (RELEASING.md). Rollback = dispatch with the previous tag.
+#
+# The daemon has no build step (tsx): the runner rsyncs daemon/ to
+# ~/envs/<env>/daemon over the deploy key, installs runtime deps there, stamps
+# BUILD_INFO, migrates, restarts the env's unit and gates on /api/health
+# reporting this env and this commit. Secrets stay on the box
+# (~/envs/<env>/daemon/.env, written by daemon/deploy/provision-env.sh), unlike
+# Celindor's render-from-GitHub: the JWT secret, DB password and anon key are
+# generated there.
+#
+# GitHub Environments dev, test and prod each hold VPS_HOST, VPS_USER and
+# VPS_SSH_KEY; prod has a required reviewer. Results are mailed through the
+# repository secrets SMTP_USER / SMTP_PASS (Migadu) to the repository variable
+# NOTIFY_TO: failures always, successes until NOTIFY_SUCCESS is 'false'. A mail
+# problem never fails a deploy.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - daemon/**
+      - .github/workflows/deploy.yml
+      - .github/workflows/ci.yml
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Environment
+        type: choice
+        options: [dev, test, prod]
+        default: dev
+      migrate:
+        description: Apply database migrations (pushes to main and release tags always do)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # ci.yml is called below; a called workflow can't exceed the caller's grant.
+  pull-requests: read
+
+concurrency:
+  # One daemon deploy per environment at a time; a second one waits, never cancels.
+  group: deploy-daemon-${{ inputs.env || (github.ref_type == 'tag' && 'test' || 'dev') }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.plan.outputs.env }}
+      host: ${{ steps.plan.outputs.host }}
+      port: ${{ steps.plan.outputs.port }}
+      version: ${{ steps.plan.outputs.version }}
+      migrate: ${{ steps.plan.outputs.migrate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # a tag must be on main
+      - id: plan
+        env:
+          INPUT_ENV: ${{ inputs.env }}
+          INPUT_MIGRATE: ${{ inputs.migrate }}
+          PROD_ENABLED: ${{ vars.PROD_ENABLED }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./daemon/package.json').version")"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            env="$INPUT_ENV"; migrate="$INPUT_MIGRATE"
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            env=test; migrate=true
+            [[ "${GITHUB_REF_NAME#v}" == "$version" ]] ||
+              { echo "::error::tag $GITHUB_REF_NAME but daemon/package.json says $version — cut releases with scripts/release.sh"; exit 1; }
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+              { echo "::error::$GITHUB_REF_NAME is not on main — push main first, then the tag"; exit 1; }
+          else
+            env=dev; migrate=true
+            version="$version+${GITHUB_SHA::7}"
+          fi
+          case "$env" in
+            prod) host=celiador.ai;      port=4671 ;;
+            test) host=test.celiador.ai; port=4672 ;;
+            dev)  host=dev.celiador.ai;  port=4673 ;;
+          esac
+          if [[ "$env" == prod && "$PROD_ENABLED" != true ]]; then
+            echo "::error::prod still runs the plain celiador-daemon unit. Do the cutover (ENVIRONMENTS.md § Prod cutover) and set the repository variable PROD_ENABLED=true."
+            exit 1
+          fi
+          { echo "env=$env"; echo "host=$host"; echo "port=$port"; echo "version=$version"; echo "migrate=$migrate"; } >> "$GITHUB_OUTPUT"
+          echo "::notice::deploying daemon $version (${GITHUB_SHA::7}) to $env, migrate=$migrate"
+
+  ci:
+    needs: plan
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: [plan, ci]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.plan.outputs.env }}
+      url: https://${{ needs.plan.outputs.host }}/api/health
+    env:
+      TARGET_ENV: ${{ needs.plan.outputs.env }}
+      HOST: ${{ needs.plan.outputs.host }}
+      PORT: ${{ needs.plan.outputs.port }}
+      MIGRATE: ${{ needs.plan.outputs.migrate }}
+    defaults:
+      run:
+        working-directory: daemon
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SSH_KEY" && -n "$VPS_HOST" ]] || { echo "::error::VPS_SSH_KEY / VPS_HOST missing from the '$TARGET_ENV' Environment (RELEASING.md)"; exit 1; }
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 30 -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          test -s ~/.ssh/known_hosts
+
+      - name: Upload
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          printf 'commit=%s\ndeployed_at=%s\n' "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > BUILD_INFO
+          # Anchored excludes: data/ and releases/ are the env's state, .env its
+          # secrets; an unanchored `data` would also drop src/data/.
+          rsync -az --delete --timeout=120 -e "ssh -i $HOME/.ssh/deploy_key -o ConnectTimeout=60" \
+            --exclude '/.git' --exclude '/node_modules' --exclude '/data' --exclude '/releases' \
+            --exclude '/.env' --exclude '/.env.*' --exclude '/.claude' --exclude '.DS_Store' \
+            ./ "$VPS_USER@$VPS_HOST:envs/$TARGET_ENV/daemon/"
+
+      - name: Install, migrate, restart
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          migrate=""
+          [[ "$MIGRATE" == true ]] && migrate="npm run --silent migrate &&"
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=60 "$VPS_USER@$VPS_HOST" \
+            "cd ~/envs/$TARGET_ENV/daemon && npm ci --omit=dev --no-audit --no-fund && $migrate sudo systemctl restart celiador-daemon@$TARGET_ENV"
+
+      - name: Health gate
+        # A responding port is not a deploy: the daemon answering through Caddy
+        # must be this environment and this commit.
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if health="$(curl -fsS -m 10 "https://$HOST/api/health")"; then
+              if grep -q "\"env\":\"$TARGET_ENV\"" <<<"$health" && grep -q "\"commit\":\"$GITHUB_SHA\"" <<<"$health"; then
+                echo "✔ $TARGET_ENV is running ${GITHUB_SHA::7}: $health"
+                exit 0
+              fi
+            fi
+            sleep 2
+          done
+          echo "::error::https://$HOST/api/health never reported env=$TARGET_ENV commit=$GITHUB_SHA (last: ${health:-no answer})"
+          exit 1
+
+  notify:
+    needs: [plan, ci, deploy]
+    if: always() && !cancelled() && (contains(needs.*.result, 'failure') || vars.NOTIFY_SUCCESS != 'false')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mail the result
+        continue-on-error: true
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          NOTIFY_TO: ${{ vars.NOTIFY_TO || 'stefan@celiador.ai' }}
+          FAILED: ${{ contains(needs.*.result, 'failure') }}
+          TARGET_ENV: ${{ needs.plan.outputs.env }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          MIGRATE: ${{ needs.plan.outputs.migrate }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" ]]; then
+            echo "::warning::SMTP_USER / SMTP_PASS are not set; the result was not mailed (RELEASING.md)"
+            exit 0
+          fi
+          migrations="$([[ "$MIGRATE" == true ]] && echo " with migrations" || true)"
+          if [[ "$FAILED" == true ]]; then subject="✗ daemon: ${TARGET_ENV:-?} deploy failed (${GITHUB_SHA::7})"
+          else subject="✓ daemon: $VERSION deployed to $TARGET_ENV$migrations"; fi
+          printf 'machine smtp.migadu.com login %s password %s\n' "$SMTP_USER" "$SMTP_PASS" > ~/.netrc
+          chmod 600 ~/.netrc
+          {
+            printf 'From: Celiador builds <%s>\nTo: %s\nSubject: %s\n\n' "$SMTP_USER" "$NOTIFY_TO" "$subject"
+            printf '%s\non %s by %s\n\n%s\n\n%s\n' "$subject" "$GITHUB_REF_NAME" "$GITHUB_ACTOR" "${COMMIT_MESSAGE%%$'\n'*}" "$RUN_URL"
+          } > "$RUNNER_TEMP/mail.txt"
+          curl -sS --url smtps://smtp.migadu.com:465 --ssl-reqd --netrc \
+            --mail-from "$SMTP_USER" --mail-rcpt "$NOTIFY_TO" --upload-file "$RUNNER_TEMP/mail.txt"

@@ -1,4 +1,4 @@
-// Shared base for all channels. Channel files (Dev/Staging/Prod) #include this
+// Shared base for all channels. Channel files (Dev/Test/Prod) #include this
 // and override CELIADOR_DAEMON_URL / BUNDLE_ID_SUFFIX / APP_NAME / URL_SCHEME.
 //
 // NOTE: `//` starts a comment in xcconfig, so URLs are written with the `$()`

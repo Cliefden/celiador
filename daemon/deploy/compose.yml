@@ -1,0 +1,104 @@
+# One non-prod Celiador environment (test or dev): its own Postgres and its own
+# GoTrue, as the compose project `celiador-<env>` (celiador-test, celiador-dev),
+# so a dev migration or reset can never touch another environment. Prod keeps
+# its full self-hosted Supabase stack (~/supabase-celiador on the box) and is
+# not described here.
+#
+# Started by deploy/provision-env.sh, which writes the env file it reads:
+#
+#   sudo docker compose -p celiador-<env> --env-file ~/envs/<env>/compose.env \
+#     -f ~/envs/<env>/deploy/compose.yml up -d --wait
+#
+# Every port binds to loopback. The host Caddy is the only public entry
+# (deploy/Caddyfile.example), and the daemon — a host systemd service, not a
+# container — reaches this Postgres on 127.0.0.1:${POSTGRES_PORT}.
+
+name: celiador-${CELIADOR_ENV:?set CELIADOR_ENV}
+
+services:
+  postgres:
+    # The same image family as prod's celiador-db, so the `auth` schema,
+    # auth.uid() and the supabase_auth_admin role exist as GoTrue and the
+    # daemon's migrations (db/migrations) expect. The default is prod's
+    # celiador-db tag (checked 2026-10-28); match it when prod moves.
+    image: ${POSTGRES_IMAGE:-supabase/postgres:15.8.1.085}
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: "5432"
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      JWT_EXP: "3600"
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:?set POSTGRES_PORT}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Gives the image's service roles (supabase_auth_admin, …) the password
+      # GoTrue connects with. Runs once, when the volume is first initialised.
+      - ./db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+      # GoTrue must own the auth schema's functions to replace them (db/auth-owner.sql).
+      - ./db/auth-owner.sql:/docker-entrypoint-initdb.d/migrations/99-celiador-auth-owner.sql:ro
+    # First start runs the image's own migrations for a couple of minutes
+    # before the server accepts connections; give `up --wait` that long.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 180s
+
+  gotrue:
+    # Standalone GoTrue (no kong / rest / storage / realtime: Celiador uses
+    # Supabase for auth only). Caddy strips /auth/v1 before proxying here, so the
+    # clients' `<supabaseUrl>/auth/v1/otp` lands on GoTrue's `/otp`, as on prod.
+    image: ${GOTRUE_IMAGE:-supabase/gotrue:v2.186.0}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: https://${HOST:?set HOST}
+      GOTRUE_SITE_URL: https://${HOST}
+      # The deep links this environment's clients may return to (globs).
+      GOTRUE_URI_ALLOW_LIST: ${GOTRUE_URI_ALLOW_LIST:?set GOTRUE_URI_ALLOW_LIST}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      # The environment's auth boundary: == the daemon's SUPABASE_JWT_SECRET.
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      # Skip the confirmation mail; magic links / OTP still need SMTP.
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_USER:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-Celiador}
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+      # GitHub sign-in needs a GitHub OAuth app per environment (its callback
+      # URL is fixed); off until one exists. Magic link works without it.
+      GOTRUE_EXTERNAL_GITHUB_ENABLED: ${GITHUB_OAUTH_ENABLED:-false}
+      GOTRUE_EXTERNAL_GITHUB_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_GITHUB_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI: https://${HOST}/auth/v1/callback
+    ports:
+      - "127.0.0.1:${GOTRUE_PORT:?set GOTRUE_PORT}:9999"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata:

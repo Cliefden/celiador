@@ -87,10 +87,15 @@ struct AccountView: View {
                             LabeledContent("Merged, last 7 days", value: "\(tasks.mergedLast7Days)")
                             LabeledContent("Waiting for review", value: "\(tasks.prOpen)")
                             LabeledContent("Running now", value: "\(tasks.running) of \(tasks.concurrency)")
+                            if let cost = tasks.costUsdLast7Days {
+                                LabeledContent("Agent spend, last 7 days", value: RunUsage.formatCost(cost))
+                            }
                         } header: {
                             Text("Agent pull requests")
                         } footer: {
-                            Text("Queued issues become pull requests; the merged count is the one number Celiador steers by.")
+                            Text(tasks.costUsdLast7Days == nil
+                                 ? "Queued issues become pull requests; the merged count is the one number Celiador steers by."
+                                 : "Queued issues become pull requests; the merged count is the one number Celiador steers by. Spend is what those runs cost at Celiador's published rates.")
                         }
                 .listRowBackground(Theme.panel)
                         }
@@ -197,7 +202,7 @@ struct AccountView: View {
                 usage: AgentUsage(requests: 128, inputTokens: 2_100_000, outputTokens: 142_000),
                 limits: AgentLimits(rpm: 30, concurrency: 2, dailyRequests: 500, dailyInput: 5_000_000, dailyOutput: 300_000),
                 resetsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7 * 3600)),
-                tasks: AgentTaskSummary(running: 1, prOpen: 2, mergedLast7Days: 5, concurrency: 3)
+                tasks: AgentTaskSummary(running: 1, prOpen: 2, mergedLast7Days: 5, concurrency: 3, costUsdLast7Days: 4.12)
             )
             return
         }

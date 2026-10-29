@@ -7,7 +7,7 @@ import Foundation
 // MARK: - URL scheme (channel-aware deep links)
 
 /// The app's custom URL scheme for this build channel — `celiador`,
-/// `celiador-dev`, or `celiador-staging`. Read from Info.plist (populated from
+/// or `celiador-dev` (the Test build keeps `celiador`). Read from Info.plist (populated from
 /// the xcconfig's `URL_SCHEME` via the `CELIADOR_URL_SCHEME` key) so the app and
 /// widget agree per channel and deep links open the matching installed app —
 /// otherwise a Dev build's magic link / widget tap would target the prod app.
@@ -33,12 +33,18 @@ enum AppScheme {
         return source.map { "\(base)?src=\($0)" } ?? base
     }
 
-    /// The `src` a session deep link was tagged with, if it's one we know.
+    /// The `src` a deep link was tagged with, if it's one we know.
     static func source(of url: URL) -> String? {
         let src = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == "src" }?.value
         return ["homeWidget", "liveActivity"].contains(src ?? "") ? src : nil
     }
+
+    /// `celiador[-channel]://task/<id>` — an agent task's run screen on the Queue tab.
+    static func task(_ id: String) -> String { "\(scheme)://task/\(id)" }
+
+    /// `celiador[-channel]://queue` — the Queue tab.
+    static var queue: String { "\(scheme)://queue" }
 }
 
 // MARK: - Live Activity (iOS only — ActivityKit is unavailable on macOS)

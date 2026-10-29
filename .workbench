@@ -1,0 +1,22 @@
+# Read by `wb` (github.com/Cliefden/workbench) — worktrees, board, dev stack.
+WB_PROJECT="Celiador"
+
+wb_setup() {
+  npm --prefix daemon install
+  npm --prefix web install
+  # The .xcodeproj is generated, per worktree.
+  if command -v xcodegen >/dev/null; then
+    (cd ios && xcodegen generate)
+  else
+    echo "⚠ xcodegen is not on PATH — run 'xcodegen generate' in ios/ before building"
+  fi
+}
+
+WB_SERVICES="daemon web"
+WB_daemon_DIR="daemon"
+WB_daemon_CMD="npm run dev"
+WB_daemon_PORT=4661
+WB_daemon_HEALTH="http://127.0.0.1:4661/api/health"
+WB_web_DIR="web"
+WB_web_CMD="npm run dev"
+WB_web_PORT=3000

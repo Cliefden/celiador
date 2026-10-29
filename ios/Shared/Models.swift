@@ -31,9 +31,76 @@ struct Session: Codable, Identifiable, Equatable {
     let lastSeq: Int
     let createdAt: String
     let updatedAt: String
+    /// Gateway usage attributed to this run (absent on an older daemon).
+    var usage: RunUsage? = nil
+}
+
+extension Session {
+    enum CodingKeys: String, CodingKey {
+        case id, title, origin, runner, state, runnerConnected, lastSeq, createdAt, updatedAt, usage
+    }
+
+    /// Tolerant decoding: a malformed `usage` never drops the session.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        origin = try c.decode(String.self, forKey: .origin)
+        runner = try c.decode(String.self, forKey: .runner)
+        state = try c.decode(SessionState.self, forKey: .state)
+        runnerConnected = try c.decode(Bool.self, forKey: .runnerConnected)
+        lastSeq = try c.decode(Int.self, forKey: .lastSeq)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        updatedAt = try c.decode(String.self, forKey: .updatedAt)
+        usage = (try? c.decodeIfPresent(RunUsage.self, forKey: .usage)) ?? nil
+    }
 }
 
 typealias SessionSummary = Session
+
+/// What one run cost: the gateway requests the daemon attributed to its session,
+/// priced at the daemon's published rate card (`GET /api/limits` → `prices`, USD
+/// per million tokens; cache reads count as input). Shared by `Session.usage` and
+/// `Task.usage`.
+struct RunUsage: Codable, Hashable {
+    let requests: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let costUsd: Double
+
+    /// "$0.38", or "<$0.01" for a run that cost less than a cent.
+    var costLabel: String { RunUsage.formatCost(costUsd) }
+
+    /// Two decimals, with "<$0.01" under a cent so a cheap run never reads as free.
+    static func formatCost(_ usd: Double) -> String {
+        if usd > 0 && usd < 0.01 { return "<$0.01" }
+        return String(format: "$%.2f", usd)
+    }
+
+    enum CodingKeys: String, CodingKey { case requests, inputTokens, outputTokens, costUsd }
+
+    init(requests: Int, inputTokens: Int, outputTokens: Int, costUsd: Double) {
+        self.requests = requests
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.costUsd = costUsd
+    }
+
+    /// Tolerant: every field defaults to 0, and whole numbers may arrive as doubles.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func int(_ key: CodingKeys) -> Int {
+            if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+            if let d = try? c.decodeIfPresent(Double.self, forKey: key), d.isFinite { return Int(d) }
+            return 0
+        }
+        requests = int(.requests)
+        inputTokens = int(.inputTokens)
+        outputTokens = int(.outputTokens)
+        let cost = (try? c.decodeIfPresent(Double.self, forKey: .costUsd)) ?? nil
+        costUsd = (cost?.isFinite == true) ? cost! : 0
+    }
+}
 
 /// A repo open in the user's editor(s) right now (daemon presence). Feeds the
 /// phone's "from your editor" repo picker; `remoteUrl` is a normalised https
@@ -154,6 +221,9 @@ struct AgentTaskSummary: Codable {
     let mergedLast7Days: Int
     /// Tasks allowed to run at once (published like the other limits).
     let concurrency: Int
+    /// Agent spend over the merged + pr-open tasks finished in the last seven
+    /// days, in USD at the daemon's rate card (absent on an older daemon).
+    var costUsdLast7Days: Double? = nil
 }
 
 /// Today's agent usage (UTC day), as metered by the daemon's quota tracker.
@@ -280,6 +350,32 @@ struct AgentTask: Codable, Identifiable, Hashable {
     struct Repo: Codable, Hashable { let owner: String; let name: String; let url: String }
     struct Issue: Codable, Hashable { let number: Int; let title: String; let url: String }
 
+    /// The linked session is blocked on you: a permission to grant or a question
+    /// to answer. `requestId` goes to the session approve/reject/answer endpoints.
+    struct Awaiting: Codable, Hashable {
+        let kind: String // "permission" | "question"
+        let requestId: String
+        let text: String
+        var preview: String? = nil
+        var choices: [String]? = nil
+
+        var isPermission: Bool { kind != "question" }
+    }
+
+    /// The run's pull request, refreshed by the daemon. Every stat is optional:
+    /// an older daemon (or a PR GitHub hasn't computed yet) leaves them out.
+    struct PullRequest: Codable, Hashable {
+        let number: Int
+        let url: String
+        var additions: Int? = nil
+        var deletions: Int? = nil
+        var changedFiles: Int? = nil
+        /// "passing" | "failing" | "pending" | "none" | "unknown"
+        var checks: String? = nil
+        var mergeable: Bool? = nil
+        var updatedAt: String? = nil
+    }
+
     let id: String
     let repo: Repo
     let issue: Issue?
@@ -293,8 +389,74 @@ struct AgentTask: Codable, Identifiable, Hashable {
     let createdAt: String
     let updatedAt: String
 
+    // Newer daemon fields (all optional — an old daemon sends none of them).
+    /// "mac" | "cloud" — where it runs; nil means an editor (Mac) dispatch.
+    var runner: String? = nil
+    /// The editor's machine name, e.g. "Stefan's MacBook Pro".
+    var machine: String? = nil
+    var startedAt: String? = nil
+    var finishedAt: String? = nil
+    /// The linked session's latest one-line activity while running.
+    var activity: String? = nil
+    var awaiting: Awaiting? = nil
+    var pr: PullRequest? = nil
+    /// The linked session's gateway usage and cost (see `RunUsage`).
+    var usage: RunUsage? = nil
+
     /// queued / dispatched / running hold work; the rest are finished.
     var isActive: Bool { ["queued", "dispatched", "running"].contains(state) }
+    var isFinished: Bool { ["merged", "failed", "cancelled"].contains(state) }
+    var isCloud: Bool { runner == "cloud" }
+
+    /// The pull request number, from `pr` or parsed from `prUrl` (…/pull/8).
+    var prNumber: Int? {
+        if let pr { return pr.number }
+        guard let prUrl, let range = prUrl.range(of: "/pull/") else { return nil }
+        return Int(prUrl[range.upperBound...].prefix { $0.isNumber })
+    }
+
+    var pullRequestURL: URL? { (pr?.url ?? prUrl).flatMap(URL.init(string:)) }
+}
+
+extension AgentTask {
+    enum CodingKeys: String, CodingKey {
+        case id, repo, issue, title, branch, source, state, sessionId, prUrl, error, createdAt, updatedAt
+        case runner, machine, startedAt, finishedAt, activity, awaiting, pr, usage
+    }
+
+    /// Tolerant decoding: the core fields are required, but a malformed or
+    /// unexpected newer field never drops the whole task from the queue.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        repo = try c.decode(Repo.self, forKey: .repo)
+        issue = (try? c.decodeIfPresent(Issue.self, forKey: .issue)) ?? nil
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        branch = (try? c.decode(String.self, forKey: .branch)) ?? ""
+        source = (try? c.decode(String.self, forKey: .source)) ?? "manual"
+        state = (try? c.decode(String.self, forKey: .state)) ?? "queued"
+        sessionId = (try? c.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
+        prUrl = (try? c.decodeIfPresent(String.self, forKey: .prUrl)) ?? nil
+        error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? nil
+        createdAt = (try? c.decode(String.self, forKey: .createdAt)) ?? ""
+        updatedAt = (try? c.decode(String.self, forKey: .updatedAt)) ?? ""
+        runner = (try? c.decodeIfPresent(String.self, forKey: .runner)) ?? nil
+        machine = (try? c.decodeIfPresent(String.self, forKey: .machine)) ?? nil
+        startedAt = (try? c.decodeIfPresent(String.self, forKey: .startedAt)) ?? nil
+        finishedAt = (try? c.decodeIfPresent(String.self, forKey: .finishedAt)) ?? nil
+        activity = (try? c.decodeIfPresent(String.self, forKey: .activity)) ?? nil
+        awaiting = (try? c.decodeIfPresent(Awaiting.self, forKey: .awaiting)) ?? nil
+        pr = (try? c.decodeIfPresent(PullRequest.self, forKey: .pr)) ?? nil
+        usage = (try? c.decodeIfPresent(RunUsage.self, forKey: .usage)) ?? nil
+    }
+}
+
+/// Outcome of POST /api/tasks/:id/merge.
+struct TaskMergeResult: Codable {
+    let ok: Bool?
+    let merged: Bool
+    let sha: String?
+    let url: String?
 }
 
 struct TaskList: Codable {

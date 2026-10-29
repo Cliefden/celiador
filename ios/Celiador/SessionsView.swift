@@ -30,7 +30,7 @@ struct SessionsView: View {
     var body: some View {
         content
         .background(CeliadorBackground())
-        .navigationTitle("Agents")
+        .navigationTitle("Runs")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { Haptics.tap(); showAccount = true } label: { Image(systemName: "person.circle") }

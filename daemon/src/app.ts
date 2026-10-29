@@ -1,0 +1,155 @@
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
+import { AGENT_MODEL, COMMIT, ENV, VERSION } from "./config";
+import { failureReport } from "./health";
+import { activeLimits } from "./agent/quota";
+import { prices } from "./agent/pricing";
+import { taskConcurrency } from "./tasks/dispatch";
+import { authMode, requireUser, type AppEnv } from "./auth";
+import { agentProxy } from "./anthropic";
+import { completeHandler } from "./complete/routes";
+import { anthropicGateway, anthropicModels } from "./gateway";
+import { pushRoutes } from "./push/routes";
+import { sessionRoutes } from "./sessions/routes";
+import { presenceRoutes } from "./presence/routes";
+import { chatRoutes, profileRoutes } from "./data/routes";
+import { meRoutes } from "./me/routes";
+import { adminRoutes } from "./admin/routes";
+import { accountRoutes } from "./account/routes";
+import { releaseRoutes, updateFeed } from "./releases/routes";
+import { extensionControl } from "./extensions/control";
+import { taskRoutes } from "./tasks/routes";
+import { githubWebhook } from "./tasks/github";
+import { githubAppRoutes } from "./github/app";
+import { openRoutes } from "./open/routes";
+
+/** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
+export function createApp(): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
+
+  // CORS for API clients. Safe with Bearer-token auth (no cookies → no CSRF
+  // surface) and required by the iOS/companion clients calling cross-origin.
+  app.use(
+    "/api/*",
+    cors({
+      origin: "*",
+      allowHeaders: ["Authorization", "Content-Type", "X-Celiador-Mirror"],
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    })
+  );
+
+  // Health — clients verify compatibility here; deploys verify `env` + `commit`
+  // (deploy/README.md's health gate). `name` kept for compatibility.
+  app.get("/api/health", (c) =>
+    c.json({
+      ok: true,
+      name: "celiador-daemon",
+      version: VERSION,
+      env: ENV,
+      commit: COMMIT || null,
+      pid: process.pid,
+      failures: failureReport(),
+    })
+  );
+
+  // What a client needs to boot: auth mode + Supabase client config.
+  app.get("/api/config", (c) =>
+    c.json({
+      authMode: authMode(),
+      supabaseUrl: process.env.SUPABASE_URL ?? null,
+      supabaseAnonKey: process.env.SUPABASE_ANON_KEY ?? null,
+    })
+  );
+
+  // The per-user limits the agent proxy enforces, public: the pricing page
+  // shows these, the signed-in account panel shows the same object via
+  // /api/me — "we publish the numbers we enforce". 0 means unlimited.
+  app.get("/api/limits", (c) =>
+    c.json(
+      {
+        plan: "early-access",
+        model: AGENT_MODEL,
+        limits: activeLimits(),
+        // Agent tasks (queued GitHub issues) running at once per user — published like the rest.
+        tasks: { concurrency: taskConcurrency() },
+        // The rate card a run's cost (Session.usage / Task.usage) is priced at.
+        prices: prices(),
+        window: "Daily budgets reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
+      },
+      200,
+      { "cache-control": "public, max-age=300" }
+    )
+  );
+
+  // Anthropic agent proxy (SSE). Auth handled inside (user JWT or shared token).
+  // Body capped so one request can't ship an unbounded conversation upstream.
+  app.post(
+    "/api/agent/messages",
+    bodyLimit({ maxSize: 8 * 1024 * 1024, onError: (c) => c.json({ error: "request too large" }, 413) }),
+    agentProxy
+  );
+
+  // First-party Anthropic-compatible gateway (SSE). Forwards the caller's own
+  // system prompt + tool schemas (the Claude Agent SDK's full toolset) while the
+  // daemon keeps key custody, model choice, token caps, auth and quota. A larger
+  // body cap than the locked proxy: SDK turns carry big tool_result payloads.
+  app.post(
+    "/api/anthropic/v1/messages",
+    bodyLimit({ maxSize: 32 * 1024 * 1024, onError: (c) => c.json({ error: "request too large" }, 413) }),
+    anthropicGateway
+  );
+  app.get("/api/anthropic/v1/models", anthropicModels);
+
+  // Inline completion ("Tab autocomplete") — small fast Haiku call, non-streaming.
+  // requireUser (per-user rate limited inside), independent of the agent proxy.
+  app.post("/api/complete", requireUser, completeHandler);
+
+  // Push registration + APNs.
+  app.route("/api/push", pushRoutes());
+
+  // Agent-session relay (editor = runner, phone = watcher).
+  app.route("/api/sessions", sessionRoutes());
+
+  // Editor presence: repos open in the user's editor(s), for the phone's
+  // "from your editor" repo picker.
+  app.route("/api/presence", presenceRoutes());
+
+  // Daemon-mediated app data (profiles + durable chat history) for both clients.
+  app.route("/api/profile", profileRoutes());
+  app.route("/api/chats", chatRoutes());
+
+  // Signed-in account summary: identity, plan, and current agent usage vs. quota.
+  app.route("/api/me", meRoutes());
+  app.route("/api/admin", adminRoutes());
+
+  // Account self-service (in-app account deletion — App Store 5.1.1(v)).
+  app.route("/api/account", accountRoutes());
+
+  // Editor releases: the built-in updater's feed (no auth — the updater sends
+  // none) and the public artifact downloads the site links to.
+  app.get("/api/update/:platform/:quality/:commit", updateFeed);
+  app.route("/api/releases", releaseRoutes());
+
+  // Extension control manifest (product.json extensionsGallery.controlUrl):
+  // Open VSX's malicious list + Celiador's own warnings. No auth.
+  app.get("/api/extensions/control", extensionControl);
+
+  // Agent task queue (agent-first plan, phase 1) + the GitHub webhook that feeds it.
+  // The webhook is signed (CELIADOR_GITHUB_WEBHOOK_SECRET) and carries no user auth.
+  app.route("/api/tasks", taskRoutes());
+  app.post("/api/github/webhook", githubWebhook);
+  // The Celiador GitHub App's one-time setup (manifest flow); see github/app.ts.
+  app.route("/api/github/app", githubAppRoutes());
+  // Deep-link bounce pages for the GitHub comment's links (no auth, no task data).
+  app.route("/api/open", openRoutes());
+
+  app.notFound((c) => c.json({ error: "Unknown endpoint" }, 404));
+  // Log the detail server-side; never leak raw (e.g. pg) error text to clients.
+  app.onError((err, c) => {
+    console.error("[http] unhandled:", err instanceof Error ? err.stack ?? err.message : err);
+    return c.json({ error: "Internal server error" }, 500);
+  });
+
+  return app;
+}

@@ -28,6 +28,11 @@ enum Theme {
     static let red = Color(red: 0.930, green: 0.400, blue: 0.400)
     /// Diff "added" lines and merged work: a success green kept semantic, not brand.
     static let added = Color(red: 0.282, green: 0.741, blue: 0.467)
+    /// "Ready to merge": the queue's green bucket and the Approve-and-merge call
+    /// to action. The same semantic success green as `added`, named for its role.
+    static let ready = added
+    /// Text/icon on a `ready` or `attention` fill (dark, so it reads on both).
+    static let onFill = Color(red: 0.06, green: 0.08, blue: 0.07)
 
     /// Older call sites (widgets) still say celadon; they get the accent.
     static let celadon = accent

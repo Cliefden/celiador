@@ -11,7 +11,7 @@ final class Api {
     ///   1. `CELIADOR_URL` env var (dev override, e.g. an Xcode scheme in the simulator)
     ///   2. `CELIADOR_DAEMON_URL` from Info.plist (set per build channel via the xcconfig)
     ///   3. prod fallback
-    /// So the Dev/Staging/Release configs point the app at the matching daemon
+    /// So the Dev/Test/Release configs point the app at the matching daemon
     /// environment without a code change. See celiador-ios/Config/*.xcconfig.
     let baseURL: URL = {
         let fromEnv = ProcessInfo.processInfo.environment["CELIADOR_URL"]
@@ -154,8 +154,8 @@ final class Api {
 
     /// The deep link the magic-link + OAuth flows return to. Tokens arrive in the
     /// URL fragment (implicit flow); completed by `handleAuthCallback`. Must be in
-    /// GoTrue's `GOTRUE_URI_ALLOW_LIST`. Channel-aware (see `AppScheme`) so a Dev /
-    /// Staging build returns to its own app, not the prod `celiador://`.
+    /// GoTrue's `GOTRUE_URI_ALLOW_LIST`. Channel-aware (see `AppScheme`) so a Dev
+    /// build returns to its own app, not the prod `celiador://`.
     static var authRedirect: String { AppScheme.authCallback }
 
     /// Email a one-tap magic link. Opening it returns to `authRedirect` with tokens.
@@ -381,6 +381,21 @@ final class Api {
 
     func cancelTask(_ id: String) async throws {
         _ = try await request(TaskEnvelope.self, path: "api/tasks/\(id)/cancel", method: "POST")
+    }
+
+    /// "Approve and merge" a task's pull request. The daemon merges via the GitHub
+    /// App when it's installed on the repo, else relays `git.merge` to the task's
+    /// editor; the task moves to `merged`. A refusal (conflicts, failing checks)
+    /// comes back as a 409 with the reason. An older daemon without the endpoint
+    /// answers 404 — callers fall back to `gitMergePullRequest(sessionId:)`.
+    func mergeTask(_ id: String, method: String = "merge") async throws -> TaskMergeResult {
+        try await request(TaskMergeResult.self, path: "api/tasks/\(id)/merge", method: "POST", body: ["method": method])
+    }
+
+    /// "Send it back with a follow-up": relays an instruction to the task's linked
+    /// session (409 when it has none or the editor is offline; 404 on an older daemon).
+    func followUpTask(_ id: String, text: String) async throws {
+        _ = try await request(OkEnvelope.self, path: "api/tasks/\(id)/followup", method: "POST", body: ["text": text])
     }
 
     /// Make (or stop making) this repo's GitHub issues labelled `celiador` into tasks for you.
