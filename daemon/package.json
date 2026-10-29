@@ -1,6 +1,6 @@
 {
   "name": "celiador-daemon",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Celiador backend daemon — Anthropic agent proxy, Supabase auth, and APNs push for the Celiador editor (celiador-ai) and iOS clients.",
