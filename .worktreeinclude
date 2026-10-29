@@ -1,4 +1,4 @@
 # Gitignored local files every new worktree needs, copied from the main
 # checkout by `wb` (never over a file the worktree already has).
-/.env
+/daemon/.env
 /.claude/settings.local.json

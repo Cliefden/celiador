@@ -1,0 +1,184 @@
+name: Celiador
+options:
+  bundleIdPrefix: ai.celiador
+  deploymentTarget:
+    iOS: "18.0"
+    watchOS: "10.0"
+  createIntermediateGroups: true
+# Three build channels pointing at the matching daemon environment (see
+# ../ENVIRONMENTS.md). The xcconfigs define CELIADOR_DAEMON_URL +
+# BUNDLE_ID_SUFFIX + APP_NAME + URL_SCHEME; targets below reference those so all
+# Dev installs beside the prod app; Test IS the prod app (same bundle id) pointed
+# at test.celiador.ai — see CHANNELS.md. Build with `-configuration Test|Dev`.
+configs:
+  Dev: debug
+  Test: release
+  Release: release
+configFiles:
+  Dev: Config/Dev.xcconfig
+  Test: Config/Test.xcconfig
+  Release: Config/Prod.xcconfig
+settings:
+  base:
+    DEVELOPMENT_TEAM: XPNFDWPFAV
+packages:
+  # Product telemetry (Celiador/Telemetry.swift) — app target only; Shared/
+  # stays dependency-free for the widgets.
+  TelemetryDeck:
+    url: https://github.com/TelemetryDeck/SwiftSDK
+    exactVersion: 2.14.2
+targets:
+  Celiador:
+    type: application
+    platform: iOS
+    sources: [Shared, Celiador]
+    dependencies:
+      - target: CeliadorWidgets
+      - package: TelemetryDeck
+      # CeliadorWatch dropped from v1 — re-add to ship the watchOS app.
+    info:
+      path: Celiador/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: $(APP_NAME)
+        CELIADOR_DAEMON_URL: $(CELIADOR_DAEMON_URL)
+        CELIADOR_URL_SCHEME: $(URL_SCHEME)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        NSSupportsLiveActivities: true
+        UIBackgroundModes: [remote-notification]
+        CFBundleURLTypes:
+          - CFBundleURLName: ai.celiador.companion$(BUNDLE_ID_SUFFIX)
+            CFBundleURLSchemes: [$(URL_SCHEME)]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.celiador.companion$(BUNDLE_ID_SUFFIX)
+        # Automatic signing in EVERY config: Xcode Cloud requires it ("Allow Xcode
+        # to manage signing for you" — Apple, Setting up your project to use Xcode
+        # Cloud) and signs App Store archives with cloud-managed distribution
+        # certificates. Local device runs get the development cert + profile the
+        # same way. The App Store profiles under signing/ are not referenced here;
+        # see TESTFLIGHT.md.
+        CODE_SIGN_STYLE: Automatic
+        # aps-environment: Dev keeps development; Test/Release use production
+        # (distribution builds are only authorized for production push).
+        CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "0.2.1"
+        CURRENT_PROJECT_VERSION: "1"
+      configs:
+        Test:
+          CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.production.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Celiador/Celiador.production.entitlements
+    # Schemes are defined at the top level (one per channel) — see `schemes:`.
+  CeliadorWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - CeliadorWidgets
+      - path: Shared/Theme.swift
+      - path: Shared/WidgetShared.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.celiador.companion$(BUNDLE_ID_SUFFIX).widgets
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: CeliadorWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: CeliadorWidgets/CeliadorWidgets.entitlements
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "0.2.1"
+        CURRENT_PROJECT_VERSION: "1"
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    scheme: {}
+  CeliadorWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - Watch
+      - path: Shared/Api.swift
+      - path: Shared/Models.swift
+      - path: Shared/Events.swift
+      - path: Shared/Theme.swift
+      - path: Shared/WatchSync.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.celiador.companion$(BUNDLE_ID_SUFFIX).watchkitapp
+        INFOPLIST_FILE: Watch/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "4"
+        MARKETING_VERSION: "0.2.1"
+        CURRENT_PROJECT_VERSION: "1"
+    scheme: {}
+
+# One scheme per channel (CHANNELS.md / TESTFLIGHT.md). Xcode Cloud archives
+# with the scheme's archive configuration, so the scheme is how a workflow
+# selects a channel: "Dev" archives `Celiador Dev`, "Test" archives
+# `Celiador Test`, "Archive - App Store" archives `Celiador`.
+#
+# Running from Xcode always builds the Dev config (the debug build of the Dev
+# app). Api.swift reads CELIADOR_URL first (overrides CELIADOR_DAEMON_URL from
+# the xcconfig); scheme env vars apply only when launched FROM Xcode — a
+# standalone relaunch falls back to the xcconfig.
+schemes:
+  Celiador:
+    build:
+      targets:
+        Celiador: all
+    run:
+      config: Dev
+      # The long-standing dogfooding setup: run against the live prod daemon.
+      # Disable in Edit Scheme to use the Dev xcconfig's dev.celiador.ai.
+      environmentVariables:
+        - variable: CELIADOR_URL
+          value: https://celiador.ai
+          isEnabled: true
+    test:
+      config: Dev
+    profile:
+      config: Release
+    analyze:
+      config: Dev
+    archive:
+      config: Release
+  Celiador Dev:
+    build:
+      targets:
+        Celiador: all
+    run:
+      config: Dev
+      # Enable for a daemon on this Mac (simulator only — on a phone,
+      # localhost is the phone).
+      environmentVariables:
+        - variable: CELIADOR_URL
+          value: http://localhost:4661
+          isEnabled: false
+    test:
+      config: Dev
+    profile:
+      config: Dev
+    analyze:
+      config: Dev
+    archive:
+      config: Dev
+  Celiador Test:
+    build:
+      targets:
+        Celiador: all
+    run:
+      config: Test
+    test:
+      config: Test
+    profile:
+      config: Test
+    analyze:
+      config: Test
+    archive:
+      config: Test

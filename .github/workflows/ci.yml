@@ -1,19 +1,31 @@
 name: CI
 
-# Validate the daemon: typecheck + the offline smoke test (gateway + session
-# relay + server runner, no network / no real key). Runs on pull requests and
-# on pushes to other branches; the Deploy workflow calls it for every push to
-# main and every release tag, so nothing reaches an environment unchecked.
+# Validate the daemon (daemon/): typecheck + the offline smoke test (gateway +
+# session relay + server runner, no network / no real key). Runs on pull
+# requests and pushes to other branches that touch the daemon; the Deploy
+# workflow calls it for every push to main and every release tag, so nothing
+# reaches an environment unchecked. The site builds in its own deploy; the iOS
+# app is built by Xcode Cloud.
 on:
   pull_request:
+    paths:
+      - daemon/**
+      - .github/workflows/ci.yml
   push:
     branches-ignore: [main]
+    paths:
+      - daemon/**
+      - .github/workflows/ci.yml
   workflow_call:
 
 # One in-flight run per ref; a push and its PR share a group so we don't run twice.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
+
+defaults:
+  run:
+    working-directory: daemon
 
 jobs:
   check:
@@ -31,6 +43,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+          cache-dependency-path: daemon/package-lock.json
 
       - run: npm ci
 

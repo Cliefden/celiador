@@ -1,16 +1,17 @@
 # Releasing Celiador
 
-The daemon is the **release train**: its `vX.Y.Z` tags are the Celiador
-releases, and they name what the test and prod environments run
-(`ENVIRONMENTS.md`). The editor and the iOS app have their own version numbers
-(VS Code's, and a numeric App Store one) and follow the same triggers in their
-own repos: `main` → dev channel, a daemon release tag → test channel, manual →
-prod.
+This repository is the **release train**: a `vX.Y.Z` tag is a Celiador release
+and names what the test and prod environments run (`ENVIRONMENTS.md`). One
+version covers the daemon (`daemon/package.json`) and the iOS app
+(`ios/project.yml`, `MARKETING_VERSION`); the site has no version of its own and
+ships with the tag. The editor has VS Code's version and follows the same
+triggers in its own repo: `main` → dev channel, a release tag → test channel,
+manual → prod.
 
 ## What the number means
 
 Below 1.0.0 the usual 0.x convention applies: a **breaking** client-facing
-change (`docs/CLIENT_INTEGRATION.md` — an endpoint, field or event removed or
+change (`daemon/docs/CLIENT_INTEGRATION.md` — an endpoint, field or event removed or
 renamed, a changed meaning, a new required request field) is a **MINOR** bump;
 additive changes and fixes are **PATCH** releases. Going to 1.0.0 is a
 deliberate decision.
@@ -25,17 +26,21 @@ scripts/release.sh patch        # or minor | major | an exact 0.3.0
 ```
 
 The script refuses unless `main` is clean and equal to `origin/main` and the
-tag does not exist yet. It bumps `package.json` + `package-lock.json`, rolls
-`CHANGELOG.md`, commits `Release vX.Y.Z` and creates an annotated tag. It
-**never pushes**. Then, in two stages:
+tag does not exist yet, and the daemon and the app agree on the current version.
+It bumps `daemon/package.json` + `package-lock.json` and every
+`MARKETING_VERSION` in `ios/project.yml`, rolls `CHANGELOG.md`, commits
+`Release vX.Y.Z` and creates an annotated tag. It **never pushes**. Then, in
+two stages:
 
 ```bash
-git push origin main      # deploys dev — wait for the run to go green
-git push origin vX.Y.Z    # deploys test
+git push origin main      # daemon + web → dev; the Dev app builds — wait for green
+git push origin vX.Y.Z    # daemon + web → test; the iOS Test build → TestFlight
 ```
 
 Never `--follow-tags`: both deploys would run at once on the same box. The tag
-deploy checks that the tag is on `main` and matches `package.json`.
+deploy checks that the tag is on `main` and matches `daemon/package.json`.
+Pushes to `main` only deploy what they touch (`daemon/**` → the daemon,
+`web/**` → the site, `ios/` → the Dev app); a tag deploys everything.
 
 ## Environments
 
@@ -45,16 +50,16 @@ deploy checks that the tag is on `main` and matches `package.json`.
 | test | a `vX.Y.Z` tag (with migrations) | test.celiador.ai |
 | prod | manual dispatch only, behind the `prod` Environment's required reviewer; refused until the repository variable `PROD_ENABLED` is `true` (the prod cutover, `ENVIRONMENTS.md`) | celiador.ai |
 
-Rollback is a redeploy of the previous tag, or `deploy/deploy.sh <env>` from a
-checkout of it.
+Rollback is a redeploy of the previous tag, or `daemon/deploy/deploy.sh <env>`
+from a checkout of it.
 
 ## Manual deploys
 
 ```bash
-gh workflow run deploy.yml -R Cliefden/daemon --ref v0.2.0 -f env=test            # roll test back to a release
-gh workflow run deploy.yml -R Cliefden/daemon --ref v0.2.0 -f env=prod -f migrate=true   # prod (asks the reviewer)
-gh workflow run deploy.yml -R Cliefden/daemon --ref main   -f env=dev             # redeploy dev from main
-gh run watch -R Cliefden/daemon "$(gh run list -R Cliefden/daemon -w Deploy -L 1 --json databaseId -q '.[0].databaseId')"
+gh workflow run deploy.yml -R Cliefden/celiador --ref v0.2.0 -f env=test            # roll test back to a release
+gh workflow run deploy.yml -R Cliefden/celiador --ref v0.2.0 -f env=prod -f migrate=true   # prod (asks the reviewer)
+gh workflow run deploy.yml -R Cliefden/celiador --ref main   -f env=dev             # redeploy dev from main
+gh run watch -R Cliefden/celiador "$(gh run list -R Cliefden/celiador -w Deploy -L 1 --json databaseId -q '.[0].databaseId')"
 ```
 
 Or in GitHub: **Actions → Deploy → Run workflow**, choosing the tag or branch
@@ -72,17 +77,19 @@ Migrations only go forward, so rolling back code leaves the schema as it is.
 
 | Workflow | Runs on | Does |
 | --- | --- | --- |
-| `ci.yml` | pull requests, pushes to other branches, and from Deploy | `npm run typecheck` + `npm run smoke` on Node 20 and 22 |
-| `deploy.yml` | `main` pushes, `vX.Y.Z` tags, manual runs | CI, then rsync the checkout to `~/envs/<env>/daemon`, `npm ci`, `BUILD_INFO`, migrate, restart `celiador-daemon@<env>`, and a health gate: `/api/health` through Caddy must report this `env` and this `commit`. Mails the result. |
+| `ci.yml` | pull requests and pushes to other branches touching `daemon/`, and from Deploy daemon | `npm run typecheck` + `npm run smoke` in `daemon/` on Node 20 and 22 |
+| `deploy.yml` (Deploy daemon) | `main` pushes touching `daemon/`, `vX.Y.Z` tags, manual runs | CI, then rsync `daemon/` to `~/envs/<env>/daemon`, `npm ci`, `BUILD_INFO`, migrate, restart `celiador-daemon@<env>`, and a health gate: `/api/health` through Caddy must report this `env` and this `commit`. Mails the result. |
+| `web-deploy.yml` (Deploy web) | `main` pushes touching `web/`, `vX.Y.Z` tags, manual runs | `next build`, rsync `web/` + `.next` to `~/envs/<env>/web`, `npm ci`, restart `celiador-web@<env>`, check the page through the public host. Mails the result. |
+| Xcode Cloud (`ios/TESTFLIGHT.md`) | `main` pushes touching `ios/` → Dev app; `v*` tags → Test build; manual → App Store | Not GitHub Actions; the products are bound to this repository. |
 
 Secrets stay on the box (`~/envs/<env>/daemon/.env`, written by
-`deploy/provision-env.sh`); the workflow never writes them. This differs from
+`daemon/deploy/provision-env.sh`); the workflow never writes them. This differs from
 Celindor, which renders its secrets file from GitHub on every deploy — here the
 JWT secret, the database password and the anon key are generated on the box.
 
 ## One-time setup
 
-1. **GitHub Environments** `dev`, `test`, `prod` on `Cliefden/daemon` (done
+1. **GitHub Environments** `dev`, `test`, `prod` on `Cliefden/celiador` (done
    2026-10-28; `prod` has Cliefden as required reviewer). Each holds:
 
    | Secret | Value |
@@ -101,7 +108,7 @@ JWT secret, the database password and the anon key are generated on the box.
    The deploy needs passwordless `sudo systemctl restart celiador-daemon@<env>`
    (and `celiador-web@<env>` for the site), which `stefan` already has.
    Rotate: `ssh-keygen -t ed25519 -C celiador-deploy@github-actions`, replace
-   `VPS_SSH_KEY` in every Environment of both repos, swap the line in
+   `VPS_SSH_KEY` in every Environment, swap the line in
    `authorized_keys`.
 
 3. **Mail.** Repository secrets `SMTP_USER` (`stefan@celiador.ai`) and
@@ -111,7 +118,7 @@ JWT secret, the database password and the anon key are generated on the box.
    (and GitHub mails the actor on failed runs anyway).
 
 4. **Prod.** After the cutover to `celiador-daemon@prod` (`ENVIRONMENTS.md`):
-   `gh variable set PROD_ENABLED --body true -R Cliefden/daemon`.
+   `gh variable set PROD_ENABLED --body true -R Cliefden/celiador`.
 
 `main` is not protected: `scripts/release.sh` commits to it directly, and a
 push to it deploys dev, as on Celindor. Feature work goes through pull

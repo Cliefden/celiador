@@ -1,0 +1,22 @@
+Celiador for iPhone is the remote control for coding agents that run on your own computer.
+
+Label a GitHub issue, and an agent picks it up in the Celiador editor on your Mac (or in VS Code or Cursor with the Celiador Remote extension). It works in its own git branch, opens a pull request when it is done, and you review and merge from your phone. Your code never leaves your machine; the phone sees what the agent sees through a relay you sign in to.
+
+QUEUE
+See every issue and task waiting, running or finished. Add a task by hand. Swipe a finished one to merge its pull request.
+
+LIVE RUNS
+Watch the agent work in real time: the files it reads, the commands it runs, what it writes. Send a follow-up, answer its questions, approve or deny a risky command, or stop it.
+
+REVIEW
+Read the diff file by file, discard what you do not want, commit the rest, push, and open the pull request. Browse and edit files in the working copy.
+
+NOTIFICATIONS
+A push when an agent needs you or a run finishes, with a Live Activity on the lock screen while it works.
+
+ACCOUNT
+Today's usage against your plan, and how many agent pull requests you have running, open and merged this week.
+
+Celiador needs a Celiador account (free during early access) and the Celiador editor, or VS Code or Cursor with the Celiador Remote extension, running on your computer. Agents use Claude; usage goes through celiador.ai with your account's limits, and no API key is stored on your phone or your computer.
+
+Open source: github.com/Cliefden
