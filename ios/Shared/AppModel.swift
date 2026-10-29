@@ -145,7 +145,7 @@ final class AppModel {
         ]
         tasks = DemoData.tasks
         taskConcurrency = 3
-        watchedRepos = ["https://github.com/Cliefden/celiador-editor.git", "https://github.com/Cliefden/daemon.git"]
+        watchedRepos = ["https://github.com/Cliefden/celiador-editor.git", "https://github.com/Cliefden/celiador.git"]
         tasksLoaded = true
         // CELIADOR_UI_DEMO=run opens the One-run screen for the ready task.
         if DemoData.mode == "run" { queuePath = [.task(DemoData.readyTaskId)] }

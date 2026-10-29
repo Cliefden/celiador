@@ -2,14 +2,14 @@
 # Provision the marketing site for ONE environment (test | dev | prod) on the
 # box: ~/envs/<env>/web.env, a first build of this checkout, and the
 # celiador-web@<env> unit. Idempotent. Run ON the box as `stefan`, from a copy
-# of the celiador-web checkout you want the environment to run.
+# of the repo's web/ tree you want the environment to run.
 #
 #   ./deploy/provision-web.sh test
 #   ./deploy/provision-web.sh dev
 #
 # Prod keeps the plain `celiador-web` unit (~/celiador-web, :3100) until its
 # cutover; `provision-web.sh prod` prepares ~/envs/prod/web beside it without
-# stopping anything (daemon/ENVIRONMENTS.md § Prod cutover).
+# stopping anything (ENVIRONMENTS.md at the repo root, § Prod cutover).
 set -euo pipefail
 
 ENV="${1:-}"

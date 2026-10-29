@@ -1,10 +1,14 @@
-name: Deploy
+name: Deploy daemon
 
-# One workflow deploys every environment to the box (ENVIRONMENTS.md):
+# One workflow deploys the daemon (daemon/) to every environment on the box
+# (ENVIRONMENTS.md); the site has web-deploy.yml, the iOS app Xcode Cloud:
 #
-#   push to main         → CI, deploy dev (with migrations)
+#   push to main         → CI, deploy dev (with migrations) — only when the
+#                          push touches daemon/ or these workflows
 #   push tag vX.Y.Z      → CI, deploy test (with migrations); the tag must be
-#                          the version package.json carries and sit on main
+#                          the version daemon/package.json carries and sit on
+#                          main (path filters never apply to tags: a release
+#                          deploys everything)
 #   workflow_dispatch    → deploy any environment from the chosen ref (Run
 #                          workflow → "Use workflow from" picks the tag or
 #                          branch); prod is refused unless the repository
@@ -14,11 +18,11 @@ name: Deploy
 # Cut releases with scripts/release.sh, push main first and let it go green,
 # then push the tag (RELEASING.md). Rollback = dispatch with the previous tag.
 #
-# The daemon has no build step (tsx): the runner rsyncs the checkout to
+# The daemon has no build step (tsx): the runner rsyncs daemon/ to
 # ~/envs/<env>/daemon over the deploy key, installs runtime deps there, stamps
 # BUILD_INFO, migrates, restarts the env's unit and gates on /api/health
 # reporting this env and this commit. Secrets stay on the box
-# (~/envs/<env>/daemon/.env, written by deploy/provision-env.sh), unlike
+# (~/envs/<env>/daemon/.env, written by daemon/deploy/provision-env.sh), unlike
 # Celindor's render-from-GitHub: the JWT secret, DB password and anon key are
 # generated there.
 #
@@ -31,6 +35,10 @@ name: Deploy
 on:
   push:
     branches: [main]
+    paths:
+      - daemon/**
+      - .github/workflows/deploy.yml
+      - .github/workflows/ci.yml
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
@@ -50,8 +58,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # One deploy per environment at a time; a second one waits, never cancels.
-  group: deploy-${{ inputs.env || (github.ref_type == 'tag' && 'test' || 'dev') }}
+  # One daemon deploy per environment at a time; a second one waits, never cancels.
+  group: deploy-daemon-${{ inputs.env || (github.ref_type == 'tag' && 'test' || 'dev') }}
   cancel-in-progress: false
 
 jobs:
@@ -74,13 +82,13 @@ jobs:
           PROD_ENABLED: ${{ vars.PROD_ENABLED }}
         run: |
           set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./daemon/package.json').version")"
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             env="$INPUT_ENV"; migrate="$INPUT_MIGRATE"
           elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
             env=test; migrate=true
             [[ "${GITHUB_REF_NAME#v}" == "$version" ]] ||
-              { echo "::error::tag $GITHUB_REF_NAME but package.json says $version — cut releases with scripts/release.sh"; exit 1; }
+              { echo "::error::tag $GITHUB_REF_NAME but daemon/package.json says $version — cut releases with scripts/release.sh"; exit 1; }
             git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
               { echo "::error::$GITHUB_REF_NAME is not on main — push main first, then the tag"; exit 1; }
           else
@@ -97,7 +105,7 @@ jobs:
             exit 1
           fi
           { echo "env=$env"; echo "host=$host"; echo "port=$port"; echo "version=$version"; echo "migrate=$migrate"; } >> "$GITHUB_OUTPUT"
-          echo "::notice::deploying $version (${GITHUB_SHA::7}) to $env, migrate=$migrate"
+          echo "::notice::deploying daemon $version (${GITHUB_SHA::7}) to $env, migrate=$migrate"
 
   ci:
     needs: plan
@@ -114,6 +122,9 @@ jobs:
       HOST: ${{ needs.plan.outputs.host }}
       PORT: ${{ needs.plan.outputs.port }}
       MIGRATE: ${{ needs.plan.outputs.migrate }}
+    defaults:
+      run:
+        working-directory: daemon
     steps:
       - uses: actions/checkout@v4
 

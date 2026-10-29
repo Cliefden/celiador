@@ -1,10 +1,15 @@
 # Changelog
 
-User-visible changes to the Celiador daemon, the release train (`RELEASING.md`).
-Record changes under **Unreleased** as they merge; `scripts/release.sh` rolls
-the section into a version on release.
+User-visible changes to Celiador — the daemon, the iPhone app and the site share
+one release train (`RELEASING.md`). Record changes under **Unreleased** as they
+merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
+
+- One repository: `Cliefden/daemon` is now `Cliefden/celiador` and holds the
+  daemon (`daemon/`), the iPhone app (`ios/`, formerly `celiador-ios`) and the
+  site (`web/`, formerly `celiador-web`) with their full history. One
+  `vX.Y.Z` tag releases all three; the iOS version now equals the daemon's.
 
 ## [0.2.0] - 2026-10-28
 

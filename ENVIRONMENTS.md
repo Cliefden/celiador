@@ -3,9 +3,9 @@
 Three isolated environments on the one box, the way Celindor runs its own
 (`Celindor/celindor/RELEASING.md`): each has its own daemon instance, its own
 Postgres, its own GoTrue, its own secrets and its own host name. The daemon is
-fully env-driven (`src/config.ts`, `src/auth.ts`), so an environment is
-configuration + process layout, not forked code. The clients have matching build
-channels: `celiador-editor/CHANNELS.md`, `celiador-ios/CHANNELS.md`.
+fully env-driven (`daemon/src/config.ts`, `daemon/src/auth.ts`), so an environment
+is configuration + process layout, not forked code. The clients have matching
+build channels: `ios/CHANNELS.md` here, `CHANNELS.md` in `celiador-editor`.
 
 **The invariant that must always hold:** a **dev or test token can never
 authenticate against prod.** Guaranteed by a distinct `SUPABASE_JWT_SECRET` (and
@@ -21,7 +21,7 @@ a distinct GoTrue + database) per environment.
 | **local** | `localhost:4661` | `npm run dev` (`wb dev`) | — | optional | none (`CELIADOR_ALLOW_NO_AUTH=1`) | `npm run dev` `:3000` | your key | you |
 
 Every port binds to loopback; Caddy is the only public entry and routes by host
-name (`deploy/Caddyfile.example`): `/auth/v1/*` → that env's GoTrue (prefix
+name (`daemon/deploy/Caddyfile.example`): `/auth/v1/*` → that env's GoTrue (prefix
 stripped, as kong does for prod), `/api/*` + `/p/*` → that env's daemon, `/` →
 that env's web preview. DNS A records for `dev.` and `test.` exist since
 2026-10-28.
@@ -30,13 +30,13 @@ that env's web preview. DNS A records for `dev.` and `test.` exist since
 
 ```
 ~/envs/<env>/compose.env       the compose stack's settings + secrets (600)
-~/envs/<env>/deploy/           a copy of deploy/ (compose.yml, db/roles.sql)
+~/envs/<env>/deploy/           a copy of daemon/deploy/ (compose.yml, db/roles.sql)
 ~/envs/<env>/secrets/          generated: jwt, dbpw, anon (600)
-~/envs/<env>/daemon/           the daemon checkout for this env + its .env + BUILD_INFO
-~/envs/<env>/web/              the marketing-site checkout for this env (celiador-web)
+~/envs/<env>/daemon/           this repo's daemon/ for this env + its .env + BUILD_INFO
+~/envs/<env>/web/              this repo's web/ for this env (the marketing site)
 ```
 
-Repo artifacts backing this:
+Repo artifacts backing this (all under `daemon/`):
 
 - `.env.{prod,test,dev}.example` — per-env key templates (no secrets).
 - `deploy/compose.yml` + `deploy/db/{roles,auth-owner}.sql` — one non-prod
@@ -110,17 +110,20 @@ scripts/release.sh patch|minor|major  → tag vX.Y.Z → push → test (automati
 Actions → Deploy → env=prod tag=vX.Y.Z → prod  (manual, required reviewer)
 ```
 
-The daemon is the release train: its `vX.Y.Z` tags are the Celiador releases
-and name what test and prod run. Rollback is a redeploy of the previous tag.
-Editor and iOS builds follow the same triggers in their own repos (`main` →
-dev channel, tag → test channel, manual → prod). `RELEASING.md` has the
-workflow (`.github/workflows/deploy.yml`) and the GitHub setup behind it;
-`deploy/deploy.sh <env>` does the same steps by hand from a laptop.
+One release train for this repository: a `vX.Y.Z` tag is a Celiador release
+and names what test and prod run — the daemon and the site deploy to test
+(`.github/workflows/deploy.yml`, `web-deploy.yml`) and Xcode Cloud archives the
+iOS Test scheme to TestFlight (`ios/TESTFLIGHT.md`), all off the one tag.
+Rollback is a redeploy of the previous tag. The editor has VS Code's version
+and follows the same triggers in its own repo (`main` → dev channel, tag →
+test channel, manual → prod). `RELEASING.md` has the workflows and the GitHub
+setup behind them; `daemon/deploy/deploy.sh <env>` does the daemon's steps by
+hand from a laptop.
 
 ## First-time box setup (once)
 
-On the box, as `stefan`, from a copy of the daemon checkout to deploy
-(`rsync` it to e.g. `~/daemon-main` first; the box has no GitHub credentials):
+On the box, as `stefan`, from a copy of this repo's `daemon/` tree (`rsync` it
+to e.g. `~/daemon-main` first; the box has no GitHub credentials):
 
 ```sh
 cd ~/daemon-main/deploy

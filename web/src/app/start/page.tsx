@@ -191,8 +191,8 @@ export default async function StartPage() {
           <p className="text-xs text-fog-dim">
             The code is open source (Apache-2.0): the{" "}
             <a href="https://github.com/Cliefden/celiador-editor" className="underline hover:text-fog" target="_blank" rel="noreferrer">editor</a>,{" "}
-            the <a href="https://github.com/Cliefden/daemon" className="underline hover:text-fog" target="_blank" rel="noreferrer">server</a> and{" "}
-            the <a href="https://github.com/Cliefden/celiador-ios" className="underline hover:text-fog" target="_blank" rel="noreferrer">iPhone app</a>. What we do with your code and data is on the{" "}
+            the <a href="https://github.com/Cliefden/celiador/tree/main/daemon" className="underline hover:text-fog" target="_blank" rel="noreferrer">server</a> and{" "}
+            the <a href="https://github.com/Cliefden/celiador/tree/main/ios" className="underline hover:text-fog" target="_blank" rel="noreferrer">iPhone app</a>. What we do with your code and data is on the{" "}
             <Link href="/privacy" className="underline hover:text-fog">privacy page</Link>.
           </p>
         </div>

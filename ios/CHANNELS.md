@@ -1,7 +1,7 @@
 # iOS build channels — dev / test / prod
 
 Two App Store Connect apps, the way Celindor does it (`Celindor/celindor/RELEASING.md`
-§ App Store), pointed at the daemon environments in `daemon/ENVIRONMENTS.md`.
+§ App Store), pointed at the daemon environments in `../ENVIRONMENTS.md`.
 Three Xcode build configurations, defined in `project.yml` (`configs` +
 `configFiles`) and `Config/*.xcconfig`, each archived by its own scheme —
 Xcode Cloud archives with the scheme's archive configuration, so the scheme is

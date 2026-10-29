@@ -1,4 +1,4 @@
-# celiador-daemon (`Cliefden/daemon`)
+# The Celiador daemon (`daemon/` in `Cliefden/celiador`)
 
 Celiador is the loop: label a GitHub issue `celiador` and an agent runs it in its
 own git worktree, comments on the issue, opens a pull request that closes it, and

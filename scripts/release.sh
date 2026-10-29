@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Cut a Celiador release: the daemon is the release train (ENVIRONMENTS.md).
+# Cut a Celiador release: one version for the daemon and the iOS app, one tag
+# (RELEASING.md, ENVIRONMENTS.md). The editor has VS Code's version and releases
+# on its own.
 #
 #   scripts/release.sh <X.Y.Z | major | minor | patch> [--local]
 #
@@ -9,19 +11,22 @@
 #
 # What it does, in order, refusing at the first problem:
 #   1. clean main, equal to origin/main
-#   2. the new version is greater, and its tag does not exist yet
-#   3. bump package.json + package-lock.json (npm version, no git tag)
+#   2. the daemon (daemon/package.json) and the app (ios/project.yml
+#      MARKETING_VERSION) agree on the current version; the new version is
+#      greater and its tag does not exist yet
+#   3. bump daemon/package.json + package-lock.json (npm version, no git tag)
+#      and every MARKETING_VERSION in ios/project.yml
 #   4. roll CHANGELOG.md: "## [Unreleased]" becomes "## [X.Y.Z] - <date>"
 #   5. commit "Release vX.Y.Z" and create an annotated tag
 #
-# It never pushes. Then, in two stages (RELEASING.md):
-#   git push origin main        # deploys dev — wait for the run to go green
-#   git push origin vX.Y.Z      # deploys test
+# It never pushes. Then, in two stages:
+#   git push origin main        # deploys daemon + web to dev; Dev app build
+#   git push origin vX.Y.Z      # deploys daemon + web to test; Test app → TestFlight
 # Never --follow-tags: both deploys would run at once on the same box.
 #
 # Below 1.0.0 the usual 0.x convention applies: a breaking client-facing change
-# (docs/CLIENT_INTEGRATION.md) is a MINOR bump, additive changes and fixes are
-# PATCH releases. Going to 1.0.0 is a deliberate decision.
+# (daemon/docs/CLIENT_INTEGRATION.md) is a MINOR bump, additive changes and fixes
+# are PATCH releases. Going to 1.0.0 is a deliberate decision.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,10 +48,18 @@ if [[ "$local_only" == false ]]; then
     die "HEAD is not origin/main — push or pull first"
 fi
 
-# ── 2. next version ──────────────────────────────────────────────────────────
-current="$(node -p "require('./package.json').version")"
-[[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || die "package.json version '$current' is not X.Y.Z"
+# ── 2. current + next version ────────────────────────────────────────────────
+current="$(node -p "require('./daemon/package.json').version")"
+[[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || die "daemon/package.json version '$current' is not X.Y.Z"
 major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+
+ios_versions="$(sed -n 's/^ *MARKETING_VERSION: *"\([^"]*\)".*/\1/p' ios/project.yml | sort -u)"
+[[ -n "$ios_versions" ]] || die "no MARKETING_VERSION in ios/project.yml"
+[[ "$(printf '%s\n' "$ios_versions" | wc -l | tr -d ' ')" == 1 ]] ||
+  die "ios/project.yml targets disagree on MARKETING_VERSION: $(printf '%s ' $ios_versions)"
+[[ "$ios_versions" == "$current" ]] ||
+  die "ios/project.yml says $ios_versions but daemon/package.json says $current — align them first (one version for the train)"
+
 case "$target" in
   major) next="$((major + 1)).0.0" ;;
   minor) next="$major.$((minor + 1)).0" ;;
@@ -67,7 +80,10 @@ if [[ "$local_only" == false ]] && git ls-remote --exit-code --tags origin "refs
 fi
 
 # ── 3. bump ──────────────────────────────────────────────────────────────────
-npm version --no-git-tag-version --allow-same-version "$next" >/dev/null
+npm --prefix daemon version --no-git-tag-version --allow-same-version "$next" >/dev/null
+sed -i '' "s/^\( *MARKETING_VERSION: *\)\"$current\"/\1\"$next\"/" ios/project.yml
+[[ "$(sed -n 's/^ *MARKETING_VERSION: *"\([^"]*\)".*/\1/p' ios/project.yml | sort -u)" == "$next" ]] ||
+  die "failed to set MARKETING_VERSION to $next in ios/project.yml"
 
 # ── 4. changelog ─────────────────────────────────────────────────────────────
 node -e '
@@ -85,7 +101,7 @@ node -e '
   fs.writeFileSync("CHANGELOG.md", log);' "$next" "$(date +%Y-%m-%d)"
 
 # ── 5. commit and tag ────────────────────────────────────────────────────────
-git add package.json package-lock.json CHANGELOG.md
+git add daemon/package.json daemon/package-lock.json ios/project.yml CHANGELOG.md
 git commit --quiet -m "Release $tag"
 git tag -a "$tag" -m "$tag"
 
@@ -93,8 +109,9 @@ cat <<EOF
 
 Created commit and tag $tag locally. NOT pushed.
 
-  1) git push origin main       # deploys dev — wait for the run to go green
-  2) git push origin $tag        # then deploys test
+  1) git push origin main       # daemon + web → dev (wait for green); Dev app build
+  2) git push origin $tag        # daemon + web → test; iOS Test build → TestFlight
 
 Never use --follow-tags: it would start the dev and test deploys at once on the box.
+Then attach What to Test notes to the processed iOS build (ios/TESTFLIGHT.md).
 EOF

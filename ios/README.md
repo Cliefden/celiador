@@ -8,7 +8,7 @@ review. Read the agent's account of the change and the diff, send a follow-up,
 allow or deny a risky command, answer its questions, and approve and merge, with
 push and a Live Activity when a run needs you.
 
-- **Backend:** the slim daemon (`Cliefden/daemon`) at `celiador.ai`. Auth is a
+- **Backend:** the daemon (`../daemon` in this repository) at `celiador.ai`. Auth is a
   Supabase session sent as `Authorization: Bearer`; the app never holds an LLM key.
 - **Contract:** `/api/sessions/*` (watcher: list/get/create, live `events` SSE,
   `message`/`approvals`/`answers`/`cancel`) + `/api/push/*` for APNs.

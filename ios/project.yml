@@ -6,7 +6,7 @@ options:
     watchOS: "10.0"
   createIntermediateGroups: true
 # Three build channels pointing at the matching daemon environment (see
-# daemon/ENVIRONMENTS.md). The xcconfigs define CELIADOR_DAEMON_URL +
+# ../ENVIRONMENTS.md). The xcconfigs define CELIADOR_DAEMON_URL +
 # BUNDLE_ID_SUFFIX + APP_NAME + URL_SCHEME; targets below reference those so all
 # Dev installs beside the prod app; Test IS the prod app (same bundle id) pointed
 # at test.celiador.ai — see CHANNELS.md. Build with `-configuration Test|Dev`.

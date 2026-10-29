@@ -1,19 +1,22 @@
-name: Deploy
+name: Deploy web
 
-# Deploys the marketing site to one environment on the box (the same shape as
-# the daemon's deploy.yml — daemon/ENVIRONMENTS.md):
+# Deploys the marketing site (web/) to one environment on the box (the same
+# shape as the daemon's deploy.yml — ENVIRONMENTS.md):
 #
-#   push to main         → dev   (dev.celiador.ai, celiador-web@dev :3103)
-#   push tag vX.Y.Z      → test  (test.celiador.ai, celiador-web@test :3102)
+#   push to main         → dev   (dev.celiador.ai, celiador-web@dev :3103) —
+#                          only when the push touches web/ or this workflow
+#   push tag vX.Y.Z      → test  (test.celiador.ai, celiador-web@test :3102);
+#                          path filters never apply to tags: a release deploys
+#                          everything
 #   workflow_dispatch    → any environment from the chosen ref; prod is refused
 #                          unless the repository variable PROD_ENABLED is 'true'
 #                          (set after the prod cutover to celiador-web@prod)
 #
-# The runner builds the site (`next build`), rsyncs the checkout + .next to
+# The runner builds the site (`next build`), rsyncs web/ + .next to
 # ~/envs/<env>/web over the deploy key, installs runtime deps there and restarts
 # the unit; the health gate then checks the page through the public host.
 # Settings per environment live on the box (~/envs/<env>/web.env, written by
-# deploy/provision-web.sh), not in GitHub.
+# web/deploy/provision-web.sh), not in GitHub.
 #
 # GitHub Environments dev, test and prod each hold VPS_HOST, VPS_USER and
 # VPS_SSH_KEY; prod has a required reviewer. Results are mailed through the
@@ -23,6 +26,9 @@ name: Deploy
 on:
   push:
     branches: [main]
+    paths:
+      - web/**
+      - .github/workflows/web-deploy.yml
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
@@ -36,9 +42,13 @@ permissions:
   contents: read
 
 concurrency:
-  # One deploy per environment at a time; a second one waits.
-  group: deploy-${{ inputs.env || (github.ref_type == 'tag' && 'test' || 'dev') }}
+  # One site deploy per environment at a time; a second one waits.
+  group: deploy-web-${{ inputs.env || (github.ref_type == 'tag' && 'test' || 'dev') }}
   cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: web
 
 jobs:
   plan:
@@ -52,6 +62,8 @@ jobs:
         env:
           INPUT_ENV: ${{ inputs.env }}
           PROD_ENABLED: ${{ vars.PROD_ENABLED }}
+        # No checkout in this job, so no working directory to honour.
+        working-directory: .
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then env="$INPUT_ENV"
@@ -64,11 +76,11 @@ jobs:
             dev)  host=dev.celiador.ai; port=3103 ;;
           esac
           if [[ "$env" == prod && "$PROD_ENABLED" != true ]]; then
-            echo "::error::prod is not on the templated unit yet. Do the cutover (daemon/ENVIRONMENTS.md) and set the repository variable PROD_ENABLED=true."
+            echo "::error::prod is not on the templated unit yet. Do the cutover (ENVIRONMENTS.md) and set the repository variable PROD_ENABLED=true."
             exit 1
           fi
           { echo "env=$env"; echo "host=$host"; echo "port=$port"; } >> "$GITHUB_OUTPUT"
-          echo "::notice::deploying ${GITHUB_SHA::7} to $env (https://$host)"
+          echo "::notice::deploying web ${GITHUB_SHA::7} to $env (https://$host)"
 
   deploy:
     needs: plan
@@ -86,6 +98,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: web/package-lock.json
       - run: npm ci
       - name: Build
         env:
@@ -142,6 +155,7 @@ jobs:
     steps:
       - name: Mail the result
         continue-on-error: true
+        working-directory: .
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
@@ -156,8 +170,8 @@ jobs:
             echo "::warning::SMTP_USER / SMTP_PASS are not set; the result was not mailed"
             exit 0
           fi
-          if [[ "$FAILED" == true ]]; then subject="✗ celiador-web: ${TARGET_ENV:-?} deploy failed (${GITHUB_SHA::7})"
-          else subject="✓ celiador-web: ${GITHUB_SHA::7} deployed to $TARGET_ENV"; fi
+          if [[ "$FAILED" == true ]]; then subject="✗ web: ${TARGET_ENV:-?} deploy failed (${GITHUB_SHA::7})"
+          else subject="✓ web: ${GITHUB_SHA::7} deployed to $TARGET_ENV"; fi
           printf 'machine smtp.migadu.com login %s password %s\n' "$SMTP_USER" "$SMTP_PASS" > ~/.netrc
           chmod 600 ~/.netrc
           {
