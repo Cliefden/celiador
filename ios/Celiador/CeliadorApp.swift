@@ -1,4 +1,5 @@
 import SwiftUI
+import ActivityKit
 
 @main
 struct CeliadorApp: App {
@@ -7,6 +8,10 @@ struct CeliadorApp: App {
 
     init() {
         Telemetry.configure()
+        Telemetry.signal(.appLaunched, [
+            "daysSinceInstall": Telemetry.daysSinceInstall,
+            "liveActivities": ActivityAuthorizationInfo().areActivitiesEnabled ? "on" : "off",
+        ])
     }
 
     var body: some Scene {
@@ -22,18 +27,25 @@ struct CeliadorApp: App {
                         if Api.shared.handleAuthCallback(url) {
                             Telemetry.signal(.signedIn, ["method": "magicLink"])
                             model.didSignIn()
+                        } else {
+                            Telemetry.signal(.signInFailed, ["method": "magicLink", "reason": "callbackInvalid"])
                         }
                     case "session":
                         // From widgets, Live Activities, and push taps. A task's session
                         // opens the task's run screen (see AppModel.open(sessionId:)).
                         let id = url.lastPathComponent
-                        if !id.isEmpty && id != "/" { model.open(sessionId: id) }
+                        if !id.isEmpty && id != "/" {
+                            Telemetry.signal(.notificationOpened, ["kind": AppScheme.source(of: url) ?? "deepLink"])
+                            model.open(sessionId: id)
+                        }
                     case "task":
                         // `celiador://task/<id>` — from the GitHub "Picked up" comment
                         // (via celiador.ai/api/open/task/<id>) and pushes.
                         let id = url.lastPathComponent
+                        Telemetry.signal(.notificationOpened, ["kind": AppScheme.source(of: url) ?? "deepLink"])
                         if !id.isEmpty && id != "/" { model.open(taskId: id) } else { model.openQueue() }
                     case "queue":
+                        Telemetry.signal(.notificationOpened, ["kind": "deepLink"])
                         model.openQueue()
                     default:
                         break
@@ -67,6 +79,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
         // Non-fatal: the app still works over SSE; push simply won't arrive.
+        Telemetry.error(.push, "apnsRegister", error)
     }
 }
 
@@ -81,8 +94,10 @@ struct ContentView: View {
                 BootView()
             case .unreachable(let message):
                 UnreachableView(message: message) { Task { await model.boot() } }
+                    .trackScreen(.unreachable)
             case .signedOut:
                 LoginView()
+                    .trackScreen(.login)
             case .signedIn:
                 signedInRoot
             }
@@ -140,6 +155,7 @@ struct TabShell: View {
             Tab("Queue", systemImage: "tray.full", value: AppModel.Tab.queue) {
                 NavigationStack(path: $model.queuePath) {
                     QueueView()
+                        .trackScreen(.queue)
                         .navigationDestination(for: AppModel.QueueRoute.self) { route in
                             switch route {
                             case .task(let id): TaskRunView(taskId: id)
@@ -153,16 +169,17 @@ struct TabShell: View {
             Tab("Runs", systemImage: "terminal", value: AppModel.Tab.agents) {
                 NavigationStack(path: $model.agentsPath) {
                     SessionsView()
+                        .trackScreen(.agents)
                         .navigationDestination(for: String.self) { id in SessionView(sessionId: id) }
                 }
             }
 
             Tab("Files", systemImage: "folder", value: AppModel.Tab.explorer) {
-                NavigationStack { ExplorerView() }
+                NavigationStack { ExplorerView().trackScreen(.explorer) }
             }
 
             Tab("Activity", systemImage: "clock", value: AppModel.Tab.activity) {
-                NavigationStack { HistoryView() }
+                NavigationStack { HistoryView().trackScreen(.activity) }
             }
         }
         .modifier(TabBarBehaviour())

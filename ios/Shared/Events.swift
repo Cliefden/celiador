@@ -10,13 +10,21 @@ import Foundation
 final class SessionEventStream {
     private let sessionId: String
     private let onEvent: @MainActor (SessionEvent) -> Void
+    /// Told about each failed connection attempt (not about `stop()`), before the backoff.
+    private let onFailure: (@MainActor (Error) -> Void)?
     private var task: Task<Void, Never>?
     private var cursor: Int
 
-    init(sessionId: String, since cursor: Int = 0, onEvent: @escaping @MainActor (SessionEvent) -> Void) {
+    init(
+        sessionId: String,
+        since cursor: Int = 0,
+        onEvent: @escaping @MainActor (SessionEvent) -> Void,
+        onFailure: (@MainActor (Error) -> Void)? = nil
+    ) {
         self.sessionId = sessionId
         self.cursor = cursor
         self.onEvent = onEvent
+        self.onFailure = onFailure
     }
 
     func start() {
@@ -25,7 +33,12 @@ final class SessionEventStream {
             var delay = 1.0
             while !Task.isCancelled {
                 let connectedAt = Date()
-                try? await stream()
+                do {
+                    try await stream()
+                } catch {
+                    if Task.isCancelled { return }
+                    if let onFailure { await MainActor.run { onFailure(error) } }
+                }
                 if Task.isCancelled { return }
                 if Date().timeIntervalSince(connectedAt) > 60 { delay = 1.0 }
                 try? await Task.sleep(for: .seconds(delay))
@@ -51,8 +64,9 @@ final class SessionEventStream {
         request.timeoutInterval = 3600 // idle timer; the daemon heartbeats every 15s
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw Api.ApiError(message: "Event stream rejected.")
+        let status = (response as? HTTPURLResponse)?.statusCode
+        guard status == 200 else {
+            throw Api.ApiError(message: "Event stream rejected.", status: status)
         }
         for try await line in bytes.lines {
             if Task.isCancelled { return }

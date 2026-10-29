@@ -11,7 +11,7 @@ struct HistoryView: View {
         content
         .background(CeliadorBackground())
         .navigationTitle("Activity")
-        .navigationDestination(for: String.self) { id in ChatTranscriptView(chatId: id) }
+        .navigationDestination(for: String.self) { id in ChatTranscriptView(chatId: id).trackScreen(.chatTranscript) }
         .task { await load() }
     }
 
@@ -53,6 +53,7 @@ struct HistoryView: View {
         do {
             chats = try await Api.shared.listChats()
         } catch {
+            Telemetry.error(.history, "list", error)
             self.error = error.localizedDescription
         }
     }

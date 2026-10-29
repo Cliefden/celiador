@@ -112,6 +112,7 @@ struct CodeFileView: View {
         } catch let e as Api.ApiError where e.status == 415 {
             phase = .binary
         } catch {
+            Telemetry.error(.files, "read", error)
             phase = .failed(error.localizedDescription)
         }
     }
@@ -127,11 +128,13 @@ struct CodeFileView: View {
         #endif
         do {
             try await Api.shared.writeFile(sessionId: sessionId, path: path, content: text)
+            Telemetry.signal(.fileSaved)
             original = text
             editing = false
             Haptics.success()
             toast = "Saved \(fileName)"
         } catch {
+            Telemetry.error(.files, "write", error)
             Haptics.error()
             toast = "Couldn't save — \(error.localizedDescription)"
         }

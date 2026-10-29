@@ -25,7 +25,20 @@ enum AppScheme {
     static var authCallback: String { "\(scheme)://auth-callback" }
 
     /// `celiador[-channel]://session/<id>` — deep link to a session (widgets, push).
-    static func session(_ id: String) -> String { "\(scheme)://session/\(id)" }
+    /// `source` (homeWidget, liveActivity) rides along as `?src=` so the app can
+    /// count which surface brought the user back; the id is still the last path
+    /// component.
+    static func session(_ id: String, source: String? = nil) -> String {
+        let base = "\(scheme)://session/\(id)"
+        return source.map { "\(base)?src=\($0)" } ?? base
+    }
+
+    /// The `src` a deep link was tagged with, if it's one we know.
+    static func source(of url: URL) -> String? {
+        let src = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "src" }?.value
+        return ["homeWidget", "liveActivity"].contains(src ?? "") ? src : nil
+    }
 
     /// `celiador[-channel]://task/<id>` — an agent task's run screen on the Queue tab.
     static func task(_ id: String) -> String { "\(scheme)://task/\(id)" }

@@ -95,7 +95,7 @@ struct ChatsWidgetView: View {
     }
 
     private func row(_ item: ChatSnapshotItem) -> some View {
-        Link(destination: URL(string: AppScheme.session(item.id))!) {
+        Link(destination: URL(string: AppScheme.session(item.id, source: "homeWidget"))!) {
             HStack(spacing: 8) {
                 Circle().fill(WidgetColor.dot(item.bucket)).frame(width: 7, height: 7)
                 VStack(alignment: .leading, spacing: 1) {

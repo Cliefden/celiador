@@ -41,7 +41,7 @@ struct ExplorerView: View {
             case let .dir(sid, p):
                 DirectoryView(sessionId: sid, path: p, title: (p as NSString).lastPathComponent)
             case let .file(sid, p):
-                CodeFileView(sessionId: sid, path: p)
+                CodeFileView(sessionId: sid, path: p).trackScreen(.codeFile)
             }
         }
     }
@@ -134,6 +134,7 @@ struct DirectoryView: View {
         } catch let e as Api.ApiError where e.status == 409 {
             phase = .offline
         } catch {
+            Telemetry.error(.files, "list", error)
             phase = .failed(error.localizedDescription)
         }
     }

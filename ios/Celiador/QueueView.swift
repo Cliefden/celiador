@@ -125,9 +125,9 @@ struct QueueView: View {
             }
         }
         .toast($toast)
-        .sheet(isPresented: $showAccount) { AccountView() }
-        .sheet(isPresented: $showNew) { NewTaskSheet { title in toast = "Queued: \(title)"; Task { await reload() } } }
-        .sheet(isPresented: $showRepos) { WatchedReposSheet(watched: $model.watchedRepos) }
+        .sheet(isPresented: $showAccount) { AccountView().trackScreen(.account) }
+        .sheet(isPresented: $showNew) { NewTaskSheet { title in toast = "Queued: \(title)"; Task { await reload() } }.trackScreen(.newTask) }
+        .sheet(isPresented: $showRepos) { WatchedReposSheet(watched: $model.watchedRepos).trackScreen(.watchedRepos) }
         // The model polls + streams tasks while signed in; load now so the tab is fresh.
         .task { await reload() }
     }
@@ -340,10 +340,12 @@ struct QueueView: View {
             Task {
                 do {
                     let merged = try await TaskActions.merge(task)
+                    Telemetry.signal(.pullRequestMerged, ["merged": merged ? "true" : "false"])
                     merged ? Haptics.success() : Haptics.warning()
                     toast = merged ? "Merged" : "Not merged"
                     await reload()
                 } catch {
+                    Telemetry.error(.git, "merge", error)
                     Haptics.error()
                     toast = (error as NSError).localizedDescription
                 }
@@ -357,9 +359,11 @@ struct QueueView: View {
             Task {
                 do {
                     try await Api.shared.cancelTask(task.id)
+                    Telemetry.signal(.taskCancelled)
                     toast = "Cancelled"
                     await reload()
                 } catch {
+                    Telemetry.error(.tasks, "cancel", error)
                     toast = (error as NSError).localizedDescription
                 }
             }
@@ -432,7 +436,9 @@ private struct NewTaskSheet: View {
                 }
             }
             .task {
-                repos = ((try? await Api.shared.editorWorkspaces()) ?? []).filter { $0.remoteUrl.lowercased().hasPrefix("https://github.com/") }
+                let all = (try? await Api.shared.editorWorkspaces()) ?? []
+                if !all.isEmpty { Telemetry.onboarding(.editorPaired) }
+                repos = all.filter { $0.remoteUrl.lowercased().hasPrefix("https://github.com/") }
                 if repo.isEmpty { repo = repos.first?.remoteUrl ?? "" }
             }
         }
@@ -449,6 +455,7 @@ private struct NewTaskSheet: View {
                 onCreated(trimmed)
                 dismiss()
             } catch {
+                Telemetry.error(.tasks, "create", error)
                 self.error = (error as NSError).localizedDescription
             }
             sending = false
@@ -501,8 +508,10 @@ private struct WatchedReposSheet: View {
     private func set(_ url: String, _ on: Bool) async {
         do {
             watched = try await Api.shared.setRepoWatched(url, watched: on)
+            Telemetry.signal(.repoWatchToggled, ["watched": on ? "true" : "false"])
             error = nil
         } catch {
+            Telemetry.error(.tasks, "watch", error)
             self.error = (error as NSError).localizedDescription
         }
     }
