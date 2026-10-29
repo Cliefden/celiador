@@ -49,7 +49,9 @@ App Store Connect if the Dev workflow is enough.
 - **TestFlight groups** `Internal`, one per app, each with access to all builds,
   so every processed build is immediately installable by its members:
   `5fd35a26-4b72-4f61-80c5-8531fb364bf8` on Celiador,
-  `f8297a47-e0f3-49bc-abcd-7ae1eb8fb15f` on Celiador Dev.
+  `f8297a47-e0f3-49bc-abcd-7ae1eb8fb15f` on Celiador Dev. The public,
+  external group `Public` on Celiador (not yet created; *External testers*
+  below) gets prod builds only, one at a time.
 
 ## One-time onboarding (Stefan)
 
@@ -100,7 +102,8 @@ into this repository both products — **Celiador** (onboarded on the old repo
   app pointed at test: a session kept from prod gets a 401 and the app asks to
   sign in again (against test's own GoTrue). To go back to prod, install the
   latest *Archive - App Store* build from TestFlight's previous builds, or the
-  App Store version.
+  App Store version. Test builds stay with the `Internal` group and are never
+  added to the `Public` group (see *External testers* below).
 - **App Store:**
   ```sh
   python3 ../../../xcode-cloud-setup/start_archive.py celiador     # starts "Archive - App Store" on main
@@ -116,6 +119,60 @@ Then attach **What to Test** notes (template: `testflight/WHAT_TO_TEST.md`):
 asc builds list --app 6819707590 --limit 1 --output table          # newest build id
 asc builds test-notes create --build-id <BUILD_ID> --locale en-US --whats-new @file:testflight/WHAT_TO_TEST.md
 ```
+
+## External testers (the public link)
+
+The site's download page, `/start` and `/docs` offer the iPhone app "by invite
+from the contact page" until `web/src/lib/site.ts` `testflightUrl` holds a
+public TestFlight link. That link belongs to an **external** group on the
+**Celiador** app (`6819707590`), and which builds it receives is the whole
+point of this section:
+
+- The **Test** workflow (tag `v*`) ships the real app pointed at
+  `test.celiador.ai`; the public DMG points at `celiador.ai`. Each environment
+  has its own GoTrue, so a Test build signed in with a prod account sees
+  nothing of the editor's sessions (and a prod session gets a 401 in it).
+- Therefore the public group receives **only builds from *Archive - App
+  Store*** (Release config → `celiador.ai`), never Test builds. Test builds stay
+  with the `Internal` group, which has access to all builds and whose members
+  know which channel they are on. The public group must **not** be created
+  with `--access-all-builds`; every build it gets is added by hand.
+- The first build added to an external group goes through Beta App Review
+  before anyone outside the team can install it. The review needs the app's
+  TestFlight review details (contact, sign-in instructions or a demo account:
+  `asc testflight review view --app 6819707590`).
+
+One-time steps (Stefan). The default `asc` profile on this Mac is the Celindor
+team; the Celiador team (`XPNFDWPFAV`) is the stored profile named `celiador`,
+selected with `--profile celiador` (or `ASC_PROFILE=celiador`; `asc auth status`
+lists the profiles):
+
+```sh
+# 1. Create the external group "Public" with its public link on (no --internal,
+#    no --access-all-builds). Optional: --public-link-limit-enabled --public-link-limit 1000.
+asc --profile celiador testflight groups create --app 6819707590 --name Public --public-link-enabled --feedback-enabled --pretty
+#    The response carries the group id and publicLink; to read them again later:
+asc --profile celiador testflight groups list --app 6819707590 --external --output table
+asc --profile celiador testflight groups view --id <GROUP_ID> --pretty
+#    If the group already exists without the link: asc --profile celiador testflight groups edit --id <GROUP_ID> --public-link-enabled
+
+# 2. Add the latest Archive - App Store build to it and submit it for Beta App
+#    Review in one go (--dry-run first shows what would be assigned). Check that
+#    --latest really is an App Store archive (plain icon, started by hand), not
+#    the Test workflow's tag build: asc --profile celiador builds list --app 6819707590 --limit 5 --output table
+asc --profile celiador builds add-groups --app 6819707590 --latest --group Public --dry-run
+asc --profile celiador builds add-groups --app 6819707590 --latest --group Public --submit --confirm
+#    Or by build id: asc --profile celiador builds add-groups --build-id <BUILD_ID> --group Public --submit --confirm
+#    Review status: asc --profile celiador builds beta-app-review-submission view --app 6819707590 --latest
+
+# 3. Paste the publicLink into web/src/lib/site.ts (testflightUrl) and release
+#    the site; the download page, /start, /docs and the FAQ switch from
+#    "by invite" to the link.
+```
+
+For every later *Archive - App Store* build that should reach the public: step 2
+again (without `--dry-run`). Nothing in the Xcode Cloud workflows adds a build to
+`Public`; that is deliberate.
 
 ## Verifying the first build (ios#2 checklist)
 

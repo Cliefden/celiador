@@ -134,7 +134,9 @@ export default async function DownloadPage() {
                   Join on TestFlight
                 </a>
               ) : (
-                <span className="font-mono text-xs text-fog-dim">TestFlight soon</span>
+                <Link href="/contact" className="font-mono text-xs text-brand hover:underline">
+                  By invite
+                </Link>
               )}
             </div>
             <div className="flex items-center justify-between rounded-xl border border-line bg-surface/60 px-4 py-3.5">

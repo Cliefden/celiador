@@ -20,7 +20,10 @@ export const site = {
   downloadHref: "/download",
   macVersion: "preview",
   minMacOS: "macOS 13 Ventura or later · Apple Silicon",
-  // Public TestFlight link for the iPhone companion; empty until it exists.
+  // Public TestFlight link for the iPhone companion (the external "Public"
+  // group's link, ios/TESTFLIGHT.md § External testers). Paste it here once:
+  // the download page, /start, /docs and the FAQ all read it, and say "by
+  // invite" via the contact page while it is empty.
   testflightUrl: "",
   github: "https://github.com/Cliefden/celiador",
   // Celiador Remote: the loop for stock VS Code and Cursor.
@@ -169,7 +172,7 @@ export const faqs: { q: string; a: string }[] = [
   },
   {
     q: "Is it available now?",
-    a: "Yes, as early access. The editor is a signed, notarized macOS download that updates itself, with Linux x64 packages too; Celiador Remote is on Open VSX; the iPhone app is on TestFlight by invite until the public link is on the download page.",
+    a: `Yes, as early access. The editor is a signed, notarized macOS download that updates itself, with Linux x64 packages too; Celiador Remote is on Open VSX; the iPhone app is on TestFlight${site.testflightUrl ? " (the link is on the download page)" : ", by invite from the contact page until the public link is on the download page"}.`,
   },
   {
     q: "Which platforms are supported?",

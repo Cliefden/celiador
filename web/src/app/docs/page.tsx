@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { formatLimit, publishedLimits } from "@/lib/limits";
 import { latestMacDmgHref, latestMacRelease } from "@/lib/releases";
+import { site } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Docs",
@@ -91,11 +92,21 @@ export default async function DocsPage() {
 
           <h2 id="sign-in">Sign in</h2>
           <p>
-            The first launch opens a welcome view with a <strong className="text-white">Sign in</strong>{" "}
-            button (it&apos;s also the account item in the status bar, and the command{" "}
-            <code>Celiador: Sign In</code>). Pick email and password, a magic link, or GitHub. A magic
-            link must be opened on the same Mac within ten minutes; it hands you straight back into the
-            editor. Your account is what the hosted agent and the iPhone companion share.
+            The first launch opens the <strong className="text-white">Get started with Celiador</strong>{" "}
+            walkthrough, and its first step is <strong className="text-white">Sign in</strong>. The button
+            runs the sign-in; the same sign-in is the account item in the status bar, the{" "}
+            <strong className="text-white">Account</strong> view in the chat sidebar, and the command{" "}
+            <code>Celiador: Sign In</code>. Pick email and password (a new account is created in place, with
+            no confirmation email), a magic link, or GitHub where it is offered. A magic link must be
+            opened on the same Mac within ten minutes; it hands you straight back into the editor. Your
+            account is what the hosted agent and the iPhone companion share.
+          </p>
+          <p>
+            The walkthrough goes on with bringing your settings over from Cursor or VS Code (the step
+            appears when it finds one of them on the Mac; the command{" "}
+            <code>Celiador: Import Settings from Another Editor</code> stays in the Command Palette either
+            way), asking the agent, running agents side by side in the Agents window, and choosing your
+            theme.
           </p>
 
           <h2 id="agent">The agent in the editor</h2>
@@ -134,8 +145,18 @@ export default async function DocsPage() {
             agent&apos;s questions, cancel, browse and edit files of the session, discard files, and approve
             and merge the pull request, without touching the laptop. &ldquo;From your editor&rdquo; lists the
             repositories your Mac has open, so a run can also start from the phone on the local working
-            copy; no cloning, no tokens. Distribution is through TestFlight; the link appears on the
-            download page when it&apos;s live.
+            copy; no cloning, no tokens. Distribution is through TestFlight
+            {site.testflightUrl ? (
+              <>
+                : <a href={site.testflightUrl} className="text-brand hover:underline" target="_blank" rel="noreferrer">join here</a>.
+              </>
+            ) : (
+              <>
+                , by invite from the <Link href="/contact" className="text-brand hover:underline">contact page</Link>{" "}
+                until the public link is here; it will be on the{" "}
+                <Link href="/download" className="text-brand hover:underline">download page</Link> too.
+              </>
+            )}
           </p>
 
           <h2 id="workspace-trust">Workspace Trust</h2>
