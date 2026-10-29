@@ -1,5 +1,6 @@
 import SwiftUI
 import ActivityKit
+import PortfolioFeedback
 
 @main
 struct CeliadorApp: App {
@@ -19,6 +20,7 @@ struct CeliadorApp: App {
             ContentView()
                 .environment(model)
                 .tint(Theme.accent)
+                .portfolioFeedback(Feedback.configuration)
                 .onOpenURL { url in
                     guard url.scheme == AppScheme.scheme else { return }
                     switch url.host {

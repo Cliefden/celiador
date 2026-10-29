@@ -27,6 +27,12 @@ packages:
   TelemetryDeck:
     url: https://github.com/TelemetryDeck/SwiftSDK
     exactVersion: 2.14.2
+  # In-app "Report an issue" (Celiador/Feedback.swift + the row in AccountView)
+  # for TestFlight/Xcode/ad hoc builds → GitHub issue via the portfolio's shared
+  # report-issue function. Renders nothing in App Store builds. App target only.
+  PortfolioFeedback:
+    url: https://github.com/Cliefden/PortfolioFeedback.git
+    minorVersion: "0.1.0"
 targets:
   Celiador:
     type: application
@@ -35,6 +41,8 @@ targets:
     dependencies:
       - target: CeliadorWidgets
       - package: TelemetryDeck
+      - package: PortfolioFeedback
+        product: PortfolioFeedback
       # CeliadorWatch dropped from v1 — re-add to ship the watchOS app.
     info:
       path: Celiador/Info.plist
