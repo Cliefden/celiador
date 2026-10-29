@@ -1,0 +1,11 @@
+#include "Base.xcconfig"
+
+// TEST — the prod app (same bundle id, name and URL scheme as Release) pointed
+// at the always-on test environment. This is what a vX.Y.Z tag ships to
+// TestFlight; the App Store build is the Release config. Celindor's two-app
+// model: there is no separate "test" bundle id, so a tester has at most the Dev
+// app and this one installed.
+BUNDLE_ID_SUFFIX =
+APP_NAME = Celiador
+URL_SCHEME = celiador
+CELIADOR_DAEMON_URL = https:/$()/test.celiador.ai

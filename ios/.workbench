@@ -1,0 +1,10 @@
+# Read by `wb` (github.com/Cliefden/workbench) — worktrees, board, dev stack.
+WB_PROJECT="Celiador"
+
+wb_setup() {
+  # The .xcodeproj is generated, per worktree.
+  command -v xcodegen >/dev/null && xcodegen generate ||
+    echo "⚠ xcodegen is not on PATH — run 'xcodegen generate' before building"
+}
+
+# No WB_SERVICES: the app runs on a device/simulator, not as a local service.

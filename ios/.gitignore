@@ -1,0 +1,33 @@
+# XcodeGen output — regenerate with `xcodegen generate`
+Celiador.xcodeproj/
+
+# Xcode / macOS cruft
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Dependencies
+Pods/
+.swiftpm/
+
+# Secrets
+*.p8
+*.p12
+.env
+
+# Downloaded signing assets (provisioning profiles) — recreate with asc
+signing/
+
+# Build artifacts (archives, IPAs, export logs)
+.asc/artifacts/
+
+# wb worktrees (one checkout per issue; see github.com/Cliefden/workbench)
+/.claude/worktrees/
+
+# fastlane output (screenshots are regenerated with `fastlane screenshots`)
+fastlane/screenshots/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output/

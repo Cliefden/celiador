@@ -1,0 +1,466 @@
+import Foundation
+
+/// Lifecycle of an agent session, mirroring the daemon's state machine.
+enum SessionState: String, Codable {
+    case idle, running, awaiting, done, error, cancelled
+
+    /// A run is in flight (or paused waiting on you) — worth a live stream + spinner.
+    var isActive: Bool { self == .running || self == .awaiting }
+
+    var label: String {
+        switch self {
+        case .idle: return "idle"
+        case .running: return "working…"
+        case .awaiting: return "needs you"
+        case .done: return "done"
+        case .error: return "failed"
+        case .cancelled: return "cancelled"
+        }
+    }
+}
+
+/// A server-side handle on one agent run. The editor (runner) drives it; the phone
+/// (watcher) observes and steers. Summary and detail share the same shape today.
+struct Session: Codable, Identifiable, Equatable {
+    let id: String
+    let title: String
+    let origin: String // "editor" | "phone"
+    let runner: String // "editor" | "server"
+    let state: SessionState
+    let runnerConnected: Bool
+    let lastSeq: Int
+    let createdAt: String
+    let updatedAt: String
+    /// Gateway usage attributed to this run (absent on an older daemon).
+    var usage: RunUsage? = nil
+}
+
+extension Session {
+    enum CodingKeys: String, CodingKey {
+        case id, title, origin, runner, state, runnerConnected, lastSeq, createdAt, updatedAt, usage
+    }
+
+    /// Tolerant decoding: a malformed `usage` never drops the session.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        origin = try c.decode(String.self, forKey: .origin)
+        runner = try c.decode(String.self, forKey: .runner)
+        state = try c.decode(SessionState.self, forKey: .state)
+        runnerConnected = try c.decode(Bool.self, forKey: .runnerConnected)
+        lastSeq = try c.decode(Int.self, forKey: .lastSeq)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        updatedAt = try c.decode(String.self, forKey: .updatedAt)
+        usage = (try? c.decodeIfPresent(RunUsage.self, forKey: .usage)) ?? nil
+    }
+}
+
+typealias SessionSummary = Session
+
+/// What one run cost: the gateway requests the daemon attributed to its session,
+/// priced at the daemon's published rate card (`GET /api/limits` → `prices`, USD
+/// per million tokens; cache reads count as input). Shared by `Session.usage` and
+/// `Task.usage`.
+struct RunUsage: Codable, Hashable {
+    let requests: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let costUsd: Double
+
+    /// "$0.38", or "<$0.01" for a run that cost less than a cent.
+    var costLabel: String { RunUsage.formatCost(costUsd) }
+
+    /// Two decimals, with "<$0.01" under a cent so a cheap run never reads as free.
+    static func formatCost(_ usd: Double) -> String {
+        if usd > 0 && usd < 0.01 { return "<$0.01" }
+        return String(format: "$%.2f", usd)
+    }
+
+    enum CodingKeys: String, CodingKey { case requests, inputTokens, outputTokens, costUsd }
+
+    init(requests: Int, inputTokens: Int, outputTokens: Int, costUsd: Double) {
+        self.requests = requests
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.costUsd = costUsd
+    }
+
+    /// Tolerant: every field defaults to 0, and whole numbers may arrive as doubles.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func int(_ key: CodingKeys) -> Int {
+            if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+            if let d = try? c.decodeIfPresent(Double.self, forKey: key), d.isFinite { return Int(d) }
+            return 0
+        }
+        requests = int(.requests)
+        inputTokens = int(.inputTokens)
+        outputTokens = int(.outputTokens)
+        let cost = (try? c.decodeIfPresent(Double.self, forKey: .costUsd)) ?? nil
+        costUsd = (cost?.isFinite == true) ? cost! : 0
+    }
+}
+
+/// A repo open in the user's editor(s) right now (daemon presence). Feeds the
+/// phone's "from your editor" repo picker; `remoteUrl` is a normalised https
+/// clone URL the cloud run can clone directly.
+struct EditorWorkspace: Codable, Identifiable, Hashable {
+    let name: String
+    let remoteUrl: String
+    let branch: String?
+    var id: String { remoteUrl }
+}
+
+/// One entry in a session's event log. The daemon sends a discriminated union
+/// keyed by `kind`; we decode leniently so an unknown kind never drops the frame.
+struct SessionEvent: Codable, Identifiable, Equatable {
+    let seq: Int
+    let at: String?
+    let kind: String
+    // Payloads (all optional; which are set depends on `kind`).
+    let text: String?
+    let role: String?
+    let callId: String?
+    let name: String?
+    let input: [String: String]?
+    let ok: Bool?
+    let approvalKind: String?
+    let title: String?
+    let path: String?
+    let preview: String?
+    let requestId: String?
+    let prompt: String?
+    let choices: [String]?
+    let patch: String?
+    let state: SessionState?
+    let message: String?
+    let from: Int?
+
+    var id: Int { seq }
+
+    enum CodingKeys: String, CodingKey {
+        case seq, at, kind, text, role, callId, name, input, ok, approvalKind, title
+        case path, preview, requestId, prompt, choices, patch, state, message, from
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seq = (try? c.decode(Int.self, forKey: .seq)) ?? 0
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? "unknown"
+        at = try? c.decodeIfPresent(String.self, forKey: .at)
+        text = try? c.decodeIfPresent(String.self, forKey: .text)
+        role = try? c.decodeIfPresent(String.self, forKey: .role)
+        callId = try? c.decodeIfPresent(String.self, forKey: .callId)
+        name = try? c.decodeIfPresent(String.self, forKey: .name)
+        input = (try? c.decodeIfPresent([String: String].self, forKey: .input)) ?? nil
+        ok = try? c.decodeIfPresent(Bool.self, forKey: .ok)
+        approvalKind = try? c.decodeIfPresent(String.self, forKey: .approvalKind)
+        title = try? c.decodeIfPresent(String.self, forKey: .title)
+        path = try? c.decodeIfPresent(String.self, forKey: .path)
+        preview = try? c.decodeIfPresent(String.self, forKey: .preview)
+        requestId = try? c.decodeIfPresent(String.self, forKey: .requestId)
+        prompt = try? c.decodeIfPresent(String.self, forKey: .prompt)
+        choices = (try? c.decodeIfPresent([String].self, forKey: .choices)) ?? nil
+        patch = try? c.decodeIfPresent(String.self, forKey: .patch)
+        state = try? c.decodeIfPresent(SessionState.self, forKey: .state)
+        message = try? c.decodeIfPresent(String.self, forKey: .message)
+        from = try? c.decodeIfPresent(Int.self, forKey: .from)
+    }
+
+    /// A short human label for tool calls (e.g. `write_file(src/app.ts)`).
+    var toolSummary: String {
+        let arg = input?["path"] ?? input?["dir"] ?? ""
+        return arg.isEmpty ? (name ?? "tool") : "\(name ?? "tool")(\(arg))"
+    }
+}
+
+struct DaemonConfig: Codable {
+    let authMode: String
+    let supabaseUrl: String?
+    let supabaseAnonKey: String?
+}
+
+// MARK: - App data (served by the daemon: /api/profile, /api/chats)
+
+/// The signed-in user's profile row (public.profiles).
+struct Profile: Codable, Identifiable {
+    let id: String
+    let email: String?
+    let displayName: String?
+    let plan: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, email, plan
+        case displayName = "display_name"
+    }
+}
+
+/// GET /api/me — the signed-in account summary: identity, plan, and today's agent
+/// usage against the daemon-enforced daily quota. Mirrors the editor's account
+/// panel so both clients show the user the SAME honest numbers the daemon meters.
+/// Keys are already camelCase on the wire, so default decoding maps them 1:1.
+struct Me: Codable {
+    let userId: String
+    let email: String?
+    /// Billing plan, or nil in token/none (self-host/dev) mode or before a profile row exists.
+    let plan: String?
+    let usage: AgentUsage
+    let limits: AgentLimits
+    /// ISO timestamp when the daily counters reset (next UTC midnight).
+    let resetsAt: String
+    /// Agent task counts (absent on an older daemon).
+    let tasks: AgentTaskSummary?
+}
+
+/// The account's agent tasks: what runs now, what waits for review, and the
+/// pull requests merged in the last seven days — the number Celiador steers by.
+struct AgentTaskSummary: Codable {
+    let running: Int
+    let prOpen: Int
+    let mergedLast7Days: Int
+    /// Tasks allowed to run at once (published like the other limits).
+    let concurrency: Int
+    /// Agent spend over the merged + pr-open tasks finished in the last seven
+    /// days, in USD at the daemon's rate card (absent on an older daemon).
+    var costUsdLast7Days: Double? = nil
+}
+
+/// Today's agent usage (UTC day), as metered by the daemon's quota tracker.
+struct AgentUsage: Codable {
+    let requests: Int
+    let inputTokens: Int
+    let outputTokens: Int
+}
+
+/// Active per-user daily limits. A `0` means that limit is disabled (unlimited).
+struct AgentLimits: Codable {
+    let rpm: Int
+    let concurrency: Int
+    let dailyRequests: Int
+    let dailyInput: Int
+    let dailyOutput: Int
+}
+
+/// A durable past conversation (public.chats). A chat is a persisted session.
+struct ChatSummary: Codable, Identifiable {
+    let id: String
+    let title: String?
+    let origin: String
+    let status: String
+    let updatedAt: String
+    let lastMessageAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, origin, status
+        case updatedAt = "updated_at"
+        case lastMessageAt = "last_message_at"
+    }
+}
+
+/// One durable message within a chat (public.messages). `content` is jsonb `{text}`.
+struct ChatMessage: Codable, Identifiable {
+    let id: String
+    let role: String
+    let content: Content
+    let seq: Int?
+    let createdAt: String
+
+    struct Content: Codable { let text: String? }
+
+    enum CodingKeys: String, CodingKey {
+        case id, role, content, seq
+        case createdAt = "created_at"
+    }
+
+    var text: String { content.text ?? "" }
+}
+
+/// Response of GET /api/chats/:id.
+struct ChatDetail: Codable {
+    let chat: ChatSummary
+    let messages: [ChatMessage]
+}
+
+// MARK: - Run review (git, served by the editor runner over the relay)
+
+/// One changed file in the session repo's working copy.
+struct GitFileStatus: Codable, Identifiable, Hashable {
+    let path: String
+    /// "M" modified, "A" added, "D" deleted, "R" renamed, "U" untracked.
+    let status: String
+    var id: String { path }
+}
+
+/// The working copy's review state (GET /api/sessions/:id/git/status).
+struct GitStatus: Codable {
+    let branch: String?
+    let files: [GitFileStatus]
+}
+
+/// Where the run's branch went (POST /api/sessions/:id/git/push).
+struct GitPushResult: Codable {
+    let branch: String?
+    let remote: String?
+}
+
+/// The pull request for the run's branch (POST /api/sessions/:id/git/pr): opened
+/// now (`created`), already open, or — when the editor has no GitHub sign-in — a
+/// compare link to finish it in the browser.
+struct GitPullRequest: Codable {
+    let url: String?
+    let created: Bool
+}
+
+/// The outcome of merging the run's pull request (POST /api/sessions/:id/git/merge).
+struct GitMergeResult: Codable {
+    let merged: Bool
+    let sha: String?
+    let url: String?
+    /// The agent task that moved to `merged`, when the run belonged to one.
+    let taskId: String?
+}
+
+// MARK: - Workspace files (served by the daemon: /api/sessions/:id/files|file)
+
+/// One entry in a workspace directory listing.
+struct FileEntry: Codable, Identifiable, Hashable {
+    let name: String
+    let type: String // "file" | "dir"
+    let size: Int?
+
+    var id: String { name }
+    var isDir: Bool { type == "dir" }
+}
+
+/// A file's contents (GET /api/sessions/:id/file). `truncated` when it exceeded the cap.
+struct FileContent: Codable {
+    let path: String
+    let content: String
+    let encoding: String
+    let truncated: Bool
+}
+
+// MARK: - Agent tasks (the queue: GET /api/tasks)
+
+/// One unit of agent work that ends in a pull request: from a GitHub issue
+/// (label `celiador` / `@celiador`) or started by hand. The daemon queues it,
+/// hands it to the editor (its own worktree + branch) and records the PR.
+struct AgentTask: Codable, Identifiable, Hashable {
+    struct Repo: Codable, Hashable { let owner: String; let name: String; let url: String }
+    struct Issue: Codable, Hashable { let number: Int; let title: String; let url: String }
+
+    /// The linked session is blocked on you: a permission to grant or a question
+    /// to answer. `requestId` goes to the session approve/reject/answer endpoints.
+    struct Awaiting: Codable, Hashable {
+        let kind: String // "permission" | "question"
+        let requestId: String
+        let text: String
+        var preview: String? = nil
+        var choices: [String]? = nil
+
+        var isPermission: Bool { kind != "question" }
+    }
+
+    /// The run's pull request, refreshed by the daemon. Every stat is optional:
+    /// an older daemon (or a PR GitHub hasn't computed yet) leaves them out.
+    struct PullRequest: Codable, Hashable {
+        let number: Int
+        let url: String
+        var additions: Int? = nil
+        var deletions: Int? = nil
+        var changedFiles: Int? = nil
+        /// "passing" | "failing" | "pending" | "none" | "unknown"
+        var checks: String? = nil
+        var mergeable: Bool? = nil
+        var updatedAt: String? = nil
+    }
+
+    let id: String
+    let repo: Repo
+    let issue: Issue?
+    let title: String
+    let branch: String
+    let source: String
+    let state: String
+    let sessionId: String?
+    let prUrl: String?
+    let error: String?
+    let createdAt: String
+    let updatedAt: String
+
+    // Newer daemon fields (all optional — an old daemon sends none of them).
+    /// "mac" | "cloud" — where it runs; nil means an editor (Mac) dispatch.
+    var runner: String? = nil
+    /// The editor's machine name, e.g. "Stefan's MacBook Pro".
+    var machine: String? = nil
+    var startedAt: String? = nil
+    var finishedAt: String? = nil
+    /// The linked session's latest one-line activity while running.
+    var activity: String? = nil
+    var awaiting: Awaiting? = nil
+    var pr: PullRequest? = nil
+    /// The linked session's gateway usage and cost (see `RunUsage`).
+    var usage: RunUsage? = nil
+
+    /// queued / dispatched / running hold work; the rest are finished.
+    var isActive: Bool { ["queued", "dispatched", "running"].contains(state) }
+    var isFinished: Bool { ["merged", "failed", "cancelled"].contains(state) }
+    var isCloud: Bool { runner == "cloud" }
+
+    /// The pull request number, from `pr` or parsed from `prUrl` (…/pull/8).
+    var prNumber: Int? {
+        if let pr { return pr.number }
+        guard let prUrl, let range = prUrl.range(of: "/pull/") else { return nil }
+        return Int(prUrl[range.upperBound...].prefix { $0.isNumber })
+    }
+
+    var pullRequestURL: URL? { (pr?.url ?? prUrl).flatMap(URL.init(string:)) }
+}
+
+extension AgentTask {
+    enum CodingKeys: String, CodingKey {
+        case id, repo, issue, title, branch, source, state, sessionId, prUrl, error, createdAt, updatedAt
+        case runner, machine, startedAt, finishedAt, activity, awaiting, pr, usage
+    }
+
+    /// Tolerant decoding: the core fields are required, but a malformed or
+    /// unexpected newer field never drops the whole task from the queue.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        repo = try c.decode(Repo.self, forKey: .repo)
+        issue = (try? c.decodeIfPresent(Issue.self, forKey: .issue)) ?? nil
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        branch = (try? c.decode(String.self, forKey: .branch)) ?? ""
+        source = (try? c.decode(String.self, forKey: .source)) ?? "manual"
+        state = (try? c.decode(String.self, forKey: .state)) ?? "queued"
+        sessionId = (try? c.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
+        prUrl = (try? c.decodeIfPresent(String.self, forKey: .prUrl)) ?? nil
+        error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? nil
+        createdAt = (try? c.decode(String.self, forKey: .createdAt)) ?? ""
+        updatedAt = (try? c.decode(String.self, forKey: .updatedAt)) ?? ""
+        runner = (try? c.decodeIfPresent(String.self, forKey: .runner)) ?? nil
+        machine = (try? c.decodeIfPresent(String.self, forKey: .machine)) ?? nil
+        startedAt = (try? c.decodeIfPresent(String.self, forKey: .startedAt)) ?? nil
+        finishedAt = (try? c.decodeIfPresent(String.self, forKey: .finishedAt)) ?? nil
+        activity = (try? c.decodeIfPresent(String.self, forKey: .activity)) ?? nil
+        awaiting = (try? c.decodeIfPresent(Awaiting.self, forKey: .awaiting)) ?? nil
+        pr = (try? c.decodeIfPresent(PullRequest.self, forKey: .pr)) ?? nil
+        usage = (try? c.decodeIfPresent(RunUsage.self, forKey: .usage)) ?? nil
+    }
+}
+
+/// Outcome of POST /api/tasks/:id/merge.
+struct TaskMergeResult: Codable {
+    let ok: Bool?
+    let merged: Bool
+    let sha: String?
+    let url: String?
+}
+
+struct TaskList: Codable {
+    let tasks: [AgentTask]
+    let concurrency: Int
+    let repos: [String]
+}
