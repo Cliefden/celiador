@@ -1,4 +1,5 @@
 import SwiftUI
+import PortfolioFeedback
 
 /// Account screen: the signed-in profile (from the daemon's /api/profile), edit the
 /// display name, and sign out. Presented as a sheet from the sessions list.
@@ -117,6 +118,9 @@ struct AccountView: View {
                     }
                     .tint(Theme.accent)
                     .onChange(of: telemetryEnabled) { _, enabled in Telemetry.isEnabled = enabled }
+                    // Testing builds only (TestFlight / Xcode / ad hoc); renders
+                    // nothing in App Store installs. Configured in Feedback.swift.
+                    ReportIssueRow()
                 } footer: {
                     Text("Which features get used and what crashes — never your code, prompts, chat, repository names or email. Details at celiador.ai/privacy.")
                 }

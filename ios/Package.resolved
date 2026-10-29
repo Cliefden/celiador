@@ -1,6 +1,15 @@
 {
-  "originHash" : "fa7ab4bc9518bd495b4c17d8a96bebc401eb5a2f99ae8b4bc316b04b7b2aea05",
+  "originHash" : "f75382349d725ef9294412e1cbc7949987e530bd41afd38ce824d64a7b3779ee",
   "pins" : [
+    {
+      "identity" : "portfoliofeedback",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Cliefden/PortfolioFeedback.git",
+      "state" : {
+        "revision" : "0b5ebc73eec8ad0f3828c27974d6090ba48fdeea",
+        "version" : "0.1.0"
+      }
+    },
     {
       "identity" : "swiftsdk",
       "kind" : "remoteSourceControl",
