@@ -5,6 +5,9 @@ wb_setup() {
   npm install
 }
 
+# Numbered SQL migrations: `wb status` warns when two worktrees take one number.
+WB_MIGRATIONS="db/migrations"
+
 WB_SERVICES="daemon"
 WB_daemon_DIR="."
 WB_daemon_CMD="npm run dev"
