@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { publishedLimits } from "@/lib/limits";
 import { latestMacDmgHref, latestMacRelease } from "@/lib/releases";
+import { site } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Your first agent pull request",
@@ -70,15 +71,19 @@ export default async function StartPage() {
             <a href={latestMacDmgHref} className="text-brand hover:underline">Download the macOS DMG</a>
             {release ? ` (version ${release.productVersion})` : ""} or pick a Linux package on the{" "}
             <Link href="/download" className="text-brand hover:underline">download page</Link>. Open it, drag
-            Celiador to Applications, and start it from there. On first launch, click{" "}
-            <strong className="text-white">Sign in</strong> on the welcome view (or the account item in the
-            status bar) and create an account with an email and password. That one account is shared by the
-            editor, the phone app and the hosted agent; there is no API key to paste.
+            Celiador to Applications, and start it from there. The first launch opens the{" "}
+            <strong className="text-white">Get started with Celiador</strong> walkthrough; its first step is{" "}
+            <strong className="text-white">Sign in</strong>. Click it and create an account with an email and
+            password (no confirmation email; a magic link works too, and GitHub where it is offered). The
+            same sign-in is the account item in the status bar and the Account view in the chat sidebar.
+            That one account is shared by the editor, the phone app and the hosted agent; there is no API
+            key to paste.
           </p>
           <p>
-            Coming from Cursor or VS Code? Run <code>Celiador: Import Settings from Another Editor</code> from
-            the command palette to bring your settings, keybindings and extensions over; the{" "}
-            <Link href="/switch" className="text-brand hover:underline">switching page</Link> says what
+            Coming from Cursor or VS Code? When the walkthrough finds one of them on your Mac, its next step
+            offers to bring your settings, keybindings and extensions over; the same import is{" "}
+            <code>Celiador: Import Settings from Another Editor</code> in the Command Palette at any time.
+            The <Link href="/switch" className="text-brand hover:underline">switching page</Link> says what
             carries over.
           </p>
           <h3 className="mt-6 font-semibold text-white">VS Code or Cursor, with Celiador Remote</h3>
@@ -127,10 +132,20 @@ export default async function StartPage() {
           <h2 id="phone">3. Put the queue on your phone</h2>
           <p>
             The iPhone app is the review surface: what needs you, what is running, the pull requests
-            waiting, and a merge button. It is distributed through TestFlight. Until the public link is on
-            the download page, ask for an invite from the{" "}
-            <Link href="/contact" className="text-brand hover:underline">contact page</Link> and mention your
-            Apple ID email. Install it, sign in with the same account as the editor, and you are on the{" "}
+            waiting, and a merge button. It is distributed through TestFlight.{" "}
+            {site.testflightUrl ? (
+              <>
+                <a href={site.testflightUrl} className="text-brand hover:underline" target="_blank" rel="noreferrer">Join on TestFlight</a>,
+                install it,
+              </>
+            ) : (
+              <>
+                Until the public link is here it is by invite: ask from the{" "}
+                <Link href="/contact" className="text-brand hover:underline">contact page</Link> and mention
+                your Apple ID email. Install it,
+              </>
+            )}{" "}
+            sign in with the same account as the editor, and you are on the{" "}
             <strong className="text-white">Queue</strong> tab.
           </p>
           <p>
