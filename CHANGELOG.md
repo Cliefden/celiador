@@ -6,6 +6,8 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-29
+
 - One repository: `Cliefden/daemon` is now `Cliefden/celiador` and holds the
   daemon (`daemon/`), the iPhone app (`ios/`, formerly `celiador-ios`) and the
   site (`web/`, formerly `celiador-web`) with their full history. One
