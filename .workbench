@@ -12,6 +12,10 @@ wb_setup() {
   fi
 }
 
+# Forward-only migrations: `wb status` / `wb map` warn when two worktrees (or a
+# worktree and main) take the same migration number.
+WB_MIGRATIONS="daemon/db/migrations"
+
 WB_SERVICES="daemon web"
 WB_daemon_DIR="daemon"
 WB_daemon_CMD="npm run dev"
