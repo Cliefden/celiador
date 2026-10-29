@@ -3,7 +3,7 @@ import { stream } from "hono/streaming";
 import { AGENT_MODEL, AGENT_MAX_TOKENS } from "./config";
 import { validateGatewayRequest } from "./agent/policy";
 import { agentQuota } from "./agent/quota";
-import { authorizeAgent } from "./agent/authorize";
+import { authorizeAgent, refuse } from "./agent/authorize";
 import type { AuthResult } from "./auth";
 import type { TokenCounts } from "./agent/pricing";
 import { attributeUsage, MIRROR_HEADER } from "./sessions/usage";
@@ -87,10 +87,7 @@ export async function anthropicGateway(c: Context) {
   if (invalid) return c.json({ error: invalid }, 400);
 
   const auth = await authorizeAgent(c);
-  if (!auth.ok) {
-    if (auth.retryAfter !== undefined) c.header("Retry-After", String(auth.retryAfter));
-    return c.json({ error: auth.error }, auth.status);
-  }
+  if (!auth.ok) return refuse(c, auth);
   const { quotaKey, isRunner, user, release } = auth;
   // Which run this request belongs to (cost attribution): the runner token's run id,
   // or the editor's mirror header. See sessions/usage.ts.
@@ -178,10 +175,7 @@ export async function anthropicGateway(c: Context) {
 /** GET /api/anthropic/v1/models — let SDK clients enumerate models via the daemon. */
 export async function anthropicModels(c: Context) {
   const auth = await authorizeAgent(c);
-  if (!auth.ok) {
-    if (auth.retryAfter !== undefined) c.header("Retry-After", String(auth.retryAfter));
-    return c.json({ error: auth.error }, auth.status);
-  }
+  if (!auth.ok) return refuse(c, auth);
   // models listing is not a billable turn — return the slot immediately.
   auth.release();
   try {

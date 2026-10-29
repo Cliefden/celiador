@@ -23,6 +23,9 @@ final class Api {
     }()
 
     private var config: DaemonConfig?
+    /// The sign-in methods the daemon reported (nil until `loadConfig()` ran, or
+    /// when the daemon didn't say).
+    var signInMethods: DaemonConfig.SignInMethods? { config?.signIn }
     private(set) var session: AuthSession?
 
     struct AuthSession: Codable {

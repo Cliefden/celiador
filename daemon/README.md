@@ -48,7 +48,7 @@ curl -s localhost:4661/api/config
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/api/health` | none | Liveness + version |
-| GET | `/api/config` | none | `authMode` + Supabase client config |
+| GET | `/api/config` | none | `authMode` + Supabase client config + `signIn {password, magicLink, github}` (which sign-in methods this environment offers, from GoTrue's settings + `CELIADOR_MAGIC_LINK`; absent when GoTrue is unreachable — clients then show every method) |
 | GET | `/api/limits` | none | The per-user agent limits in force (same object `/api/me` returns) — what the pricing page shows — plus `prices` (`{currency, inputPerMtok, cacheWritePerMtok, cacheReadPerMtok, outputPerMtok}`, the rate card a run's cost is priced at: `CELIADOR_PRICE_{INPUT,CACHE_WRITE,CACHE_READ,OUTPUT}_PER_MTOK`, default 15 / 18.75 / 1.5 / 75 USD) |
 | GET | `/api/me` | user | The signed-in account: identity, plan, today's usage vs. quota, and `tasks` (`running`, `prOpen`, `mergedLast7Days`, `costUsdLast7Days` = the cost of merged + pr-open tasks finished in the last 7 days, `concurrency`) |
 | GET | `/api/tasks` | user | The agent task queue (+ concurrency, linked repos); `GET /api/tasks/stream` = live changes (SSE). Tasks carry `runner` (`mac` / `cloud`), `machine`, `startedAt`, `finishedAt`, live `activity` / `awaiting` (from the linked session), `pr` (size, checks, mergeable — refreshed from GitHub with the App, lazily when older than 60 s) and `usage` (`{requests, inputTokens, outputTokens, costUsd}` — the linked session's, see §cost in `docs/CLIENT_INTEGRATION.md`) |
