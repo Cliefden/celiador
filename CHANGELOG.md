@@ -10,6 +10,21 @@ merge; `scripts/release.sh` rolls the section into a version on release.
   daemon (`daemon/`), the iPhone app (`ios/`, formerly `celiador-ios`) and the
   site (`web/`, formerly `celiador-web`) with their full history. One
   `vX.Y.Z` tag releases all three; the iOS version now equals the daemon's.
+- Sign-in: `GET /api/config` reports which sign-in methods are on
+  (`signIn {password, magicLink, github}`, read from GoTrue and
+  `CELIADOR_MAGIC_LINK`); the iPhone app hides the magic-link and GitHub
+  buttons when they are off. Agent refusals (sign in, plan, quota, overloaded)
+  answer with Anthropic's error envelope so clients show the reason (#54).
+- Site: the Sign in docs and `/start` describe the editor's real first run
+  (walkthrough, Account view, import step); the iPhone download row says
+  "By invite" until the public TestFlight link is set; `ios/TESTFLIGHT.md`
+  documents the public group as prod builds only (#55).
+- iPhone app: report an issue from the Account screen in TestFlight and
+  development builds, with version, channel, device and recent log attached
+  (PortfolioFeedback).
+- iPhone app: telemetry v2 — pairing funnel, steering, re-engagement surfaces
+  and relay errors (#49); analytics declared in the privacy manifest, Watch
+  build fixed (#53).
 
 ## [0.2.0] - 2026-10-28
 
