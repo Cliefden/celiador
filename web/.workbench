@@ -1,0 +1,11 @@
+# Read by `wb` (github.com/Cliefden/workbench) — worktrees, board, dev stack.
+WB_PROJECT="Celiador"
+
+wb_setup() {
+  npm install
+}
+
+WB_SERVICES="web"
+WB_web_DIR="."
+WB_web_CMD="npm run dev"
+WB_web_PORT=3000

@@ -1,0 +1,30 @@
+# Templated systemd unit for the Celiador marketing site — one instance per
+# environment (%i = prod | test | dev), each a Next.js server on its own
+# loopback port behind the host Caddy (daemon/deploy/Caddyfile.example):
+#
+#   env    dir                       port
+#   prod   ~/envs/prod/web           3100   (after the cutover; today: the plain celiador-web unit at ~/celiador-web)
+#   test   ~/envs/test/web           3102
+#   dev    ~/envs/dev/web            3103
+#
+# The port and the per-env settings come from ~/envs/%i/web.env, written by
+# deploy/provision-web.sh. Install (provision-web.sh does this):
+#   sudo cp celiador-web@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now celiador-web@test
+
+[Unit]
+Description=Celiador web (%i)
+After=network.target
+
+[Service]
+Type=simple
+User=stefan
+WorkingDirectory=/home/stefan/envs/%i/web
+EnvironmentFile=/home/stefan/envs/%i/web.env
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
