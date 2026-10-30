@@ -76,6 +76,7 @@ the export step names, and sets:
 |---|---|
 | `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY` | the App Store Connect API key (`R73AU5822H`, "Fastlane", App Manager — the one `asc --profile celiador` and `fastlane/` use; the `.p8` from `~/.appstoreconnect/private_keys/`) |
 | `IOS_DIST_P12_BASE64`, `IOS_DIST_P12_PASSWORD` | the CI certificate + key |
+| `IOS_DEV_P12_BASE64` | the CI **Apple Development** certificate + the same private key, as a `.p12` (same password as the distribution one). The archive step signs with a development identity; without this, `-allowProvisioningUpdates` mints a new development certificate per run and the team hits Apple's certificate cap within a day. Optional until the setup script has been re-run; the workflow warns when it is missing. |
 
 Re-running the script rotates everything (then revoke the previous CI
 certificate: `asc --profile celiador certificates list`, `… revoke --id`).
@@ -209,6 +210,13 @@ Cloud's uploads were numbered 10–40, below that range.
   `ios/scripts/ci-signing-setup.sh` again (it recreates them), or create them
   with `asc profiles create --profile-type IOS_APP_STORE` for the CI
   certificate.
+- *Choose a certificate to revoke. Your account has reached the maximum number
+  of certificates* at the archive: the runs minted a throwaway Apple
+  Development certificate each (no `IOS_DEV_P12_BASE64`). Revoke the "Created
+  via API" DEVELOPMENT certificates from App Store Connect → Certificates (or
+  `asc --profile celiador certificates revoke --id … --confirm`; their keys
+  lived only on ephemeral runners) and re-run `ios/scripts/ci-signing-setup.sh`
+  so the workflow gets a persistent one.
 - *Provisioning profile … doesn't include the … capability*: a capability was
   added to an App ID after its profile was made → regenerate the profiles (the
   setup script, or App Store Connect → Profiles → Edit → Save).
