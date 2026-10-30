@@ -193,8 +193,10 @@ jobs:
             -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
           rm -f "$RUNNER_TEMP/dist.pem"
           security import "$RUNNER_TEMP/dist-legacy.p12" -k "$KEYCHAIN" -P "$IOS_DIST_P12_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign -T /usr/bin/security
+          # Apple's intermediate, in case the image lacks it (a duplicate is
+          # reported as an error by security import — the runner has it already).
           curl -fsSL -o "$RUNNER_TEMP/AppleWWDRCAG3.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
-          security import "$RUNNER_TEMP/AppleWWDRCAG3.cer" -k "$KEYCHAIN" -A
+          security import "$RUNNER_TEMP/AppleWWDRCAG3.cer" -k "$KEYCHAIN" -A 2>/dev/null || echo "WWDR G3 intermediate already present"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
           rm -f "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/dist-legacy.p12"
