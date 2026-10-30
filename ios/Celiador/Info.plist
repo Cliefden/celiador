@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CELIADOR_COMMIT</key>
+	<string>$(CELIADOR_COMMIT)</string>
 	<key>CELIADOR_DAEMON_URL</key>
 	<string>$(CELIADOR_DAEMON_URL)</string>
 	<key>CELIADOR_URL_SCHEME</key>

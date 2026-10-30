@@ -4,7 +4,7 @@ TelemetryDeck app `F1064ED9-9413-4478-8753-20DC53104F78`, shared with the deskto
 editor, so phone and editor signals land in one dashboard. Every signal goes
 through `Celiador/Telemetry.swift`, which:
 
-- drops everything when **Account → Share anonymous usage data** is off;
+- drops everything when **Settings → Share anonymous usage data** is off;
 - sends in **test mode** from Dev and Staging builds (bundle id `.dev` / `.staging`);
 - sends only the event name, the parameters below, and the SDK defaults (app
   version, OS, device model, a salted hash of `identifierForVendor`).
@@ -28,13 +28,13 @@ their names/parameters are frozen.
 | `celiador/chatOpened` | `result`: loaded, failed | `ChatTranscriptView` | Is Activity history read, and does it load? |
 | `celiador/newRunOpened` | `editorRepos`: 0, 1, 2-5, 6+ | `NewRunView` | When users open New Run, is their editor reporting repos? |
 | `celiador/appLaunched` **v2** | `daysSinceInstall`: 0, 1-7, 8-30, 31+; `liveActivities`: on, off | `CeliadorApp.init` (cold launch) | Retention by install age; how many have Live Activities enabled? |
-| `celiador/screenViewed` **v2** | `screen`: login, unreachable, queue, agents, explorer, activity, session, changes, commit, pullRequest, newRun, newRunCompose, newTask, watchedRepos, account, codeFile, chatTranscript | `.trackScreen(_:)` on each tab root, pushed view and sheet (fires per appearance) | Which parts of the app are used at all? Which tabs earn their place? |
+| `celiador/screenViewed` **v2** | `screen`: login, unreachable, queue, agents, explorer, activity, session, changes, commit, pullRequest, newRun, newRunCompose, newTask, watchedRepos, account, settings, codeFile, chatTranscript | `.trackScreen(_:)` on each tab root, pushed view and sheet (fires per appearance) | Which parts of the app are used at all? Which tabs earn their place? |
 | `celiador/onboardingStep` **v2** | `step`: signInShown, signedIn, editorPaired, firstSessionMirrored, firstSessionOpened, firstPhoneCommand; `daysSinceInstall` | `Telemetry.onboarding(_:)` — once per install per step. signInShown: `LoginView`; signedIn: `AppModel.didSignIn` (incl. restored session); editorPaired: first editor-run session in the list, or New Run / New Task finding editor repos; firstSessionMirrored: first editor-originated session in the list; firstSessionOpened: `SessionView`; firstPhoneCommand: any steering command | Where does the sign-in → pair → mirror → steer funnel leak? |
 | `celiador/onboardingCompleted` **v2** | `daysSinceInstall` | With `firstPhoneCommand` | What share of installs reach "steered an agent from the phone", and how fast? |
 | `celiador/signInFailed` **v2** | `method`: password, signUp, magicLink, github; `reason`: httpNNN, offline, timeout, unreachable, tls, network, client, decode, other, callbackInvalid | `LoginView` catches; invalid magic-link / GitHub callback | Why do sign-ins fail (bad credentials vs. network vs. broken callback)? |
 | `celiador/signUpPendingConfirmation` **v2** | — | `LoginView.submit` (sign-up needs email confirmation) | How many sign-ups stall at email confirmation? |
 | `celiador/magicLinkSent` **v2** | — | `LoginView.sendMagicLink` | Magic-link sends vs. `signedIn{magicLink}` = link completion rate. |
-| `celiador/signedOut` **v2** | — | `AccountView` sign-out | How often do people sign out (churn / account switching)? |
+| `celiador/signedOut` **v2** | — | `SettingsView` sign-out | How often do people sign out (churn / account switching)? |
 | `celiador/accountDeleted` **v2** | — | `AccountView.deleteAccount` | Account deletions. |
 | `celiador/permissionPrompt` **v2** | `permission`: notifications; `result`: granted, denied | `PushManager.requestAuthorization`, only when the status was undetermined (i.e. the system prompt was shown) | What's the push opt-in rate? |
 | `celiador/notificationOpened` **v2** | `kind`: push, liveActivity, homeWidget, deepLink; `appState` (push only): running, launching | `PushManager` notification tap; `CeliadorApp.onOpenURL` session links (widget / Live Activity URLs carry `?src=`; untagged = deepLink) | Which re-engagement surface actually brings people back? |

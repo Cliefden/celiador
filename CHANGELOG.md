@@ -6,6 +6,15 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+- iPhone app: a **Settings** tab. It opens with a "This build" card — app,
+  version (build), channel, commit and the daemon it talks to, with "Copy build
+  info" for issue reports — and on a dev or test build the tab carries a
+  `DEV`/`TEST` badge so the install is identifiable from every screen (a Test
+  build is the App Store app pointed at test.celiador.ai). Account (profile,
+  usage, pull requests, deletion) is a screen under it; sign-out, notifications,
+  usage-data sharing, Report an issue and the legal links sit on the Settings
+  root. The Build iOS workflow now stamps the short commit into the app
+  (`CELIADOR_COMMIT`); `ios/CHANNELS.md` § Telling the builds apart.
 - iPhone app builds moved from Xcode Cloud to GitHub Actions
   (`.github/workflows/ios.yml`, "Build iOS"): push to `main` → the Dev app on
   TestFlight, a `vX.Y.Z` tag → the Test build, manual `prod` → the App Store

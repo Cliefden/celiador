@@ -8,7 +8,6 @@ struct SessionsView: View {
     @State private var actionError: String?
     @State private var toast: String?
     @State private var query = ""
-    @State private var showAccount = false
     @State private var showNewRun = false
     @State private var didLoad = false
 
@@ -33,8 +32,8 @@ struct SessionsView: View {
         .navigationTitle("Runs")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { Haptics.tap(); showAccount = true } label: { Image(systemName: "person.circle") }
-                    .accessibilityLabel("Account")
+                Button { Haptics.tap(); model.selectedTab = .settings } label: { Image(systemName: "person.circle") }
+                    .accessibilityLabel("Settings")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { Haptics.tap(); showNewRun = true } label: { Image(systemName: "plus") }
@@ -42,7 +41,6 @@ struct SessionsView: View {
             }
         }
         .toast($toast)
-        .sheet(isPresented: $showAccount) { AccountView().trackScreen(.account) }
         .sheet(isPresented: $showNewRun) { NewRunView().trackScreen(.newRun) }
         .task {
             await model.refresh()

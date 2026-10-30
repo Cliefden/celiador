@@ -8,3 +8,6 @@ BUNDLE_ID_SUFFIX =
 APP_NAME = Celiador
 URL_SCHEME = celiador
 CELIADOR_DAEMON_URL = https:/$()/celiador.ai
+// Short commit of the build; CI passes CELIADOR_COMMIT=<sha7> to xcodebuild
+// (ios.yml), a build from Xcode leaves it empty ("local build" in Settings).
+CELIADOR_COMMIT =

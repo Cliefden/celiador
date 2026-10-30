@@ -54,6 +54,25 @@ committed icons never change.
 Locally: `swift scripts/icon-banner.swift "#c62828" 1a2b3c4 Celiador/Assets.xcassets/AppIcon.appiconset/*.png`,
 undo with `git checkout Celiador/Assets.xcassets`.
 
+## Telling the builds apart in the app
+
+The **Settings** tab (`Celiador/SettingsView.swift`) opens with a "This build"
+card: app name, `version (build)`, the channel as a loud pill, the commit and
+the daemon host — and on a dev or test build the Settings tab itself carries
+the channel (`DEV` / `TEST`) as its badge, so the install is identifiable from
+every screen. This matters because a Test build *is* the prod app (same bundle
+id, same icon). "Copy build info" puts the whole line on the pasteboard for
+an issue. All of it comes from `Celiador/BuildInfo.swift`, which is also what
+`Telemetry` (test mode) and `Feedback` (report context) use, so the three can't
+disagree.
+
+The card tints red for dev and green for test — the icon-banner colours below.
+The commit arrives as `CELIADOR_COMMIT` in `Info.plist`: the Build iOS workflow
+passes `CELIADOR_COMMIT=${GITHUB_SHA::7}` to `xcodebuild archive`; a build
+from Xcode leaves it empty and the card says "local build". The daemon row
+shows an `override` pill when `CELIADOR_URL` (a scheme env var) is in effect,
+because then the channel follows the daemon, not the xcconfig.
+
 ## Telemetry
 
 `Celiador/Telemetry.swift` sends in TelemetryDeck test mode from the Dev app

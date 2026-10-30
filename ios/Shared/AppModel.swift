@@ -12,8 +12,8 @@ final class AppModel {
         case signedIn
     }
 
-    /// The IDE shell's bottom tabs: Queue · Runs (agents) · Files (explorer) · Activity.
-    enum Tab: Hashable { case queue, agents, explorer, activity }
+    /// The IDE shell's bottom tabs: Queue · Runs (agents) · Files (explorer) · Activity · Settings.
+    enum Tab: Hashable { case queue, agents, explorer, activity, settings }
 
     /// A screen pushed on the Queue tab's stack.
     enum QueueRoute: Hashable {

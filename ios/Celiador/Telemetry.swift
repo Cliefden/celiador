@@ -107,7 +107,7 @@ enum Telemetry {
         case queue, agents, explorer, activity
         case session, changes, commit, pullRequest
         case newRun, newRunCompose, newTask, watchedRepos
-        case account, codeFile, chatTranscript
+        case account, settings, codeFile, chatTranscript
     }
 
     /// The pairing funnel, in order. Each fires at most once per install.
@@ -230,14 +230,9 @@ enum Telemetry {
         }
     }
 
-    /// The Dev app has its own bundle id suffix; the Test build is the prod
-    /// bundle pointed at test.celiador.ai (CHANNELS.md), so the daemon host is
-    /// what tells a dogfood build from the real thing.
-    private static var isTestChannel: Bool {
-        let id = Bundle.main.bundleIdentifier ?? ""
-        if id.hasSuffix(".dev") { return true }
-        return Api.shared.baseURL.host != "celiador.ai"
-    }
+    /// Any build that isn't the prod channel (the Dev app, or the prod bundle
+    /// pointed at a non-prod daemon) sends in test mode — see `BuildInfo.channel`.
+    private static var isTestChannel: Bool { BuildInfo.channel != .prod }
 }
 
 extension View {

@@ -1,8 +1,8 @@
 import SwiftUI
-import PortfolioFeedback
 
-/// Account screen: the signed-in profile (from the daemon's /api/profile), edit the
-/// display name, and sign out. Presented as a sheet from the sessions list.
+/// Account screen: the signed-in profile (from the daemon's /api/profile), the
+/// display name, today's usage, the pull-request numbers and account deletion.
+/// Pushed from the Settings tab (sign-out and preferences live there).
 struct AccountView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -14,7 +14,6 @@ struct AccountView: View {
     @State private var saving = false
     @State private var confirmingDelete = false
     @State private var deleting = false
-    @AppStorage(Telemetry.enabledKey) private var telemetryEnabled = true
 
     private var initials: String {
         let source = (profile?.displayName?.isEmpty == false ? profile?.displayName : profile?.email) ?? "?"
@@ -24,164 +23,126 @@ struct AccountView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    if let profile {
-                        VStack(spacing: 10) {
-                            ZStack {
-                                Circle().fill(Theme.accentGradient).frame(width: 72, height: 72)
-                                    .shadow(color: Theme.accent.opacity(0.35), radius: 14, y: 6)
-                                Text(initials)
-                                    .font(.title2.weight(.bold))
-                                    .foregroundStyle(.white)
-                            }
-                            Text(profile.displayName?.isEmpty == false ? profile.displayName! : (profile.email ?? "Your account"))
-                                .font(.title2.weight(.semibold))
-                            if let email = profile.email {
-                                Text(email).font(.subheadline).foregroundStyle(.secondary)
-                            }
-                            StatusPill(text: "\(profile.plan.capitalized) plan", color: Theme.violet, icon: "sparkles")
+        List {
+            Section {
+                if let profile {
+                    VStack(spacing: 10) {
+                        ZStack {
+                            Circle().fill(Theme.accentGradient).frame(width: 72, height: 72)
+                                .shadow(color: Theme.accent.opacity(0.35), radius: 14, y: 6)
+                            Text(initials)
+                                .font(.title2.weight(.bold))
+                                .foregroundStyle(.white)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .listRowBackground(Color.clear)
-                    } else if let error {
-                        Text(error).font(.footnote).foregroundStyle(Theme.red)
-                            } else {
-                        HStack { Spacer(); ProgressView(); Spacer() }
-                            .listRowBackground(Color.clear)
-                    }
-                }
-
-                if profile != nil {
-                    Section {
-                        HStack {
-                            Text("Display name")
-                            Spacer()
-                            TextField("Your name", text: $name)
-                                .multilineTextAlignment(.trailing)
-                                .foregroundStyle(.secondary)
-                                .submitLabel(.done)
-                                .onSubmit(save)
+                        Text(profile.displayName?.isEmpty == false ? profile.displayName! : (profile.email ?? "Your account"))
+                            .font(.title2.weight(.semibold))
+                        if let email = profile.email {
+                            Text(email).font(.subheadline).foregroundStyle(.secondary)
                         }
-                    } header: {
-                        Text("Profile")
+                        StatusPill(text: "\(profile.plan.capitalized) plan", color: Theme.violet, icon: "sparkles")
                     }
-                .listRowBackground(Theme.panel)
-                }
-
-                if let me {
-                    Section {
-                        UsageMeter(label: "Requests", used: me.usage.requests, limit: me.limits.dailyRequests)
-                        UsageMeter(label: "Input tokens", used: me.usage.inputTokens, limit: me.limits.dailyInput)
-                        UsageMeter(label: "Output tokens", used: me.usage.outputTokens, limit: me.limits.dailyOutput)
-                    } header: {
-                        Text("Today's usage")
-                    } footer: {
-                        Text(resetsFooter)
-                    }
-                .listRowBackground(Theme.panel)
-
-                    if let tasks = me.tasks {
-                        Section {
-                            LabeledContent("Merged, last 7 days", value: "\(tasks.mergedLast7Days)")
-                            LabeledContent("Waiting for review", value: "\(tasks.prOpen)")
-                            LabeledContent("Running now", value: "\(tasks.running) of \(tasks.concurrency)")
-                            if let cost = tasks.costUsdLast7Days {
-                                LabeledContent("Agent spend, last 7 days", value: RunUsage.formatCost(cost))
-                            }
-                        } header: {
-                            Text("Agent pull requests")
-                        } footer: {
-                            Text(tasks.costUsdLast7Days == nil
-                                 ? "Queued issues become pull requests; the merged count is the one number Celiador steers by."
-                                 : "Queued issues become pull requests; the merged count is the one number Celiador steers by. Spend is what those runs cost at Celiador's published rates.")
-                        }
-                .listRowBackground(Theme.panel)
-                        }
-                }
-
-                Section {
-                    Label {
-                        Text("Your code stays on your machine. Agents run locally; the daemon only relays what you send and never trains on your code.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    } icon: {
-                        Image(systemName: "lock.shield").foregroundStyle(Theme.accent)
-                    }
-                }
-                .listRowBackground(Theme.panel)
-
-                Section {
-                    Toggle(isOn: $telemetryEnabled) {
-                        Label("Share anonymous usage data", systemImage: "chart.bar")
-                    }
-                    .tint(Theme.accent)
-                    .onChange(of: telemetryEnabled) { _, enabled in Telemetry.isEnabled = enabled }
-                    // Testing builds only (TestFlight / Xcode / ad hoc); renders
-                    // nothing in App Store installs. Configured in Feedback.swift.
-                    ReportIssueRow()
-                } footer: {
-                    Text("Which features get used and what crashes — never your code, prompts, chat, repository names or email. Details at celiador.ai/privacy.")
-                }
-                .listRowBackground(Theme.panel)
-
-                Section {
-                    Button {
-                        Haptics.warning(); Telemetry.signal(.signedOut); model.signOut(); dismiss()
-                    } label: {
-                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                }
-                .listRowBackground(Theme.panel)
-
-                Section {
-                    Button(role: .destructive) {
-                        Haptics.warning(); confirmingDelete = true
-                    } label: {
-                        if deleting {
-                            HStack { ProgressView(); Text("Deleting account…") }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .listRowBackground(Color.clear)
+                } else if let error {
+                    Text(error).font(.footnote).foregroundStyle(Theme.red)
                         } else {
-                            Label("Delete account", systemImage: "trash")
-                        }
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                        .listRowBackground(Color.clear)
+                }
+            }
+
+            if profile != nil {
+                Section {
+                    HStack {
+                        Text("Display name")
+                        Spacer()
+                        TextField("Your name", text: $name)
+                            .multilineTextAlignment(.trailing)
+                            .foregroundStyle(.secondary)
+                            .submitLabel(.done)
+                            .onSubmit(save)
                     }
-                    .disabled(deleting)
-                    if let error, profile != nil {
-                        Text(error).font(.footnote).foregroundStyle(Theme.red)
-                    }
+                } header: {
+                    Text("Profile")
+                }
+            .listRowBackground(Theme.panel)
+            }
+
+            if let me {
+                Section {
+                    UsageMeter(label: "Requests", used: me.usage.requests, limit: me.limits.dailyRequests)
+                    UsageMeter(label: "Input tokens", used: me.usage.inputTokens, limit: me.limits.dailyInput)
+                    UsageMeter(label: "Output tokens", used: me.usage.outputTokens, limit: me.limits.dailyOutput)
+                } header: {
+                    Text("Today's usage")
                 } footer: {
-                    Text("Permanently deletes your Celiador account, profile, chat history and push registrations. This can't be undone.")
+                    Text(resetsFooter)
                 }
-                .listRowBackground(Theme.panel)
+            .listRowBackground(Theme.panel)
+
+                if let tasks = me.tasks {
+                    Section {
+                        LabeledContent("Merged, last 7 days", value: "\(tasks.mergedLast7Days)")
+                        LabeledContent("Waiting for review", value: "\(tasks.prOpen)")
+                        LabeledContent("Running now", value: "\(tasks.running) of \(tasks.concurrency)")
+                        if let cost = tasks.costUsdLast7Days {
+                            LabeledContent("Agent spend, last 7 days", value: RunUsage.formatCost(cost))
+                        }
+                    } header: {
+                        Text("Agent pull requests")
+                    } footer: {
+                        Text(tasks.costUsdLast7Days == nil
+                             ? "Queued issues become pull requests; the merged count is the one number Celiador steers by."
+                             : "Queued issues become pull requests; the merged count is the one number Celiador steers by. Spend is what those runs cost at Celiador's published rates.")
+                    }
+            .listRowBackground(Theme.panel)
+                    }
             }
-            .listStyle(.insetGrouped)
-            .brandGround()
-            .navigationTitle("Account")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if saving {
-                        ProgressView()
-                    } else if profile != nil {
-                        Button("Save", action: save)
-                            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name == profile?.displayName)
+
+            Section {
+                Button(role: .destructive) {
+                    Haptics.warning(); confirmingDelete = true
+                } label: {
+                    if deleting {
+                        HStack { ProgressView(); Text("Deleting account…") }
+                    } else {
+                        Label("Delete account", systemImage: "trash")
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                .disabled(deleting)
+                if let error, profile != nil {
+                    Text(error).font(.footnote).foregroundStyle(Theme.red)
+                }
+            } footer: {
+                Text("Permanently deletes your Celiador account, profile, chat history and push registrations. This can't be undone.")
+            }
+            .listRowBackground(Theme.panel)
+        }
+        .listStyle(.insetGrouped)
+        .brandGround()
+        .navigationTitle("Account")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if saving {
+                    ProgressView()
+                } else if profile != nil {
+                    Button("Save", action: save)
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name == profile?.displayName)
                 }
             }
-            .task { await load() }
-            .confirmationDialog(
-                "Delete your Celiador account?",
-                isPresented: $confirmingDelete,
-                titleVisibility: .visible
-            ) {
-                Button("Delete account", role: .destructive, action: deleteAccount)
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Your account, profile and chat history are permanently deleted. This can't be undone.")
-            }
+        }
+        .task { await load() }
+        .confirmationDialog(
+            "Delete your Celiador account?",
+            isPresented: $confirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete account", role: .destructive, action: deleteAccount)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your account, profile and chat history are permanently deleted. This can't be undone.")
         }
     }
 

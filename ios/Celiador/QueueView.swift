@@ -13,7 +13,6 @@ struct QueueView: View {
     @State private var toast: String?
     @State private var showNew = false
     @State private var showRepos = false
-    @State private var showAccount = false
     @State private var busyRequests: Set<String> = []
 
     private var needsYou: [AgentTask] { model.needsYouTasks }
@@ -112,8 +111,8 @@ struct QueueView: View {
         .toolbar {
             ToolbarItem(placement: .principal) { Text("") }
             ToolbarItem(placement: .topBarLeading) {
-                Button { Haptics.tap(); showAccount = true } label: { Image(systemName: "person.crop.circle") }
-                    .accessibilityLabel("Account")
+                Button { Haptics.tap(); model.selectedTab = .settings } label: { Image(systemName: "person.crop.circle") }
+                    .accessibilityLabel("Settings")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showRepos = true } label: { Image(systemName: "eye") }
@@ -125,7 +124,6 @@ struct QueueView: View {
             }
         }
         .toast($toast)
-        .sheet(isPresented: $showAccount) { AccountView().trackScreen(.account) }
         .sheet(isPresented: $showNew) { NewTaskSheet { title in toast = "Queued: \(title)"; Task { await reload() } }.trackScreen(.newTask) }
         .sheet(isPresented: $showRepos) { WatchedReposSheet(watched: $model.watchedRepos).trackScreen(.watchedRepos) }
         // The model polls + streams tasks while signed in; load now so the tab is fresh.

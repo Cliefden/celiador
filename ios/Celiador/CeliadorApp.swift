@@ -123,7 +123,9 @@ struct ContentView: View {
         case "history":
             NavigationStack { HistoryView() }
         case "account":
-            AccountView()
+            NavigationStack { AccountView() }
+        case "settings":
+            NavigationStack { SettingsView() }
         case "explorer":
             NavigationStack { ExplorerView() }
         case "code":
@@ -147,7 +149,9 @@ struct ContentView: View {
     }
 }
 
-/// The signed-in shell: Queue (home) · Runs (live agent sessions) · Files · Activity (history).
+/// The signed-in shell: Queue (home) · Runs (live agent sessions) · Files · Activity (history) · Settings.
+/// On a dev or test build the Settings tab carries the channel as its badge, so
+/// which install this is stays visible from every screen (CHANNELS.md).
 struct TabShell: View {
     @Environment(AppModel.self) private var model
 
@@ -183,6 +187,11 @@ struct TabShell: View {
             Tab("Activity", systemImage: "clock", value: AppModel.Tab.activity) {
                 NavigationStack { HistoryView().trackScreen(.activity) }
             }
+
+            Tab("Settings", systemImage: "gearshape", value: AppModel.Tab.settings) {
+                NavigationStack { SettingsView().trackScreen(.settings) }
+            }
+            .badge(BuildInfo.channel == .prod ? nil : Text(BuildInfo.channel.label))
         }
         .modifier(TabBarBehaviour())
     }

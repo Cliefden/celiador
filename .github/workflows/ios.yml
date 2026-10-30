@@ -223,10 +223,13 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CELIADOR_COMMIT="${GITHUB_SHA::7}" \
             DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
             OTHER_CODE_SIGN_FLAGS="--keychain $RUNNER_TEMP/$KEYCHAIN_NAME" \
             | xcbeautify --renderer github-actions
           plutil -p "$RUNNER_TEMP/Celiador.xcarchive/Info.plist" | grep -E 'CFBundleShortVersionString|CFBundleVersion|CFBundleIdentifier'
+          # The commit must reach the app bundle: the Settings build card shows it.
+          plutil -p "$RUNNER_TEMP"/Celiador.xcarchive/Products/Applications/*.app/Info.plist | grep -F "CELIADOR_COMMIT"
 
       - name: Upload to App Store Connect
         env:

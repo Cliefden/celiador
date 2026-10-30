@@ -52,6 +52,9 @@ targets:
         CFBundleDisplayName: $(APP_NAME)
         CELIADOR_DAEMON_URL: $(CELIADOR_DAEMON_URL)
         CELIADOR_URL_SCHEME: $(URL_SCHEME)
+        # Short commit, stamped by the Build iOS workflow at archive time
+        # (empty for a build from Xcode); shown on the Settings build card.
+        CELIADOR_COMMIT: $(CELIADOR_COMMIT)
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         NSSupportsLiveActivities: true
