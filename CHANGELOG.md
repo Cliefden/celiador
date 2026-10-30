@@ -6,6 +6,8 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-30
+
 - iPhone app: a **Settings** tab. It opens with a "This build" card — app,
   version (build), channel, commit and the daemon it talks to, with "Copy build
   info" for issue reports — and on a dev or test build the tab carries a
