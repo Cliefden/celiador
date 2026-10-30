@@ -10,14 +10,19 @@ how the build workflow (`.github/workflows/ios.yml`) picks a channel:
 | Config | Scheme | App | Bundle ID | Daemon (`CELIADOR_DAEMON_URL`) | URL scheme | Build iOS channel |
 |---|---|---|---|---|---|---|
 | **Dev** (debug) | `Celiador Dev` | Celiador Dev | `ai.celiador.companion.dev` | `https://dev.celiador.ai` | `celiador-dev` | **dev**: push to `main` → TestFlight (Dev app) |
-| **Test** (release) | `Celiador Test` | Celiador | `ai.celiador.companion` | `https://test.celiador.ai` | `celiador` | **test**: tag `vX.Y.Z` → TestFlight |
+| **Test** (release) | `Celiador Test` | Celiador Test | `ai.celiador.companion` | `https://test.celiador.ai` | `celiador` | **test**: tag `vX.Y.Z` → TestFlight |
 | **Release** (release) | `Celiador` | Celiador | `ai.celiador.companion` | `https://celiador.ai` | `celiador` | **prod**: manual dispatch → App Store Connect |
 
 The Dev app installs beside the real one (own bundle id, own name, own URL
 scheme). The Test config is the real app pointed at the test environment: a
 TestFlight build of it replaces the App Store build on a tester's phone, and
 a token it kept from test is refused by prod (401) — the app then asks to sign
-in again. There is no `.test` bundle id.
+in again. There is no `.test` bundle id, so the Test build is named
+**"Celiador Test"** on the home screen (`APP_NAME` in `Config/Test.xcconfig`)
+to say where it points; App Store Connect and the TestFlight app still list it
+under the shared record "Celiador". Each environment has its own database, so
+a Test or Dev install never shows prod's tasks, runs or history
+(`../ENVIRONMENTS.md`).
 
 The app reads the daemon URL as: `CELIADOR_URL` env var (scheme override) →
 `CELIADOR_DAEMON_URL` from `Info.plist` (the build channel) →
