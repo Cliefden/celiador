@@ -6,6 +6,8 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-30
+
 - iPhone app: the test channel is its own app, **Celiador Test**
   (`ai.celiador.companion.test`, URL scheme `celiador-test`), beside Celiador
   Dev and the App Store app. Until v0.2.4 a Test build was the prod bundle id
