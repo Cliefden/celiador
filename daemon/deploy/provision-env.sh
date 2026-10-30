@@ -28,8 +28,9 @@ set -euo pipefail
 ENV="${1:-}"
 case "$ENV" in
   test) DPORT=4672; GPORT=9997; PGPORT=5433; HOSTN=test.celiador.ai; MODEL=claude-opus-4-8
-        APNS_TOPIC=ai.celiador.companion
-        # The test app is the prod bundle (celiador://); the test editor is celiador-test://.
+        APNS_TOPIC=ai.celiador.companion.test
+        # The test app (ai.celiador.companion.test) and the test editor are both
+        # celiador-test://; celiador://* stays for Test builds older than v0.2.5.
         ALLOW="celiador://*,celiador-test://*" ;;
   dev)  DPORT=4673; GPORT=9996; PGPORT=5434; HOSTN=dev.celiador.ai; MODEL=claude-haiku-4-5
         APNS_TOPIC=ai.celiador.companion.dev

@@ -6,6 +6,13 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+- iPhone app: the test channel is its own app, **Celiador Test**
+  (`ai.celiador.companion.test`, URL scheme `celiador-test`), beside Celiador
+  Dev and the App Store app. Until v0.2.4 a Test build was the prod bundle id
+  and replaced the App Store install on the phone, hiding prod's data. The test
+  daemon's push topic follows (`APNS_TOPIC`), as does the GoTrue allowlist;
+  `ios/CHANNELS.md`.
+
 ## [0.2.4] - 2026-10-30
 
 - No changes; released with the train.

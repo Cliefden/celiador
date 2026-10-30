@@ -5,10 +5,10 @@ import SwiftUI
 /// it talks to. One source of truth for the Settings build card, the telemetry
 /// test-mode switch and the issue-report context, so the three can't disagree.
 ///
-/// The channel rule (CHANNELS.md): the Dev app has its own bundle id suffix;
-/// Test is the prod bundle pointed at a non-prod daemon; everything else is prod.
-/// A `CELIADOR_URL` override from an Xcode scheme moves the channel with it,
-/// which is the point — the card shows where the requests actually go.
+/// The channel rule (CHANNELS.md): the Dev and Test apps have their own bundle
+/// id suffixes; the prod bundle is prod unless it talks to a non-prod daemon
+/// (a `CELIADOR_URL` override from an Xcode scheme), in which case the card
+/// says test — it shows where the requests actually go.
 enum BuildInfo {
     enum Channel: String {
         case dev, test, prod
@@ -34,14 +34,16 @@ enum BuildInfo {
         var blurb: String {
             switch self {
             case .dev: "Dev app — a push to main, pointed at dev.celiador.ai."
-            case .test: "Release candidate from a version tag, pointed at test.celiador.ai."
+            case .test: "Test app — a release candidate from a version tag, pointed at test.celiador.ai."
             case .prod: "The App Store build, pointed at celiador.ai."
             }
         }
     }
 
     static let channel: Channel = {
-        if Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true { return .dev }
+        let bundle = Bundle.main.bundleIdentifier ?? ""
+        if bundle.hasSuffix(".dev") { return .dev }
+        if bundle.hasSuffix(".test") { return .test }
         return daemonHost == "celiador.ai" ? .prod : .test
     }()
 

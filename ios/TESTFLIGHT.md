@@ -13,7 +13,7 @@ re-created against this one after the move from `celiador-ios`).
 | Channel | Starts on | Archives scheme | App | Goes to | Icon |
 |---|---|---|---|---|---|
 | **dev** | push to `main` touching `ios/` | `Celiador Dev` (Dev config → `dev.celiador.ai`) | Celiador Dev (`6828169951`, `ai.celiador.companion.dev`) | TestFlight, `Internal` group | red, commit |
-| **test** | tag `vX.Y.Z` | `Celiador Test` (Test config → `test.celiador.ai`) | Celiador (`6819707590`, `ai.celiador.companion`) | TestFlight, `Internal` group | green, tag |
+| **test** | tag `vX.Y.Z` | `Celiador Test` (Test config → `test.celiador.ai`) | Celiador Test (`6828976551`, `ai.celiador.companion.test`) | TestFlight, `Internal` group | green, tag |
 | **prod** | Actions → Build iOS → Run workflow → `prod` (the `prod` Environment's reviewer approves) | `Celiador` (Release config → `celiador.ai`) | Celiador | App Store Connect: TestFlight + App Store review | plain |
 
 `CHANNELS.md` explains the configs, schemes and xcconfigs behind this. The
@@ -53,7 +53,8 @@ the version and sits on `main`.
 
 The `Internal` TestFlight group of each app has access to all builds, so a
 processed build is installable by its members with no further step: dev
-`f8297a47-e0f3-49bc-abcd-7ae1eb8fb15f` (Celiador Dev), prod
+`f8297a47-e0f3-49bc-abcd-7ae1eb8fb15f` (Celiador Dev), test
+`6b1cbdb2-d702-4a13-ad52-adba03af2c01` (Celiador Test), prod
 `5fd35a26-4b72-4f61-80c5-8531fb364bf8` (Celiador). Minutes are free: the
 repository is public.
 
@@ -68,7 +69,7 @@ ios/scripts/ci-signing-setup.sh        # from a Mac with asc (profile celiador) 
 It generates a private key here, has App Store Connect issue an **Apple
 Distribution certificate for it** (a CI-only certificate — revoking it never
 touches the one in your login keychain; Apple allows three per team), packages
-it as a `.p12`, (re)creates the four **App Store profiles** bound to it that
+it as a `.p12`, (re)creates the six **App Store profiles** bound to it that
 the export step names, and sets:
 
 | Secret | What |
@@ -116,7 +117,7 @@ minutes after the upload.
 Then attach **What to Test** notes (template: `testflight/WHAT_TO_TEST.md`):
 
 ```sh
-asc --profile celiador builds list --app 6819707590 --limit 1 --output table          # newest build id
+asc --profile celiador builds list --app 6828976551 --limit 1 --output table          # newest Test build id (6819707590 for a prod build)
 asc --profile celiador builds test-notes create --build-id <BUILD_ID> --locale en-US --whats-new @file:testflight/WHAT_TO_TEST.md
 ```
 
@@ -176,8 +177,8 @@ deliberate.
 
 ## Verifying the first build (ios#2 checklist)
 
-- Install from TestFlight on the iPhone (the Dev app stays side by side:
-  different bundle id).
+- Install from TestFlight on the iPhone (the Dev and Test apps stay side by
+  side with the App Store app: different bundle ids).
 - Sign in against prod; the phone must appear in the editor's presence picker and
   receive a push when a run needs you (production APNs now, so the daemon's
   `APNS_ENV` must be `production` for this bundle id).

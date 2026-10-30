@@ -12,9 +12,9 @@
 #      certificate for it — a certificate only the workflow uses, so revoking it
 #      never touches the one in your login keychain. Apple allows three.
 #   2. Packages certificate + key as a password-protected .p12, and (re)creates
-#      the four App Store provisioning profiles bound to that certificate —
-#      "Celiador CI App Store", "Celiador Widgets CI App Store", "Celiador Dev
-#      CI App Store", "Celiador Dev Widgets CI App Store" — which the workflow's
+#      the six App Store provisioning profiles bound to that certificate —
+#      "Celiador [Dev|Test] CI App Store" and "Celiador [Dev|Test] Widgets CI
+#      App Store" — which the workflow's
 #      export step names (manual signing; Xcode downloads them by name).
 #   3. Writes the repository secrets the workflow reads:
 #        ASC_KEY_ID, ASC_ISSUER_ID, ASC_PRIVATE_KEY   the App Store Connect API key
@@ -99,6 +99,8 @@ Celiador CI App Store|ai.celiador.companion
 Celiador Widgets CI App Store|ai.celiador.companion.widgets
 Celiador Dev CI App Store|ai.celiador.companion.dev
 Celiador Dev Widgets CI App Store|ai.celiador.companion.dev.widgets
+Celiador Test CI App Store|ai.celiador.companion.test
+Celiador Test Widgets CI App Store|ai.celiador.companion.test.widgets
 PROFILES
 
 echo "→ writing the repository secrets on $repo"

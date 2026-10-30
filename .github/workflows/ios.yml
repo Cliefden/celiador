@@ -9,7 +9,7 @@ name: Build iOS
 #                          TestFlight, internal group — only when the push
 #                          touches ios/ or this workflow
 #   push tag vX.Y.Z      → Test channel: scheme "Celiador Test" (Test config →
-#                          test.celiador.ai, the prod bundle id) → TestFlight;
+#                          test.celiador.ai, its own bundle id .test) → TestFlight;
 #                          the tag must equal MARKETING_VERSION in ios/project.yml
 #                          and sit on main (path filters never apply to tags: a
 #                          release builds everything)
@@ -99,7 +99,7 @@ jobs:
           build=$((1000 + GITHUB_RUN_NUMBER))
           case "$channel" in
             dev)  scheme="Celiador Dev";  app=6828169951; colour="#c62828"; label="${GITHUB_SHA::7}" ;;
-            test) scheme="Celiador Test"; app=6819707590; colour="#2e7d32"; label="${GITHUB_REF_NAME}" ;;
+            test) scheme="Celiador Test"; app=6828976551; colour="#2e7d32"; label="${GITHUB_REF_NAME}" ;;
             prod) scheme="Celiador";      app=6819707590; colour="";        label="" ;;
           esac
           {
@@ -249,8 +249,9 @@ jobs:
           # targets, so fastlane's sigh (on the runner image) fetches the two
           # named profiles with the same API key and installs them.
           case "$CHANNEL" in
-            dev)  suffix=".dev"; app_profile="Celiador Dev CI App Store"; widgets_profile="Celiador Dev Widgets CI App Store" ;;
-            *)    suffix="";     app_profile="Celiador CI App Store";     widgets_profile="Celiador Widgets CI App Store" ;;
+            dev)  suffix=".dev";  app_profile="Celiador Dev CI App Store";  widgets_profile="Celiador Dev Widgets CI App Store" ;;
+            test) suffix=".test"; app_profile="Celiador Test CI App Store"; widgets_profile="Celiador Test Widgets CI App Store" ;;
+            *)    suffix="";      app_profile="Celiador CI App Store";      widgets_profile="Celiador Widgets CI App Store" ;;
           esac
           python3 - <<'PY' > "$RUNNER_TEMP/asc-key.json"
           import json, os

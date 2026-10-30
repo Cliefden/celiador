@@ -71,7 +71,7 @@ that env's deep-link schemes:
 | Env | `GOTRUE_URI_ALLOW_LIST` | Why |
 |---|---|---|
 | prod | `celiador://*` (+ the editor's `celiador://celiador.celiador-ai/auth-callback`) | the App Store app and the prod editor |
-| test | `celiador://*,celiador-test://*` | the test app is the prod bundle (TestFlight, pointed at test); the test editor is `celiador-test` |
+| test | `celiador://*,celiador-test://*` | the Test app (`ai.celiador.companion.test`, since v0.2.5) and the test editor are both `celiador-test`; `celiador://*` stays for older Test builds that were the prod bundle |
 | dev | `celiador-dev://*` | the dev app and the dev editor |
 
 The anon key `/api/config` hands the clients is a long-lived HS256 JWT with
