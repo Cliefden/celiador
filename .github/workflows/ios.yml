@@ -184,12 +184,20 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$keychain_password" "$KEYCHAIN"
           base64 --decode <<<"$IOS_DIST_P12_BASE64" > "$RUNNER_TEMP/dist.p12"
-          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "$IOS_DIST_P12_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign -T /usr/bin/security
+          # `security import` cannot decode a modern PKCS#12 (PBES2 / AES-256,
+          # what OpenSSL 3 and Go produce by default): "Unable to decode the
+          # provided data". Re-wrap the identity with the legacy 3DES / SHA-1
+          # algorithms first; a p12 that already is legacy passes through.
+          openssl pkcs12 -in "$RUNNER_TEMP/dist.p12" -passin env:IOS_DIST_P12_PASSWORD -nodes -out "$RUNNER_TEMP/dist.pem"
+          openssl pkcs12 -export -in "$RUNNER_TEMP/dist.pem" -out "$RUNNER_TEMP/dist-legacy.p12" -passout env:IOS_DIST_P12_PASSWORD \
+            -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
+          rm -f "$RUNNER_TEMP/dist.pem"
+          security import "$RUNNER_TEMP/dist-legacy.p12" -k "$KEYCHAIN" -P "$IOS_DIST_P12_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign -T /usr/bin/security
           curl -fsSL -o "$RUNNER_TEMP/AppleWWDRCAG3.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
           security import "$RUNNER_TEMP/AppleWWDRCAG3.cer" -k "$KEYCHAIN" -A
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
-          rm -f "$RUNNER_TEMP/dist.p12"
+          rm -f "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/dist-legacy.p12"
           security find-identity -v -p codesigning "$KEYCHAIN"
 
       - name: Archive

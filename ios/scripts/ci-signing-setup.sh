@@ -66,7 +66,14 @@ echo "→ packaging the .p12"
 uuidgen | tr -d '\n' > "$work/p12.password"
 chmod 600 "$work/p12.password"
 asc certificates export --certificate "$work/ci.cer" --private-key "$work/ci.key" \
-  --csr "$work/ci.csr" --password-file "$work/p12.password" --p12-out "$work/ci.p12" --output json >/dev/null
+  --csr "$work/ci.csr" --password-file "$work/p12.password" --p12-out "$work/ci-modern.p12" --output json >/dev/null
+# asc writes a modern PKCS#12 (PBES2 / AES-256) that macOS `security import`
+# cannot decode ("Unable to decode the provided data"); re-wrap it with the
+# legacy 3DES / SHA-1 algorithms. The workflow does the same defensively.
+openssl pkcs12 -in "$work/ci-modern.p12" -passin "file:$work/p12.password" -nodes -out "$work/ci.pem"
+openssl pkcs12 -export -in "$work/ci.pem" -out "$work/ci.p12" -passout "file:$work/p12.password" \
+  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
+rm -f "$work/ci.pem" "$work/ci-modern.p12"
 
 echo "→ writing the repository secrets on $repo"
 {

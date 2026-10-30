@@ -191,6 +191,12 @@ Cloud's uploads were numbered 10–40, below that range.
 
 - *No signing certificate "iOS Distribution" found* / *no profiles*: the
   secrets are missing or stale → `ios/scripts/ci-signing-setup.sh` again.
+- *SecKeychainItemImport: Unable to decode the provided data*: the p12 is a
+  modern PKCS#12 (PBES2 / AES-256), which `security import` cannot read. The
+  workflow re-wraps the identity with the legacy 3DES / SHA-1 algorithms
+  before importing, and the setup script now emits that format; if you built
+  a p12 by hand, add `-certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1`
+  to `openssl pkcs12 -export`.
 - *Provisioning profile … doesn't include the … capability*: automatic signing
   could not update the App ID — the API key must have the App Manager (or
   Admin) role.
