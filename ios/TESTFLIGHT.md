@@ -37,9 +37,11 @@ the version and sits on `main`.
      Store Connect API key;
    - `xcodebuild -exportArchive` with `destination: upload` and **manual**
      signing: the channel's two App Store profiles ("Celiador [Dev] CI App
-     Store" + "… Widgets CI App Store", bound to the CI certificate and
-     downloaded by name thanks to `-allowProvisioningUpdates`) re-sign the app
-     for distribution and the build is uploaded straight to App Store Connect.
+     Store" + "… Widgets CI App Store", bound to the CI certificate; fetched by
+     name and installed with fastlane's `sigh --readonly` using the same API
+     key, since xcodebuild only downloads profiles for automatic signing)
+     re-sign the app for distribution and the build is uploaded straight to
+     App Store Connect.
      Manual, because automatic export is Xcode "cloud signing", which an App
      Manager key is not allowed to do. The App Store profiles carry
      `aps-environment: production`, so the Dev app's TestFlight build receives
