@@ -4,14 +4,14 @@ Two App Store Connect apps, the way Celindor does it (`Celindor/celindor/RELEASI
 § App Store), pointed at the daemon environments in `../ENVIRONMENTS.md`.
 Three Xcode build configurations, defined in `project.yml` (`configs` +
 `configFiles`) and `Config/*.xcconfig`, each archived by its own scheme —
-Xcode Cloud archives with the scheme's archive configuration, so the scheme is
-how a workflow picks a channel:
+`xcodebuild archive` uses the scheme's archive configuration, so the scheme is
+how the build workflow (`.github/workflows/ios.yml`) picks a channel:
 
-| Config | Scheme | App | Bundle ID | Daemon (`CELIADOR_DAEMON_URL`) | URL scheme | Xcode Cloud workflow |
+| Config | Scheme | App | Bundle ID | Daemon (`CELIADOR_DAEMON_URL`) | URL scheme | Build iOS channel |
 |---|---|---|---|---|---|---|
-| **Dev** (debug) | `Celiador Dev` | Celiador Dev | `ai.celiador.companion.dev` | `https://dev.celiador.ai` | `celiador-dev` | **Dev**: push to `main` → TestFlight (Dev app) |
-| **Test** (release) | `Celiador Test` | Celiador | `ai.celiador.companion` | `https://test.celiador.ai` | `celiador` | **Test**: tag `vX.Y.Z` → TestFlight |
-| **Release** (release) | `Celiador` | Celiador | `ai.celiador.companion` | `https://celiador.ai` | `celiador` | **Archive - App Store**: manual |
+| **Dev** (debug) | `Celiador Dev` | Celiador Dev | `ai.celiador.companion.dev` | `https://dev.celiador.ai` | `celiador-dev` | **dev**: push to `main` → TestFlight (Dev app) |
+| **Test** (release) | `Celiador Test` | Celiador | `ai.celiador.companion` | `https://test.celiador.ai` | `celiador` | **test**: tag `vX.Y.Z` → TestFlight |
+| **Release** (release) | `Celiador` | Celiador | `ai.celiador.companion` | `https://celiador.ai` | `celiador` | **prod**: manual dispatch → App Store Connect |
 
 The Dev app installs beside the real one (own bundle id, own name, own URL
 scheme). The Test config is the real app pointed at the test environment: a
@@ -45,13 +45,12 @@ The workflows themselves are described in `TESTFLIGHT.md`.
 
 ## Icon banner
 
-As on Celindor, Xcode Cloud builds carry a banner across the app icon so they
-are told apart on the home screen: `ci_scripts/ci_post_clone.sh` stamps
-`AppIcon.appiconset` with `scripts/icon-banner.swift` (Swift only, no
-ImageMagick) — **green with the tag** for a tag-started build (the Test
-workflow), **red with the short commit** for everything else (the Dev
-workflow). A workflow whose name contains "App Store" keeps the plain icon.
-Only the Xcode Cloud checkout is stamped; the committed icons never change.
+As on Celindor, CI builds carry a banner across the app icon so they are told
+apart on the home screen: the Build iOS workflow stamps `AppIcon.appiconset`
+with `scripts/icon-banner.swift` (Swift only, no ImageMagick) — **green with
+the tag** for the test channel, **red with the short commit** for dev. The prod
+build keeps the plain icon. Only the runner's checkout is stamped; the
+committed icons never change.
 Locally: `swift scripts/icon-banner.swift "#c62828" 1a2b3c4 Celiador/Assets.xcassets/AppIcon.appiconset/*.png`,
 undo with `git checkout Celiador/Assets.xcassets`.
 
@@ -68,12 +67,13 @@ TestFlight stays out of the production dashboard).
   `ai.celiador.companion.dev`); both bundle ids and their `.widgets` App IDs are
   registered, and each app has an `Internal` TestFlight group with access to
   all builds. Push and App Group capabilities on the dev App IDs are added by
-  automatic signing on the first Xcode Cloud build. Workflows: `TESTFLIGHT.md`.
+  automatic signing on the first CI build. The workflow: `TESTFLIGHT.md`.
 - **App Group stays shared** (`group.ai.celiador.companion`) across channels —
   it's hardcoded in `Shared/WidgetShared.swift`, and the auth/isolation boundary
   is the daemon's per-env JWT secret, not widget storage.
-- **Signing:** automatic in every config (Xcode Cloud requires it — see
-  `TESTFLIGHT.md`). The APNs team key serves both apps; the push topic is the
+- **Signing:** automatic in every config, driven in CI by the App Store Connect
+  API key and a CI-only distribution certificate (`TESTFLIGHT.md`). The APNs
+  team key serves both apps; the push topic is the
   bundle id, so the dev daemon sends to `ai.celiador.companion.dev` and the test
   and prod daemons to `ai.celiador.companion`.
 - **Auth deep links:** each environment's GoTrue allowlist holds its clients'

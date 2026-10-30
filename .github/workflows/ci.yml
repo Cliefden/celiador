@@ -5,7 +5,7 @@ name: CI
 # requests and pushes to other branches that touch the daemon; the Deploy
 # workflow calls it for every push to main and every release tag, so nothing
 # reaches an environment unchecked. The site builds in its own deploy; the iOS
-# app is built by Xcode Cloud.
+# app in ios.yml.
 on:
   pull_request:
     paths:

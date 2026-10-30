@@ -8,7 +8,7 @@ loop except the editor:
 | Directory | What | Docs |
 |---|---|---|
 | [`daemon/`](daemon/) | The hub the loop runs through: GitHub App webhooks → task queue → runners (editor, Celiador Remote, cloud sandbox), the agent proxy on the server-held Anthropic key, the session relay to the phone, Supabase auth, APNs, the editor's release feed. Node + Hono, run with `tsx`. | [`daemon/README.md`](daemon/README.md), [`daemon/docs/`](daemon/docs/) |
-| [`ios/`](ios/) | The iPhone companion: the queue, what needs you, the pull requests ready to review; approve, answer, follow up and merge from the phone. XcodeGen project, Xcode Cloud builds. | [`ios/README.md`](ios/README.md), [`ios/CHANNELS.md`](ios/CHANNELS.md), [`ios/TESTFLIGHT.md`](ios/TESTFLIGHT.md) |
+| [`ios/`](ios/) | The iPhone companion: the queue, what needs you, the pull requests ready to review; approve, answer, follow up and merge from the phone. XcodeGen project, built to TestFlight by `.github/workflows/ios.yml`. | [`ios/README.md`](ios/README.md), [`ios/CHANNELS.md`](ios/CHANNELS.md), [`ios/TESTFLIGHT.md`](ios/TESTFLIGHT.md) |
 | [`web/`](web/) | The marketing site at celiador.ai: the loop, pricing, downloads, docs. Next.js. | [`web/README.md`](web/README.md) |
 
 The editor is its own repository, [`Cliefden/celiador-editor`](https://github.com/Cliefden/celiador-editor)
@@ -26,7 +26,8 @@ them all:
   `vX.Y.Z` tag ships both to test.
 - [`.github/workflows/`](.github/workflows/) — `ci.yml` (daemon typecheck +
   smoke), `deploy.yml` (daemon → dev / test / prod), `web-deploy.yml` (site →
-  dev / test / prod). iOS is built by Xcode Cloud, not Actions.
+  dev / test / prod); `ios.yml` builds the iPhone app on a macOS runner and
+  uploads it to TestFlight on the same triggers.
 
 ## Develop
 

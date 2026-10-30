@@ -62,12 +62,11 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.celiador.companion$(BUNDLE_ID_SUFFIX)
-        # Automatic signing in EVERY config: Xcode Cloud requires it ("Allow Xcode
-        # to manage signing for you" — Apple, Setting up your project to use Xcode
-        # Cloud) and signs App Store archives with cloud-managed distribution
-        # certificates. Local device runs get the development cert + profile the
-        # same way. The App Store profiles under signing/ are not referenced here;
-        # see TESTFLIGHT.md.
+        # Automatic signing in EVERY config. In CI (.github/workflows/ios.yml)
+        # xcodebuild -allowProvisioningUpdates with the App Store Connect API key
+        # creates the App Store profiles for the CI distribution certificate;
+        # local device runs get the development cert + profile the same way.
+        # See TESTFLIGHT.md.
         CODE_SIGN_STYLE: Automatic
         # aps-environment: Dev keeps development; Test/Release use production
         # (distribution builds are only authorized for production push).
@@ -128,10 +127,10 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
     scheme: {}
 
-# One scheme per channel (CHANNELS.md / TESTFLIGHT.md). Xcode Cloud archives
-# with the scheme's archive configuration, so the scheme is how a workflow
-# selects a channel: "Dev" archives `Celiador Dev`, "Test" archives
-# `Celiador Test`, "Archive - App Store" archives `Celiador`.
+# One scheme per channel (CHANNELS.md / TESTFLIGHT.md). xcodebuild archives
+# with the scheme's archive configuration, so the scheme is how the Build iOS
+# workflow selects a channel: dev archives `Celiador Dev`, test archives
+# `Celiador Test`, prod archives `Celiador`.
 #
 # Running from Xcode always builds the Dev config (the debug build of the Dev
 # app). Api.swift reads CELIADOR_URL first (overrides CELIADOR_DAEMON_URL from

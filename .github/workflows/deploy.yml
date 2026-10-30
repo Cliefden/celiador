@@ -1,7 +1,7 @@
 name: Deploy daemon
 
 # One workflow deploys the daemon (daemon/) to every environment on the box
-# (ENVIRONMENTS.md); the site has web-deploy.yml, the iOS app Xcode Cloud:
+# (ENVIRONMENTS.md); the site has web-deploy.yml, the iOS app ios.yml:
 #
 #   push to main         → CI, deploy dev (with migrations) — only when the
 #                          push touches daemon/ or these workflows

@@ -80,7 +80,7 @@ Migrations only go forward, so rolling back code leaves the schema as it is.
 | `ci.yml` | pull requests and pushes to other branches touching `daemon/`, and from Deploy daemon | `npm run typecheck` + `npm run smoke` in `daemon/` on Node 20 and 22 |
 | `deploy.yml` (Deploy daemon) | `main` pushes touching `daemon/`, `vX.Y.Z` tags, manual runs | CI, then rsync `daemon/` to `~/envs/<env>/daemon`, `npm ci`, `BUILD_INFO`, migrate, restart `celiador-daemon@<env>`, and a health gate: `/api/health` through Caddy must report this `env` and this `commit`. Mails the result. |
 | `web-deploy.yml` (Deploy web) | `main` pushes touching `web/`, `vX.Y.Z` tags, manual runs | `next build`, rsync `web/` + `.next` to `~/envs/<env>/web`, `npm ci`, restart `celiador-web@<env>`, check the page through the public host. Mails the result. |
-| Xcode Cloud (`ios/TESTFLIGHT.md`) | `main` pushes touching `ios/` → Dev app; `v*` tags → Test build; manual → App Store | Not GitHub Actions; the products are bound to this repository. |
+| `ios.yml` (Build iOS) | `main` pushes touching `ios/`, `vX.Y.Z` tags, manual runs | On a macOS runner: XcodeGen, icon banner, `xcodebuild archive` of the channel's scheme with automatic signing through the App Store Connect API key, upload to App Store Connect (TestFlight). `main` → the Dev app, tag → the Test build, manual `prod` → the App Store build behind the `prod` reviewer. Mails the result. `ios/TESTFLIGHT.md`. |
 
 Secrets stay on the box (`~/envs/<env>/daemon/.env`, written by
 `daemon/deploy/provision-env.sh`); the workflow never writes them. This differs from
@@ -119,6 +119,10 @@ JWT secret, the database password and the anon key are generated on the box.
 
 4. **Prod.** After the cutover to `celiador-daemon@prod` (`ENVIRONMENTS.md`):
    `gh variable set PROD_ENABLED --body true -R Cliefden/celiador`.
+
+5. **iOS signing.** `ios/scripts/ci-signing-setup.sh` once: it issues a CI-only
+   Apple Distribution certificate and writes the five repository secrets the
+   Build iOS workflow reads (`ios/TESTFLIGHT.md` § One-time setup).
 
 `main` is not protected: `scripts/release.sh` commits to it directly, and a
 push to it deploys dev, as on Celindor. Feature work goes through pull
