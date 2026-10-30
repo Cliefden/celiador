@@ -27,5 +27,5 @@ xcodebuild -project Celiador.xcodeproj -scheme Celiador -destination 'generic/pl
 Targets: **Celiador** (the app) and **CeliadorWidgets** (Home Screen widget +
 Live Activity). `Shared/` holds the dependency-free model, API, SSE, and theme.
 
-Build channels (dev / test / prod): `CHANNELS.md`. Xcode Cloud + TestFlight:
-`TESTFLIGHT.md`.
+Build channels (dev / test / prod): `CHANNELS.md`. The GitHub Actions build
+(`.github/workflows/ios.yml`) + TestFlight: `TESTFLIGHT.md`.

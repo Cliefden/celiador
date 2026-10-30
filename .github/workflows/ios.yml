@@ -1,0 +1,300 @@
+name: Build iOS
+
+# Builds the iPhone app (ios/) and uploads it to TestFlight — the iOS leg of
+# the release train (RELEASING.md), on the same triggers as the daemon and the
+# site:
+#
+#   push to main         → Dev channel: scheme "Celiador Dev" (Dev config →
+#                          dev.celiador.ai, ai.celiador.companion.dev) →
+#                          TestFlight, internal group — only when the push
+#                          touches ios/ or this workflow
+#   push tag vX.Y.Z      → Test channel: scheme "Celiador Test" (Test config →
+#                          test.celiador.ai, the prod bundle id) → TestFlight;
+#                          the tag must equal MARKETING_VERSION in ios/project.yml
+#                          and sit on main (path filters never apply to tags: a
+#                          release builds everything)
+#   workflow_dispatch    → any channel from the chosen ref; prod = scheme
+#                          "Celiador" (Release config → celiador.ai), uploaded to
+#                          App Store Connect for TestFlight and App Store review,
+#                          behind the prod Environment's required reviewer
+#
+# Runs on a GitHub-hosted macOS runner (the repository is public: no minutes
+# are billed). XcodeGen generates the project; the icon gets the channel banner
+# (CHANNELS.md); signing is automatic through the App Store Connect API key —
+# xcodebuild -allowProvisioningUpdates creates and refreshes the App Store
+# profiles and the App IDs' capabilities — with a CI-only Apple Distribution
+# certificate in a throwaway keychain; -exportArchive with destination=upload
+# hands the build to App Store Connect. The build number is the run number.
+#
+# Repository secrets (ios/TESTFLIGHT.md § One-time setup, written by
+# ios/scripts/ci-signing-setup.sh): ASC_KEY_ID, ASC_ISSUER_ID, ASC_PRIVATE_KEY
+# (the .p8, PEM), IOS_DIST_P12_BASE64, IOS_DIST_P12_PASSWORD. Results are mailed
+# through SMTP_USER / SMTP_PASS like the other workflows.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ios/**
+      - .github/workflows/ios.yml
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Channel (dev → Celiador Dev app, test → the app on test.celiador.ai, prod → App Store build)
+        type: choice
+        options: [dev, test, prod]
+        default: dev
+
+permissions:
+  contents: read
+
+concurrency:
+  # One build per channel at a time; a second one waits, never cancels.
+  group: ios-${{ inputs.channel || (github.ref_type == 'tag' && 'test' || 'dev') }}
+  cancel-in-progress: false
+
+env:
+  # The Xcode the archive is built with (the runner image carries several).
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      scheme: ${{ steps.plan.outputs.scheme }}
+      version: ${{ steps.plan.outputs.version }}
+      build: ${{ steps.plan.outputs.build }}
+      app: ${{ steps.plan.outputs.app }}
+      banner_colour: ${{ steps.plan.outputs.banner_colour }}
+      banner_label: ${{ steps.plan.outputs.banner_label }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # a tag must be on main
+      - id: plan
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          # Every MARKETING_VERSION in project.yml (app, widgets, watch) must agree.
+          mapfile -t versions < <(sed -n 's/^ *MARKETING_VERSION: *"\([^"]*\)".*/\1/p' ios/project.yml | sort -u)
+          [[ ${#versions[@]} -eq 1 ]] ||
+            { echo "::error::ios/project.yml carries several MARKETING_VERSIONs (${versions[*]}) — cut releases with scripts/release.sh"; exit 1; }
+          version="${versions[0]}"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            channel="$INPUT_CHANNEL"
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            channel=test
+            [[ "${GITHUB_REF_NAME#v}" == "$version" ]] ||
+              { echo "::error::tag $GITHUB_REF_NAME but ios/project.yml says $version — cut releases with scripts/release.sh"; exit 1; }
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+              { echo "::error::$GITHUB_REF_NAME is not on main — push main first, then the tag"; exit 1; }
+          else
+            channel=dev
+          fi
+          # Unique and increasing per workflow; well above the numbers Xcode
+          # Cloud used (≤ 40) so a re-upload of an existing version is accepted.
+          build=$((1000 + GITHUB_RUN_NUMBER))
+          case "$channel" in
+            dev)  scheme="Celiador Dev";  app=6828169951; colour="#c62828"; label="${GITHUB_SHA::7}" ;;
+            test) scheme="Celiador Test"; app=6819707590; colour="#2e7d32"; label="${GITHUB_REF_NAME}" ;;
+            prod) scheme="Celiador";      app=6819707590; colour="";        label="" ;;
+          esac
+          {
+            echo "channel=$channel"; echo "scheme=$scheme"; echo "version=$version"; echo "build=$build"
+            echo "app=$app"; echo "banner_colour=$colour"; echo "banner_label=$label"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::building $scheme $version ($build) from ${GITHUB_SHA::7} for $channel"
+
+  build:
+    needs: plan
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment:
+      name: ${{ needs.plan.outputs.channel }}
+      url: https://appstoreconnect.apple.com/apps/${{ needs.plan.outputs.app }}/testflight/ios
+    env:
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+      SCHEME: ${{ needs.plan.outputs.scheme }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      BUILD_NUMBER: ${{ needs.plan.outputs.build }}
+      BANNER_COLOUR: ${{ needs.plan.outputs.banner_colour }}
+      BANNER_LABEL: ${{ needs.plan.outputs.banner_label }}
+      KEYCHAIN: ${{ runner.temp }}/ci-signing.keychain-db
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          set -euo pipefail
+          # The bottle download is occasionally reset mid-way; try a few times.
+          for attempt in 1 2 3 4; do
+            brew install xcodegen && break
+            [[ $attempt -lt 4 ]] || { echo "::error::brew install xcodegen failed $attempt times"; exit 1; }
+            echo "brew install xcodegen failed (attempt $attempt), retrying in 15s"; sleep 15
+          done
+          xcodegen --version
+
+      - name: Generate the project
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          # Pin the Swift packages to the committed resolution.
+          mkdir -p Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+          cp Package.resolved Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          xcodebuild -version
+
+      - name: Stamp the icon with the channel banner
+        # Red with the commit for dev, green with the tag for test; the App
+        # Store build keeps the plain icon. Only this checkout is stamped.
+        if: env.BANNER_COLOUR != ''
+        run: swift scripts/icon-banner.swift "$BANNER_COLOUR" "$BANNER_LABEL" Celiador/Assets.xcassets/AppIcon.appiconset/*.png
+
+      - name: Set up signing
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          IOS_DIST_P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+          IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY IOS_DIST_P12_BASE64 IOS_DIST_P12_PASSWORD; do
+            [[ -n "${!v}" ]] || { echo "::error::repository secret $v is missing — run ios/scripts/ci-signing-setup.sh (ios/TESTFLIGHT.md)"; exit 1; }
+          done
+
+          # The App Store Connect API key xcodebuild signs with (-authenticationKey*).
+          printf '%s\n' "$ASC_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+
+          # A throwaway keychain with the CI distribution identity and Apple's
+          # WWDR intermediate, first in the search list so codesign finds it.
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$keychain_password" "$KEYCHAIN"
+          base64 --decode <<<"$IOS_DIST_P12_BASE64" > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "$IOS_DIST_P12_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign -T /usr/bin/security
+          curl -fsSL -o "$RUNNER_TEMP/AppleWWDRCAG3.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          security import "$RUNNER_TEMP/AppleWWDRCAG3.cer" -k "$KEYCHAIN" -A
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          rm -f "$RUNNER_TEMP/dist.p12"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Archive
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          # The scheme carries the channel: it archives with its own
+          # configuration (Dev / Test / Release) and so its xcconfig. Automatic
+          # signing with the API key creates or updates the App Store profiles
+          # for whatever certificate is in the keychain — the CI one.
+          xcodebuild archive \
+            -project Celiador.xcodeproj \
+            -scheme "$SCHEME" \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Celiador.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN" \
+            | xcbeautify --renderer github-actions
+          plutil -p "$RUNNER_TEMP/Celiador.xcarchive/Info.plist" | grep -E 'CFBundleShortVersionString|CFBundleVersion|CFBundleIdentifier'
+
+      - name: Upload to App Store Connect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          # destination=upload: xcodebuild signs for distribution and sends the
+          # build straight to App Store Connect; TestFlight's Internal group
+          # (access to all builds) can install it once it is processed.
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>XPNFDWPFAV</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+            <key>stripSwiftSymbols</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Celiador.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            | xcbeautify --renderer github-actions
+          echo "✔ $SCHEME $VERSION ($BUILD_NUMBER) uploaded to App Store Connect for $CHANNEL"
+
+      - name: Keep the export report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ needs.plan.outputs.channel }}-${{ needs.plan.outputs.version }}-${{ needs.plan.outputs.build }}
+          path: ${{ runner.temp }}/export
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+  notify:
+    needs: [plan, build]
+    if: always() && !cancelled() && (contains(needs.*.result, 'failure') || vars.NOTIFY_SUCCESS != 'false')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mail the result
+        continue-on-error: true
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          NOTIFY_TO: ${{ vars.NOTIFY_TO || 'stefan@celiador.ai' }}
+          FAILED: ${{ contains(needs.*.result, 'failure') }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          SCHEME: ${{ needs.plan.outputs.scheme }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" ]]; then
+            echo "::warning::SMTP_USER / SMTP_PASS are not set; the result was not mailed"
+            exit 0
+          fi
+          if [[ "$FAILED" == true ]]; then subject="✗ ios: ${CHANNEL:-?} build failed (${GITHUB_SHA::7})"
+          else subject="✓ ios: $SCHEME $VERSION ($BUILD_NUMBER) uploaded for $CHANNEL"; fi
+          printf 'machine smtp.migadu.com login %s password %s\n' "$SMTP_USER" "$SMTP_PASS" > ~/.netrc
+          chmod 600 ~/.netrc
+          {
+            printf 'From: Celiador builds <%s>\nTo: %s\nSubject: %s\n\n' "$SMTP_USER" "$NOTIFY_TO" "$subject"
+            printf '%s\non %s by %s\n\n%s\n\n%s\n' "$subject" "$GITHUB_REF_NAME" "$GITHUB_ACTOR" "${COMMIT_MESSAGE%%$'\n'*}" "$RUN_URL"
+          } > "$RUNNER_TEMP/mail.txt"
+          curl -sS --url smtps://smtp.migadu.com:465 --ssl-reqd --netrc \
+            --mail-from "$SMTP_USER" --mail-rcpt "$NOTIFY_TO" --upload-file "$RUNNER_TEMP/mail.txt"

@@ -6,6 +6,14 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+- iPhone app builds moved from Xcode Cloud to GitHub Actions
+  (`.github/workflows/ios.yml`, "Build iOS"): push to `main` → the Dev app on
+  TestFlight, a `vX.Y.Z` tag → the Test build, manual `prod` → the App Store
+  build, all on the same triggers as the daemon and the site. Automatic
+  signing through the App Store Connect API key with a CI-only distribution
+  certificate (`ios/scripts/ci-signing-setup.sh`); the Xcode Cloud hook
+  `ios/ci_scripts/` is gone. `ios/TESTFLIGHT.md` describes the pipeline.
+
 ## [0.2.2] - 2026-10-29
 
 - One repository: `Cliefden/daemon` is now `Cliefden/celiador` and holds the

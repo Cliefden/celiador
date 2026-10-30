@@ -11,7 +11,7 @@
 #   fastlane age_rating       declare "no objectionable content" (4+)
 #   fastlane beta_info        TestFlight description, feedback email, review contact + demo account
 #   fastlane beta             build locally with automatic signing and upload to TestFlight
-#                             (Xcode Cloud "Archive - App Store" is the usual path; this is the fallback)
+#                             (the Build iOS workflow is the usual path; this is the fallback from a Mac)
 #   fastlane external         put a processed build in front of Beta App Review and the External group
 #                             (BUILD=10 fastlane external) — this is what makes a public TestFlight link possible
 
@@ -125,7 +125,7 @@ platform :ios do
     )
   end
 
-  desc "Build locally (automatic signing through the API key) and upload to TestFlight. Fallback for Xcode Cloud."
+  desc "Build locally (automatic signing through the API key) and upload to TestFlight. Fallback for the Build iOS workflow."
   lane :beta do
     api_key
     sh("cd .. && xcodegen generate")

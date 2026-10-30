@@ -69,7 +69,7 @@ TestFlight app description, feedback email, privacy URL, and Beta App Review con
 [bundle exec] fastlane ios beta
 ```
 
-Build locally (automatic signing through the API key) and upload to TestFlight. Fallback for Xcode Cloud.
+Build locally (automatic signing through the API key) and upload to TestFlight. Fallback for the Build iOS workflow.
 
 ### ios external
 

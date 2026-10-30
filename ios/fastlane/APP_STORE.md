@@ -1,6 +1,6 @@
 # App Store and TestFlight: what is where
 
-The App Store record for Celiador (app id 6819707590, bundle `ai.celiador.companion`, team XPNFDWPFAV) is driven from this folder with fastlane, authenticated by the shared App Store Connect API key (`~/.appstoreconnect/private_keys/AuthKey_R73AU5822H.p8`). Builds come from Xcode Cloud (see `../TESTFLIGHT.md`); fastlane carries everything around the build.
+The App Store record for Celiador (app id 6819707590, bundle `ai.celiador.companion`, team XPNFDWPFAV) is driven from this folder with fastlane, authenticated by the shared App Store Connect API key (`~/.appstoreconnect/private_keys/AuthKey_R73AU5822H.p8`). Builds come from the Build iOS GitHub Actions workflow (see `../TESTFLIGHT.md`); fastlane carries everything around the build.
 
 | What | Where it lives | How it gets to Apple |
 |---|---|---|

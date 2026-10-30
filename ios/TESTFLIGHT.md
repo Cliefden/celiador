@@ -1,91 +1,86 @@
-# Xcode Cloud + TestFlight
+# GitHub Actions + TestFlight
 
 How a push to `main` becomes a Dev build on a phone, a `vX.Y.Z` tag a Test
-build, and a button press an App Store build. Follows the portfolio standard
-(`_standard/PORTFOLIO_STANDARD.md`: automatic signing, XcodeGen hook) and the
-shared tooling in `Apps-AppStore/xcode-cloud-setup/`, extended with Celindor's
-two-app channel model (`CHANNELS.md`): this repo has two Xcode Cloud products
-and four workflows, not the standard two.
+build, and a button press an App Store build. The app is built by
+`.github/workflows/ios.yml` ("Build iOS") on GitHub-hosted macOS runners — the
+same triggers as the daemon's and the site's deploys (`../RELEASING.md`), so one
+tag is one release of the whole product. Xcode Cloud is not used (it was, until
+2026-10-30: its products are bound to one GitHub repository and could not be
+re-created against this one after the move from `celiador-ios`).
 
 ## The channels
 
-| Xcode Cloud product (app) | Workflow | Starts on | Archives scheme | Goes to | Icon |
+| Channel | Starts on | Archives scheme | App | Goes to | Icon |
 |---|---|---|---|---|---|
-| **Celiador Dev** (`6828169951`) | **Dev** | push to `main` | `Celiador Dev` (Dev config → `dev.celiador.ai`) | TestFlight, internal | red, commit |
-| **Celiador** (`6819707590`) | **Test** | tag `v*` | `Celiador Test` (Test config → `test.celiador.ai`) | TestFlight | green, tag |
-| **Celiador** | **Archive - App Store** | manual | `Celiador` (Release config → `celiador.ai`) | TestFlight + App Store | plain |
-| **Celiador** | *Default* (Xcode's build-on-main) | push to `main` | `Celiador`, build only | nothing | — |
+| **dev** | push to `main` touching `ios/` | `Celiador Dev` (Dev config → `dev.celiador.ai`) | Celiador Dev (`6828169951`, `ai.celiador.companion.dev`) | TestFlight, `Internal` group | red, commit |
+| **test** | tag `vX.Y.Z` | `Celiador Test` (Test config → `test.celiador.ai`) | Celiador (`6819707590`, `ai.celiador.companion`) | TestFlight, `Internal` group | green, tag |
+| **prod** | Actions → Build iOS → Run workflow → `prod` (the `prod` Environment's reviewer approves) | `Celiador` (Release config → `celiador.ai`) | Celiador | App Store Connect: TestFlight + App Store review | plain |
 
-One tag for the whole repository: `scripts/release.sh` at the repo root bumps
-the daemon and this app to the same version and tags `vX.Y.Z`, which starts the
-Test workflow here and the daemon's and the site's test deploys. The
-*Default* workflow is left as a compile check of the prod scheme; disable it in
-App Store Connect if the Dev workflow is enough.
+`CHANNELS.md` explains the configs, schemes and xcconfigs behind this. The
+version is `MARKETING_VERSION` in `project.yml` (kept equal to the daemon's by
+`../scripts/release.sh`); the build number is `1000 + the workflow run number`,
+so every upload is unique and increasing. A tag build checks that the tag equals
+the version and sits on `main`.
 
-## What is already in the repo
+## What the workflow does
 
-- `ci_scripts/ci_post_clone.sh` — Xcode Cloud runs it after cloning: installs
-  XcodeGen, generates `Celiador.xcodeproj` (gitignored) from `project.yml`,
-  seeds the pinned `Package.resolved` (TelemetryDeck) into the generated
-  workspace, and stamps the icon banner by channel (`CI_TAG` → green with the
-  tag; otherwise red with the commit; a workflow whose name contains
-  "App Store" keeps the plain icon).
-- `project.yml` — three schemes, one per channel (`schemes:`): **Celiador**
-  archives Release (`ai.celiador.companion`, `https://celiador.ai`,
-  `Celiador/Celiador.production.entitlements`, `aps-environment: production`,
-  the shared App Group), **Celiador Test** archives Test (same app, test
-  daemon), **Celiador Dev** archives Dev (`ai.celiador.companion.dev`, dev
-  daemon, development push). Xcode Cloud archives with the scheme's archive
-  configuration, which is why each channel is a scheme and not a `-configuration`.
-- `../scripts/release.sh` (the repo root) — bumps the daemon's `package.json`
-  and this `project.yml`'s `MARKETING_VERSION` together, commits
-  `Release vX.Y.Z` and tags; never pushes (see *Cutting builds*).
-- **Automatic signing in every config.** Xcode Cloud requires it ("Allow Xcode to
-  manage signing for you", Apple's *Setting up your project to use Xcode Cloud*);
-  it signs with cloud-managed distribution certificates. The App Store profiles
-  under `signing/` (`7453QR5RN8` app, `LF9K4K32P2` widgets) are no longer referenced
-  by the project; they remain usable for a manual `asc xcode` archive with an
-  explicit export-options plist.
-- **TestFlight groups** `Internal`, one per app, each with access to all builds,
-  so every processed build is immediately installable by its members:
-  `5fd35a26-4b72-4f61-80c5-8531fb364bf8` on Celiador,
-  `f8297a47-e0f3-49bc-abcd-7ae1eb8fb15f` on Celiador Dev. The public,
-  external group `Public` on Celiador (not yet created; *External testers*
-  below) gets prod builds only, one at a time.
+1. `plan` (Linux): decides the channel, scheme, version and build number.
+2. `build` (macOS 26 runner, Xcode 26.6 — `DEVELOPER_DIR` at the top of the
+   workflow): `brew install xcodegen`, `xcodegen generate`, seeds the pinned
+   `Package.resolved` into the generated workspace, stamps the icon banner
+   (`scripts/icon-banner.swift`: red + short commit for dev, green + tag for
+   test, nothing for prod), then:
+   - creates a throwaway keychain with the **CI distribution certificate** and
+     Apple's WWDR intermediate;
+   - `xcodebuild archive -scheme <channel's scheme> -allowProvisioningUpdates
+     -authenticationKey…` — automatic signing through the App Store Connect API
+     key creates or refreshes the App Store provisioning profiles (and the
+     `.dev` App IDs' push + App Group capabilities) for the certificate in the
+     keychain;
+   - `xcodebuild -exportArchive` with `destination: upload`, which signs for
+     distribution and uploads straight to App Store Connect. Xcode turns
+     `aps-environment` to `production` for distribution builds, so the Dev app's
+     TestFlight build receives production APNs: the dev daemon's `APNS_ENV` must
+     be `production`.
+   - keeps the export report as a run artifact for two weeks; deletes the
+     keychain and the key.
+3. `notify`: mails the result through the repository's `SMTP_USER` / `SMTP_PASS`
+   like the other workflows.
 
-## One-time onboarding (Stefan)
+The `Internal` TestFlight group of each app has access to all builds, so a
+processed build is installable by its members with no further step: dev
+`f8297a47-e0f3-49bc-abcd-7ae1eb8fb15f` (Celiador Dev), prod
+`5fd35a26-4b72-4f61-80c5-8531fb364bf8` (Celiador). Minutes are free: the
+repository is public.
 
-Xcode Cloud "products" and the GitHub connection cannot be created through the
-App Store Connect API; this is the only manual part. A ciProduct is bound to its
-primary repository, so after the 2026-10-29 move from `Cliefden/celiador-ios`
-into this repository both products — **Celiador** (onboarded on the old repo
-2026-10-18) and **Celiador Dev** — are created again here:
+## One-time setup (Stefan)
 
-1. **Repo access**: github.com → Settings → Applications → *Xcode Cloud* →
-   Repository access → add `Cliefden/celiador`.
-2. **Create the products in Xcode**, from `ios/` (the project lives in a
-   subdirectory; `ci_scripts/` sits beside it, as Xcode Cloud requires).
-   ```sh
-   cd celiador/ios && DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodegen generate
-   open Celiador.xcodeproj
-   ```
-   Select the **Celiador** scheme, then Product ▸ Xcode Cloud ▸ Create
-   Workflow… → app **Celiador** (`ai.celiador.companion`), team `XPNFDWPFAV` →
-   accept the default workflow → grant source control access if asked. Repeat
-   with the **Celiador Dev** scheme → app **Celiador dev**
-   (`ai.celiador.companion.dev`). Each creates its ciProduct.
-3. **Add the channel workflows** (API, from any session, idempotent):
-   ```sh
-   python3 ../../../xcode-cloud-setup/create_workflows.py celiador       # adds "Test" (tag v* → TestFlight), "Archive - App Store"
-   python3 ../../../xcode-cloud-setup/create_workflows.py celiador-dev   # adds "Dev" (main → TestFlight), disables Xcode's "Default"
-   ```
-   Each prints the product, repository and workflow names. Then, in App Store
-   Connect, give the **Dev** workflow's branch start condition a *Files and
-   Folders* filter on `ios/`, so daemon- and site-only pushes to `main` don't
-   build the app (tags cannot be filtered and shouldn't be: a release is the
-   whole product). The Dev product's automatic signing adds push + App Group to
-   the `.dev` App IDs on the first run. Delete the two products left on the
-   archived `celiador-ios` repository once these build.
+The workflow needs five repository secrets, all written by one script:
+
+```sh
+ios/scripts/ci-signing-setup.sh        # from a Mac with asc (profile celiador) + gh
+```
+
+It generates a private key here, has App Store Connect issue an **Apple
+Distribution certificate for it** (a CI-only certificate — revoking it never
+touches the one in your login keychain; Apple allows three per team), packages
+it as a `.p12`, and sets:
+
+| Secret | What |
+|---|---|
+| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY` | the App Store Connect API key (`R73AU5822H`, "Fastlane", App Manager — the one `asc --profile celiador` and `fastlane/` use; the `.p8` from `~/.appstoreconnect/private_keys/`) |
+| `IOS_DIST_P12_BASE64`, `IOS_DIST_P12_PASSWORD` | the CI certificate + key |
+
+Re-running the script rotates everything (then revoke the previous CI
+certificate: `asc --profile celiador certificates list`, `… revoke --id`).
+Nothing else is manual: the GitHub Environments `dev`/`test`/`prod` already
+exist for the daemon (`prod` has the required reviewer), and the App Store
+profiles are created by the first build.
+
+The first run on each channel is the test of the setup: `gh workflow run
+ios.yml -R Cliefden/celiador -f channel=dev` (or push a change under `ios/`),
+then `gh run watch`. The build shows up in App Store Connect → TestFlight a few
+minutes after the upload.
 
 ## Cutting builds
 
@@ -94,30 +89,30 @@ into this repository both products — **Celiador** (onboarded on the old repo
 - **Test:** on a clean `main` equal to `origin/main`:
   ```sh
   scripts/release.sh patch            # from the repo root: bumps daemon + app, commit + tag, not pushed
-  git push origin main                # wait for the daemon/web dev deploys to go green
-  git push origin vX.Y.Z              # the Test workflow archives the tag → TestFlight (and test deploys)
+  git push origin main                # the Dev app builds; daemon/web → dev — wait for green
+  git push origin vX.Y.Z              # the Test build → TestFlight (and the daemon/web test deploys)
   ```
-  The build appears in App Store Connect as `X.Y.Z (<Xcode Cloud build number>)`
-  with the green tag banner on its icon. A tester who installs it has the real
-  app pointed at test: a session kept from prod gets a 401 and the app asks to
-  sign in again (against test's own GoTrue). To go back to prod, install the
-  latest *Archive - App Store* build from TestFlight's previous builds, or the
-  App Store version. Test builds stay with the `Internal` group and are never
-  added to the `Public` group (see *External testers* below).
+  The build appears in App Store Connect as `X.Y.Z (1nnn)` with the green tag
+  banner on its icon. A tester who installs it has the real app pointed at
+  test: a session kept from prod gets a 401 and the app asks to sign in again
+  (against test's own GoTrue). To go back to prod, install the latest prod
+  build from TestFlight's previous builds, or the App Store version. Test
+  builds stay with the `Internal` group and are never added to the `Public`
+  group (see *External testers* below).
 - **App Store:**
   ```sh
-  python3 ../../../xcode-cloud-setup/start_archive.py celiador     # starts "Archive - App Store" on main
-  python3 ../../../xcode-cloud-setup/poll_runs.py <runId>          # waits for the run
+  gh workflow run ios.yml -R Cliefden/celiador --ref vX.Y.Z -f channel=prod   # the reviewer approves in GitHub
+  gh run watch -R Cliefden/celiador
   ```
-  or App Store Connect → Xcode Cloud → *Archive - App Store* → Start Build. The
-  archive uploads to App Store Connect; once processed, the `Internal` group can
-  install it from the TestFlight app (sign in with the same Apple ID as the team).
+  or GitHub → Actions → Build iOS → Run workflow → `prod` from the tag. The
+  upload lands in TestFlight (plain icon); submit it to App Store review from
+  App Store Connect, or with `fastlane deliver` from `fastlane/`.
 
 Then attach **What to Test** notes (template: `testflight/WHAT_TO_TEST.md`):
 
 ```sh
-asc builds list --app 6819707590 --limit 1 --output table          # newest build id
-asc builds test-notes create --build-id <BUILD_ID> --locale en-US --whats-new @file:testflight/WHAT_TO_TEST.md
+asc --profile celiador builds list --app 6819707590 --limit 1 --output table          # newest build id
+asc --profile celiador builds test-notes create --build-id <BUILD_ID> --locale en-US --whats-new @file:testflight/WHAT_TO_TEST.md
 ```
 
 ## External testers (the public link)
@@ -128,19 +123,19 @@ public TestFlight link. That link belongs to an **external** group on the
 **Celiador** app (`6819707590`), and which builds it receives is the whole
 point of this section:
 
-- The **Test** workflow (tag `v*`) ships the real app pointed at
+- The **test** channel (tag `v*`) ships the real app pointed at
   `test.celiador.ai`; the public DMG points at `celiador.ai`. Each environment
   has its own GoTrue, so a Test build signed in with a prod account sees
   nothing of the editor's sessions (and a prod session gets a 401 in it).
-- Therefore the public group receives **only builds from *Archive - App
-  Store*** (Release config → `celiador.ai`), never Test builds. Test builds stay
-  with the `Internal` group, which has access to all builds and whose members
-  know which channel they are on. The public group must **not** be created
-  with `--access-all-builds`; every build it gets is added by hand.
+- Therefore the public group receives **only prod builds** (Release config →
+  `celiador.ai`), never Test builds. Test builds stay with the `Internal`
+  group, which has access to all builds and whose members know which channel
+  they are on. The public group must **not** be created with
+  `--access-all-builds`; every build it gets is added by hand.
 - The first build added to an external group goes through Beta App Review
   before anyone outside the team can install it. The review needs the app's
   TestFlight review details (contact, sign-in instructions or a demo account:
-  `asc testflight review view --app 6819707590`).
+  `asc --profile celiador testflight review view --app 6819707590`).
 
 One-time steps (Stefan). The default `asc` profile on this Mac is the Celindor
 team; the Celiador team (`XPNFDWPFAV`) is the stored profile named `celiador`,
@@ -156,10 +151,10 @@ asc --profile celiador testflight groups list --app 6819707590 --external --outp
 asc --profile celiador testflight groups view --id <GROUP_ID> --pretty
 #    If the group already exists without the link: asc --profile celiador testflight groups edit --id <GROUP_ID> --public-link-enabled
 
-# 2. Add the latest Archive - App Store build to it and submit it for Beta App
-#    Review in one go (--dry-run first shows what would be assigned). Check that
-#    --latest really is an App Store archive (plain icon, started by hand), not
-#    the Test workflow's tag build: asc --profile celiador builds list --app 6819707590 --limit 5 --output table
+# 2. Add the latest prod build to it and submit it for Beta App Review in one
+#    go (--dry-run first shows what would be assigned). Check that --latest
+#    really is a prod build (plain icon, started by hand), not a tag build:
+#    asc --profile celiador builds list --app 6819707590 --limit 5 --output table
 asc --profile celiador builds add-groups --app 6819707590 --latest --group Public --dry-run
 asc --profile celiador builds add-groups --app 6819707590 --latest --group Public --submit --confirm
 #    Or by build id: asc --profile celiador builds add-groups --build-id <BUILD_ID> --group Public --submit --confirm
@@ -170,9 +165,9 @@ asc --profile celiador builds add-groups --app 6819707590 --latest --group Publi
 #    "by invite" to the link.
 ```
 
-For every later *Archive - App Store* build that should reach the public: step 2
-again (without `--dry-run`). Nothing in the Xcode Cloud workflows adds a build to
-`Public`; that is deliberate.
+For every later prod build that should reach the public: step 2 again (without
+`--dry-run`). Nothing in the workflow adds a build to `Public`; that is
+deliberate.
 
 ## Verifying the first build (ios#2 checklist)
 
@@ -187,6 +182,23 @@ again (without `--dry-run`). Nothing in the Xcode Cloud workflows adds a build t
 
 `MARKETING_VERSION` lives in `project.yml` (app, widgets and watch must match
 and equal the daemon's `package.json` version; the root `scripts/release.sh`
-keeps them in step). Xcode Cloud numbers the builds itself
-(every upload so far: `0.2.0 (10…22)`), so `CURRENT_PROJECT_VERSION` in
-`project.yml` is only the local default.
+keeps them in step; the workflow refuses to build if they disagree). The
+workflow sets `CURRENT_PROJECT_VERSION` to `1000 + run number` on the
+command line, so the `"1"` in `project.yml` is only the local default. Xcode
+Cloud's uploads were numbered 10–40, below that range.
+
+## If a build fails
+
+- *No signing certificate "iOS Distribution" found* / *no profiles*: the
+  secrets are missing or stale → `ios/scripts/ci-signing-setup.sh` again.
+- *Provisioning profile … doesn't include the … capability*: automatic signing
+  could not update the App ID — the API key must have the App Manager (or
+  Admin) role.
+- *The bundle version must be higher*: a dispatch re-ran an old run number →
+  just run again (the number is per run, not per attempt).
+- *brew install xcodegen* network resets: the step retries four times; re-run
+  the job if it still fails.
+- Xcode mismatch (the project needs a newer SDK than the runner's): bump
+  `DEVELOPER_DIR` in the workflow to another version listed in the runner
+  image (github.com/actions/runner-images, `macos-26-Readme.md`), or switch
+  `runs-on` to the `xcode-27` preview image.

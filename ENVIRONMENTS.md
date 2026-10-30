@@ -112,7 +112,7 @@ Actions → Deploy → env=prod tag=vX.Y.Z → prod  (manual, required reviewer)
 
 One release train for this repository: a `vX.Y.Z` tag is a Celiador release
 and names what test and prod run — the daemon and the site deploy to test
-(`.github/workflows/deploy.yml`, `web-deploy.yml`) and Xcode Cloud archives the
+(`.github/workflows/deploy.yml`, `web-deploy.yml`) and `ios.yml` archives the
 iOS Test scheme to TestFlight (`ios/TESTFLIGHT.md`), all off the one tag.
 Rollback is a redeploy of the previous tag. The editor has VS Code's version
 and follows the same triggers in its own repo (`main` → dev channel, tag →
