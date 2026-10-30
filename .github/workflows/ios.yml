@@ -20,11 +20,13 @@ name: Build iOS
 #
 # Runs on a GitHub-hosted macOS runner (the repository is public: no minutes
 # are billed). XcodeGen generates the project; the icon gets the channel banner
-# (CHANNELS.md); signing is automatic through the App Store Connect API key —
-# xcodebuild -allowProvisioningUpdates creates and refreshes the App Store
-# profiles and the App IDs' capabilities — with a CI-only Apple Distribution
-# certificate in a throwaway keychain; -exportArchive with destination=upload
-# hands the build to App Store Connect. The build number is the run number.
+# (CHANNELS.md); signing is manual throughout — the channel's two App Store
+# profiles (bound to a CI-only Apple Distribution certificate, both made by
+# ios/scripts/ci-signing-setup.sh) are fetched with the App Store Connect API
+# key and used for the archive and the export, so no development identity and
+# no Xcode-managed profile is ever needed on the runner; -exportArchive with
+# destination=upload hands the build to App Store Connect. The build number is
+# the run number.
 #
 # Repository secrets (ios/TESTFLIGHT.md § One-time setup, written by
 # ios/scripts/ci-signing-setup.sh): ASC_KEY_ID, ASC_ISSUER_ID, ASC_PRIVATE_KEY
@@ -166,7 +168,6 @@ jobs:
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
           IOS_DIST_P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
           IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
-          IOS_DEV_P12_BASE64: ${{ secrets.IOS_DEV_P12_BASE64 }}
         run: |
           set -euo pipefail
           for v in ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY IOS_DIST_P12_BASE64 IOS_DIST_P12_PASSWORD; do
@@ -194,23 +195,6 @@ jobs:
             -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
           rm -f "$RUNNER_TEMP/dist.pem"
           security import "$RUNNER_TEMP/dist-legacy.p12" -k "$KEYCHAIN" -P "$IOS_DIST_P12_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign -T /usr/bin/security
-          # The archive is signed with an Apple *Development* identity (the export
-          # re-signs for distribution). With none in the keychain,
-          # -allowProvisioningUpdates mints a new development certificate on
-          # every run and the team hits Apple's cap within a day ("Your account
-          # has reached the maximum number of certificates"). The setup script
-          # issues a persistent one (same password as the distribution p12).
-          if [[ -n "${IOS_DEV_P12_BASE64:-}" ]]; then
-            base64 --decode <<<"$IOS_DEV_P12_BASE64" > "$RUNNER_TEMP/dev.p12"
-            openssl pkcs12 -in "$RUNNER_TEMP/dev.p12" -passin env:IOS_DIST_P12_PASSWORD -nodes -out "$RUNNER_TEMP/dev.pem"
-            openssl pkcs12 -export -in "$RUNNER_TEMP/dev.pem" -out "$RUNNER_TEMP/dev-legacy.p12" -passout env:IOS_DIST_P12_PASSWORD \
-              -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
-            rm -f "$RUNNER_TEMP/dev.pem"
-            security import "$RUNNER_TEMP/dev-legacy.p12" -k "$KEYCHAIN" -P "$IOS_DIST_P12_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign -T /usr/bin/security
-            rm -f "$RUNNER_TEMP/dev.p12" "$RUNNER_TEMP/dev-legacy.p12"
-          else
-            echo "::warning::IOS_DEV_P12_BASE64 is not set — xcodebuild will mint a throwaway development certificate for this run (ios/TESTFLIGHT.md)"
-          fi
           # Apple's intermediate, in case the image lacks it (a duplicate is
           # reported as an error by security import — the runner has it already).
           curl -fsSL -o "$RUNNER_TEMP/AppleWWDRCAG3.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
@@ -220,52 +204,24 @@ jobs:
           rm -f "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/dist-legacy.p12"
           security find-identity -v -p codesigning "$KEYCHAIN"
 
-      - name: Archive
+      - name: Install the channel's App Store profiles
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           set -euo pipefail
-          # The scheme carries the channel: it archives with its own
-          # configuration (Dev / Test / Release) and so its xcconfig. The Dev
-          # configuration is a debug build, which would carry no dSYM, so
-          # dwarf-with-dsym is forced for every channel: TestFlight crash
-          # reports stay symbolicated.
-          xcodebuild archive \
-            -project Celiador.xcodeproj \
-            -scheme "$SCHEME" \
-            -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Celiador.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            CELIADOR_COMMIT="${GITHUB_SHA::7}" \
-            DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
-            OTHER_CODE_SIGN_FLAGS="--keychain $RUNNER_TEMP/$KEYCHAIN_NAME" \
-            | xcbeautify --renderer github-actions
-          plutil -p "$RUNNER_TEMP/Celiador.xcarchive/Info.plist" | grep -E 'CFBundleShortVersionString|CFBundleVersion|CFBundleIdentifier'
-          # The commit must reach the app bundle: the Settings build card shows it.
-          plutil -p "$RUNNER_TEMP"/Celiador.xcarchive/Products/Applications/*.app/Info.plist | grep -F "CELIADOR_COMMIT"
-
-      - name: Upload to App Store Connect
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-        run: |
-          set -euo pipefail
-          # destination=upload: xcodebuild re-signs for distribution and sends
-          # the build straight to App Store Connect; TestFlight's Internal group
-          # (access to all builds) can install it once it is processed.
-          #
-          # Manual signing here, not automatic: automatic export means Xcode
-          # "cloud signing", which needs an Admin-role API key ("Cloud signing
-          # permission error" with App Manager). The App Store profiles below
-          # are bound to the CI certificate (created by ci-signing-setup.sh).
-          # xcodebuild only downloads profiles for automatically signed
-          # targets, so fastlane's sigh (on the runner image) fetches the two
-          # named profiles with the same API key and installs them.
+          # Manual signing, for the archive as well as the export. Automatic
+          # signing would sign the archive with an Apple *Development* identity
+          # and an Xcode-managed profile: the runner has neither, so
+          # -allowProvisioningUpdates minted a development certificate per run
+          # (the team hit Apple's cap within a day) and could not create a
+          # managed profile for a new bundle id at all with an App Manager key
+          # ("Authentication failed: Make sure a bearer token was provided").
+          # Automatic *export* is Xcode cloud signing, which needs an Admin key.
+          # The two App Store profiles per channel are bound to the CI
+          # certificate (ci-signing-setup.sh); xcodebuild only downloads
+          # profiles for automatically signed targets, so fastlane's sigh (on
+          # the runner image) fetches them with the same API key.
           case "$CHANNEL" in
             dev)  suffix=".dev";  app_profile="Celiador Dev CI App Store";  widgets_profile="Celiador Dev Widgets CI App Store" ;;
             test) suffix=".test"; app_profile="Celiador Test CI App Store"; widgets_profile="Celiador Test Widgets CI App Store" ;;
@@ -284,6 +240,55 @@ jobs:
           done
           rm -f "$RUNNER_TEMP/asc-key.json"
           ls -la "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" 2>/dev/null || true
+          # Per-target profile for the archive: an xcconfig override, since a
+          # command-line build setting would apply the same name to both targets.
+          # (Nested references expand: CELIADOR_PROFILE_<target name>.)
+          cat > "$RUNNER_TEMP/signing.xcconfig" <<XCCONFIG
+          CODE_SIGN_STYLE = Manual
+          DEVELOPMENT_TEAM = XPNFDWPFAV
+          CODE_SIGN_IDENTITY = Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER = \$(CELIADOR_PROFILE_\$(TARGET_NAME))
+          CELIADOR_PROFILE_Celiador = ${app_profile}
+          CELIADOR_PROFILE_CeliadorWidgets = ${widgets_profile}
+          XCCONFIG
+          cat "$RUNNER_TEMP/signing.xcconfig"
+          { echo "SUFFIX=$suffix"; echo "APP_PROFILE=$app_profile"; echo "WIDGETS_PROFILE=$widgets_profile"; } >> "$GITHUB_ENV"
+
+      - name: Archive
+        run: |
+          set -euo pipefail
+          # The scheme carries the channel: it archives with its own
+          # configuration (Dev / Test / Release) and so its xcconfig. The Dev
+          # configuration is a debug build, which would carry no dSYM, so
+          # dwarf-with-dsym is forced for every channel: TestFlight crash
+          # reports stay symbolicated. Signing: the step above.
+          xcodebuild archive \
+            -project Celiador.xcodeproj \
+            -scheme "$SCHEME" \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Celiador.xcarchive" \
+            -xcconfig "$RUNNER_TEMP/signing.xcconfig" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CELIADOR_COMMIT="${GITHUB_SHA::7}" \
+            DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
+            OTHER_CODE_SIGN_FLAGS="--keychain $RUNNER_TEMP/$KEYCHAIN_NAME" \
+            | xcbeautify --renderer github-actions
+          plutil -p "$RUNNER_TEMP/Celiador.xcarchive/Info.plist" | grep -E 'CFBundleShortVersionString|CFBundleVersion|CFBundleIdentifier'
+          # The commit must reach the app bundle: the Settings build card shows it.
+          plutil -p "$RUNNER_TEMP"/Celiador.xcarchive/Products/Applications/*.app/Info.plist | grep -F "CELIADOR_COMMIT"
+
+      - name: Upload to App Store Connect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          # destination=upload: xcodebuild re-signs for distribution and sends
+          # the build straight to App Store Connect; TestFlight's Internal group
+          # (access to all builds) can install it once it is processed. Manual
+          # signing with the profiles installed above (automatic export would
+          # be Xcode cloud signing, which needs an Admin-role API key).
+          suffix="$SUFFIX"; app_profile="$APP_PROFILE"; widgets_profile="$WIDGETS_PROFILE"
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -8,8 +8,7 @@
 #
 # What it does:
 #   1. Generates a private key + CSR here (never leaves this machine except in
-#      the p12 below) and asks App Store Connect for an Apple Distribution (and
-#      an Apple Development, for the archive step)
+#      the p12 below) and asks App Store Connect for an Apple Distribution
 #      certificate for it — a certificate only the workflow uses, so revoking it
 #      never touches the one in your login keychain. Apple allows three.
 #   2. Packages certificate + key as a password-protected .p12, and (re)creates
@@ -67,35 +66,18 @@ python3 -c 'import json,sys,base64; sys.stdout.buffer.write(base64.b64decode(jso
   "$work/cert.json" > "$work/ci.cer"
 echo "   certificate $cert_id ($(openssl x509 -in "$work/ci.cer" -inform DER -noout -enddate | cut -d= -f2))"
 
-# `xcodebuild archive` with automatic signing signs the archive with an Apple
-# *Development* identity (the export re-signs for distribution). Without one in
-# the runner's keychain, -allowProvisioningUpdates mints a new development
-# certificate on every run, and the team hits Apple's cap within a day
-# ("Your account has reached the maximum number of certificates"). So the CI
-# gets a persistent development certificate too, from the same key.
-echo "→ asking App Store Connect for an Apple Development certificate (same key)"
-asc --profile "$profile" certificates create --certificate-type DEVELOPMENT \
-  --csr "$work/ci.csr" --output json > "$work/dev-cert.json"
-dev_cert_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$work/dev-cert.json")"
-python3 -c 'import json,sys,base64; sys.stdout.buffer.write(base64.b64decode(json.load(open(sys.argv[1]))["data"]["attributes"]["certificateContent"]))' \
-  "$work/dev-cert.json" > "$work/ci-dev.cer"
-echo "   certificate $dev_cert_id"
-
-echo "→ packaging the .p12 files"
+echo "→ packaging the .p12"
 uuidgen | tr -d '\n' > "$work/p12.password"
 chmod 600 "$work/p12.password"
-for pair in "ci.cer|ci.p12" "ci-dev.cer|ci-dev.p12"; do
-  cer="${pair%%|*}"; p12="${pair#*|}"
-  asc certificates export --certificate "$work/$cer" --private-key "$work/ci.key" \
-    --csr "$work/ci.csr" --password-file "$work/p12.password" --p12-out "$work/modern.p12" --output json >/dev/null
-  # asc writes a modern PKCS#12 (PBES2 / AES-256) that macOS `security import`
-  # cannot decode ("Unable to decode the provided data"); re-wrap it with the
-  # legacy 3DES / SHA-1 algorithms. The workflow does the same defensively.
-  openssl pkcs12 -in "$work/modern.p12" -passin "file:$work/p12.password" -nodes -out "$work/ci.pem"
-  openssl pkcs12 -export -in "$work/ci.pem" -out "$work/$p12" -passout "file:$work/p12.password" \
-    -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
-  rm -f "$work/ci.pem" "$work/modern.p12"
-done
+asc certificates export --certificate "$work/ci.cer" --private-key "$work/ci.key" \
+  --csr "$work/ci.csr" --password-file "$work/p12.password" --p12-out "$work/ci-modern.p12" --output json >/dev/null
+# asc writes a modern PKCS#12 (PBES2 / AES-256) that macOS `security import`
+# cannot decode ("Unable to decode the provided data"); re-wrap it with the
+# legacy 3DES / SHA-1 algorithms. The workflow does the same defensively.
+openssl pkcs12 -in "$work/ci-modern.p12" -passin "file:$work/p12.password" -nodes -out "$work/ci.pem"
+openssl pkcs12 -export -in "$work/ci.pem" -out "$work/ci.p12" -passout "file:$work/p12.password" \
+  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
+rm -f "$work/ci.pem" "$work/ci-modern.p12"
 
 echo "→ App Store provisioning profiles for the CI certificate"
 # A profile is bound to its certificates, so a new certificate needs new
@@ -129,11 +111,10 @@ echo "→ writing the repository secrets on $repo"
   printf 'ASC_PRIVATE_KEY="%s"\n' "$(awk 'BEGIN{ORS="\\n"} {print}' "$key_path")"
   printf 'IOS_DIST_P12_BASE64=%s\n' "$(base64 < "$work/ci.p12" | tr -d '\n')"
   printf 'IOS_DIST_P12_PASSWORD=%s\n' "$(cat "$work/p12.password")"
-  printf 'IOS_DEV_P12_BASE64=%s\n' "$(base64 < "$work/ci-dev.p12" | tr -d '\n')"
 } > "$work/secrets.env"
 chmod 600 "$work/secrets.env"
 gh secret set -R "$repo" -f "$work/secrets.env"
 
-echo "✔ done. Secrets set: ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY IOS_DIST_P12_BASE64 IOS_DIST_P12_PASSWORD IOS_DEV_P12_BASE64"
-echo "  Certificates $cert_id (distribution) and $dev_cert_id (development) are the workflow's; revoke them in App Store Connect to rotate."
+echo "✔ done. Secrets set: ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY IOS_DIST_P12_BASE64 IOS_DIST_P12_PASSWORD"
+echo "  Certificate $cert_id is the workflow's; revoke it in App Store Connect to rotate."
 echo "  Next: push to main touching ios/, or: gh workflow run ios.yml -R $repo -f channel=dev"

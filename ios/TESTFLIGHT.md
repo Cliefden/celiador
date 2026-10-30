@@ -32,20 +32,26 @@ the version and sits on `main`.
    test, nothing for prod), then:
    - creates a throwaway keychain with the **CI distribution certificate** and
      Apple's WWDR intermediate;
-   - `xcodebuild archive -scheme <channel's scheme> -allowProvisioningUpdates
-     -authenticationKey…` — the project's automatic signing, driven by the App
-     Store Connect API key;
-   - `xcodebuild -exportArchive` with `destination: upload` and **manual**
-     signing: the channel's two App Store profiles ("Celiador [Dev] CI App
-     Store" + "… Widgets CI App Store", bound to the CI certificate; fetched by
-     name and installed with fastlane's `sigh --readonly` using the same API
-     key, since xcodebuild only downloads profiles for automatic signing)
-     re-sign the app for distribution and the build is uploaded straight to
-     App Store Connect.
-     Manual, because automatic export is Xcode "cloud signing", which an App
-     Manager key is not allowed to do. The App Store profiles carry
-     `aps-environment: production`, so the Dev app's TestFlight build receives
-     production APNs: the dev daemon's `APNS_ENV` must be `production`.
+   - fetches the channel's two **App Store profiles** ("Celiador [Dev|Test] CI
+     App Store" + "… Widgets CI App Store", bound to the CI certificate) by
+     name with fastlane's `sigh --readonly` and the same API key (xcodebuild
+     only downloads profiles for automatic signing), and writes a
+     `signing.xcconfig` that pins each target to its profile;
+   - `xcodebuild archive -scheme <channel's scheme> -xcconfig signing.xcconfig`
+     — **manual** signing with the distribution certificate and those
+     profiles. Not automatic: that would sign the archive with an Apple
+     Development identity and an Xcode-managed profile, which the runner has
+     not — Xcode then mints a development certificate per run (Apple's cap is
+     reached within a day) and cannot create a managed profile for a new
+     bundle id with an App Manager key ("Authentication failed: Make sure a
+     bearer token was provided");
+   - `xcodebuild -exportArchive` with `destination: upload` and the same
+     manual signing re-signs the app for distribution and the build is
+     uploaded straight to App Store Connect. Manual, because automatic export
+     is Xcode "cloud signing", which an App Manager key is not allowed to do.
+     The App Store profiles carry `aps-environment: production`, so every
+     channel's TestFlight build receives production APNs: each daemon's
+     `APNS_ENV` must be `production`.
    - keeps the export report as a run artifact for two weeks; deletes the
      keychain and the key.
 3. `notify`: mails the result through the repository's `SMTP_USER` / `SMTP_PASS`
@@ -76,7 +82,6 @@ the export step names, and sets:
 |---|---|
 | `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY` | the App Store Connect API key (`R73AU5822H`, "Fastlane", App Manager — the one `asc --profile celiador` and `fastlane/` use; the `.p8` from `~/.appstoreconnect/private_keys/`) |
 | `IOS_DIST_P12_BASE64`, `IOS_DIST_P12_PASSWORD` | the CI certificate + key |
-| `IOS_DEV_P12_BASE64` | the CI **Apple Development** certificate + the same private key, as a `.p12` (same password as the distribution one). The archive step signs with a development identity; without this, `-allowProvisioningUpdates` mints a new development certificate per run and the team hits Apple's certificate cap within a day. Optional until the setup script has been re-run; the workflow warns when it is missing. |
 
 Re-running the script rotates everything (then revoke the previous CI
 certificate: `asc --profile celiador certificates list`, `… revoke --id`).
@@ -211,12 +216,16 @@ Cloud's uploads were numbered 10–40, below that range.
   with `asc profiles create --profile-type IOS_APP_STORE` for the CI
   certificate.
 - *Choose a certificate to revoke. Your account has reached the maximum number
-  of certificates* at the archive: the runs minted a throwaway Apple
-  Development certificate each (no `IOS_DEV_P12_BASE64`). Revoke the "Created
-  via API" DEVELOPMENT certificates from App Store Connect → Certificates (or
-  `asc --profile celiador certificates revoke --id … --confirm`; their keys
-  lived only on ephemeral runners) and re-run `ios/scripts/ci-signing-setup.sh`
-  so the workflow gets a persistent one.
+  of certificates* / *Authentication failed: Make sure a bearer token was
+  provided* at the archive: the archive is being signed automatically. That
+  needs an Apple Development identity and an Xcode-managed profile, which the
+  runner has not — Xcode then mints a development certificate per run (the
+  cap) and cannot create a managed profile for a new bundle id with an App
+  Manager key (the bearer-token error). The workflow signs the archive
+  manually with the channel's App Store profiles (`signing.xcconfig`); make
+  sure that step ran. Leftover "Created via API" DEVELOPMENT certificates can
+  be revoked (`asc --profile celiador certificates revoke --id … --confirm`;
+  their keys lived only on ephemeral runners).
 - *Provisioning profile … doesn't include the … capability*: a capability was
   added to an App ID after its profile was made → regenerate the profiles (the
   setup script, or App Store Connect → Profiles → Edit → Save).
