@@ -232,10 +232,20 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           set -euo pipefail
-          # destination=upload: xcodebuild signs for distribution and sends the
-          # build straight to App Store Connect; TestFlight's Internal group
+          # destination=upload: xcodebuild re-signs for distribution and sends
+          # the build straight to App Store Connect; TestFlight's Internal group
           # (access to all builds) can install it once it is processed.
-          cat > "$RUNNER_TEMP/ExportOptions.plist" <<'PLIST'
+          #
+          # Manual signing here, not automatic: automatic export means Xcode
+          # "cloud signing", which needs an Admin-role API key ("Cloud signing
+          # permission error" with App Manager). The App Store profiles below
+          # are bound to the CI certificate (created by ci-signing-setup.sh);
+          # -allowProvisioningUpdates lets xcodebuild download them by name.
+          case "$CHANNEL" in
+            dev)  suffix=".dev"; app_profile="Celiador Dev CI App Store"; widgets_profile="Celiador Dev Widgets CI App Store" ;;
+            *)    suffix="";     app_profile="Celiador CI App Store";     widgets_profile="Celiador Widgets CI App Store" ;;
+          esac
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -243,7 +253,13 @@ jobs:
             <key>method</key><string>app-store-connect</string>
             <key>destination</key><string>upload</string>
             <key>teamID</key><string>XPNFDWPFAV</string>
-            <key>signingStyle</key><string>automatic</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>ai.celiador.companion${suffix}</key><string>${app_profile}</string>
+              <key>ai.celiador.companion${suffix}.widgets</key><string>${widgets_profile}</string>
+            </dict>
             <key>manageAppVersionAndBuildNumber</key><false/>
             <key>uploadSymbols</key><true/>
             <key>stripSwiftSymbols</key><true/>

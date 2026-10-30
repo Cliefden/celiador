@@ -33,15 +33,17 @@ the version and sits on `main`.
    - creates a throwaway keychain with the **CI distribution certificate** and
      Apple's WWDR intermediate;
    - `xcodebuild archive -scheme <channel's scheme> -allowProvisioningUpdates
-     -authenticationKey…` — automatic signing through the App Store Connect API
-     key creates or refreshes the App Store provisioning profiles (and the
-     `.dev` App IDs' push + App Group capabilities) for the certificate in the
-     keychain;
-   - `xcodebuild -exportArchive` with `destination: upload`, which signs for
-     distribution and uploads straight to App Store Connect. Xcode turns
-     `aps-environment` to `production` for distribution builds, so the Dev app's
-     TestFlight build receives production APNs: the dev daemon's `APNS_ENV` must
-     be `production`.
+     -authenticationKey…` — the project's automatic signing, driven by the App
+     Store Connect API key;
+   - `xcodebuild -exportArchive` with `destination: upload` and **manual**
+     signing: the channel's two App Store profiles ("Celiador [Dev] CI App
+     Store" + "… Widgets CI App Store", bound to the CI certificate and
+     downloaded by name thanks to `-allowProvisioningUpdates`) re-sign the app
+     for distribution and the build is uploaded straight to App Store Connect.
+     Manual, because automatic export is Xcode "cloud signing", which an App
+     Manager key is not allowed to do. The App Store profiles carry
+     `aps-environment: production`, so the Dev app's TestFlight build receives
+     production APNs: the dev daemon's `APNS_ENV` must be `production`.
    - keeps the export report as a run artifact for two weeks; deletes the
      keychain and the key.
 3. `notify`: mails the result through the repository's `SMTP_USER` / `SMTP_PASS`
@@ -64,7 +66,8 @@ ios/scripts/ci-signing-setup.sh        # from a Mac with asc (profile celiador) 
 It generates a private key here, has App Store Connect issue an **Apple
 Distribution certificate for it** (a CI-only certificate — revoking it never
 touches the one in your login keychain; Apple allows three per team), packages
-it as a `.p12`, and sets:
+it as a `.p12`, (re)creates the four **App Store profiles** bound to it that
+the export step names, and sets:
 
 | Secret | What |
 |---|---|
@@ -197,9 +200,15 @@ Cloud's uploads were numbered 10–40, below that range.
   before importing, and the setup script now emits that format; if you built
   a p12 by hand, add `-certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1`
   to `openssl pkcs12 -export`.
-- *Provisioning profile … doesn't include the … capability*: automatic signing
-  could not update the App ID — the API key must have the App Manager (or
-  Admin) role.
+- *Cloud signing permission error* / *No profiles for '…' were found* at the
+  export: the export fell back to automatic (cloud) signing, which needs an
+  Admin key, or the named CI profiles are missing/expired → run
+  `ios/scripts/ci-signing-setup.sh` again (it recreates them), or create them
+  with `asc profiles create --profile-type IOS_APP_STORE` for the CI
+  certificate.
+- *Provisioning profile … doesn't include the … capability*: a capability was
+  added to an App ID after its profile was made → regenerate the profiles (the
+  setup script, or App Store Connect → Profiles → Edit → Save).
 - *The bundle version must be higher*: a dispatch re-ran an old run number →
   just run again (the number is per run, not per attempt).
 - *brew install xcodegen* network resets: the step retries four times; re-run

@@ -11,7 +11,11 @@
 #      the p12 below) and asks App Store Connect for an Apple Distribution
 #      certificate for it — a certificate only the workflow uses, so revoking it
 #      never touches the one in your login keychain. Apple allows three.
-#   2. Packages certificate + key as a password-protected .p12.
+#   2. Packages certificate + key as a password-protected .p12, and (re)creates
+#      the four App Store provisioning profiles bound to that certificate —
+#      "Celiador CI App Store", "Celiador Widgets CI App Store", "Celiador Dev
+#      CI App Store", "Celiador Dev Widgets CI App Store" — which the workflow's
+#      export step names (manual signing; Xcode downloads them by name).
 #   3. Writes the repository secrets the workflow reads:
 #        ASC_KEY_ID, ASC_ISSUER_ID, ASC_PRIVATE_KEY   the App Store Connect API key
 #                                                      (App Manager role is enough)
@@ -74,6 +78,28 @@ openssl pkcs12 -in "$work/ci-modern.p12" -passin "file:$work/p12.password" -node
 openssl pkcs12 -export -in "$work/ci.pem" -out "$work/ci.p12" -passout "file:$work/p12.password" \
   -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
 rm -f "$work/ci.pem" "$work/ci-modern.p12"
+
+echo "→ App Store provisioning profiles for the CI certificate"
+# A profile is bound to its certificates, so a new certificate needs new
+# profiles; same-named leftovers from the previous certificate are removed.
+while IFS='|' read -r name identifier; do
+  [[ -n "$name" ]] || continue
+  bundle_id="$(asc --profile "$profile" bundle-ids list --identifier "$identifier" --output json |
+    python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(d[0]["id"] if d else "")')"
+  [[ -n "$bundle_id" ]] || { echo "✘ bundle id $identifier is not registered on the team" >&2; exit 1; }
+  for old in $(asc --profile "$profile" profiles list --name "$name" --output json |
+      python3 -c 'import json,sys; print(" ".join(p["id"] for p in json.load(sys.stdin)["data"]))'); do
+    asc --profile "$profile" profiles delete --id "$old" --confirm --output json >/dev/null
+  done
+  asc --profile "$profile" profiles create --name "$name" --profile-type IOS_APP_STORE \
+    --bundle "$bundle_id" --certificate "$cert_id" --output json >/dev/null
+  echo "   $name  ($identifier)"
+done <<'PROFILES'
+Celiador CI App Store|ai.celiador.companion
+Celiador Widgets CI App Store|ai.celiador.companion.widgets
+Celiador Dev CI App Store|ai.celiador.companion.dev
+Celiador Dev Widgets CI App Store|ai.celiador.companion.dev.widgets
+PROFILES
 
 echo "→ writing the repository secrets on $repo"
 {
