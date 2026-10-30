@@ -6,6 +6,10 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-30
+
+- No changes; released with the train.
+
 ## [0.2.3] - 2026-10-30
 
 - iPhone app: a **Settings** tab. It opens with a "This build" card — app,
