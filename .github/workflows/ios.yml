@@ -209,9 +209,10 @@ jobs:
         run: |
           set -euo pipefail
           # The scheme carries the channel: it archives with its own
-          # configuration (Dev / Test / Release) and so its xcconfig. Automatic
-          # signing with the API key creates or updates the App Store profiles
-          # for whatever certificate is in the keychain — the CI one.
+          # configuration (Dev / Test / Release) and so its xcconfig. The Dev
+          # configuration is a debug build, which would carry no dSYM, so
+          # dwarf-with-dsym is forced for every channel: TestFlight crash
+          # reports stay symbolicated.
           xcodebuild archive \
             -project Celiador.xcodeproj \
             -scheme "$SCHEME" \
@@ -222,6 +223,7 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
             OTHER_CODE_SIGN_FLAGS="--keychain $RUNNER_TEMP/$KEYCHAIN_NAME" \
             | xcbeautify --renderer github-actions
           plutil -p "$RUNNER_TEMP/Celiador.xcarchive/Info.plist" | grep -E 'CFBundleShortVersionString|CFBundleVersion|CFBundleIdentifier'
