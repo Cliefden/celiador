@@ -33,11 +33,45 @@ struct Session: Codable, Identifiable, Equatable {
     let updatedAt: String
     /// Gateway usage attributed to this run (absent on an older daemon).
     var usage: RunUsage? = nil
+    /// A cloud session's repo and worktree branch (runner "server", newer daemons only).
+    var repo: SessionRepo? = nil
+
+    /// Runs on Celiador's servers rather than an editor.
+    var isCloud: Bool { runner == "server" }
+}
+
+/// A cloud session's checkout: a git worktree on `branch`, started from `base`.
+struct SessionRepo: Codable, Equatable {
+    let url: String
+    let branch: String
+    let base: String
+    let existingBranch: Bool
+    /// Push / pull request / merge are available (GitHub App installed, repo linked to you).
+    let pushable: Bool
+    var pr: PullRef? = nil
+
+    struct PullRef: Codable, Equatable {
+        let number: Int
+        let url: String
+    }
+}
+
+/// One of your repos the cloud can run on (GET /api/sessions/cloud/repos).
+struct CloudRepo: Codable, Identifiable, Hashable {
+    let url: String
+    let owner: String
+    let name: String
+    /// The Celiador GitHub App is installed (private fetch, push, PR, merge).
+    let app: Bool
+    var defaultBranch: String? = nil
+    var `private`: Bool? = nil
+    var id: String { url }
+    var label: String { "\(owner)/\(name)" }
 }
 
 extension Session {
     enum CodingKeys: String, CodingKey {
-        case id, title, origin, runner, state, runnerConnected, lastSeq, createdAt, updatedAt, usage
+        case id, title, origin, runner, state, runnerConnected, lastSeq, createdAt, updatedAt, usage, repo
     }
 
     /// Tolerant decoding: a malformed `usage` never drops the session.
@@ -53,6 +87,7 @@ extension Session {
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decode(String.self, forKey: .updatedAt)
         usage = (try? c.decodeIfPresent(RunUsage.self, forKey: .usage)) ?? nil
+        repo = (try? c.decodeIfPresent(SessionRepo.self, forKey: .repo)) ?? nil
     }
 }
 

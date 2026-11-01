@@ -65,6 +65,34 @@ export interface Session {
   mirrorKey?: string;
   /** What this run has spent so far; absent until the first attributed request. */
   usage?: SessionUsage;
+  /** A cloud session's repository and its git worktree's branches (runner "server" only). */
+  repo?: SessionRepo;
+}
+
+/**
+ * A cloud session's checkout: a git worktree of the user's cached mirror of
+ * `url`, on `branch`, started from `base`. Push / pull request / merge go
+ * through the Celiador GitHub App, and only when `pushable` (the App is
+ * installed and the repo is linked to this user).
+ */
+export interface SessionRepo {
+  /** https URL as given (github.com for push / PR). */
+  url: string;
+  /** github.com owner/name when the URL is a GitHub repo. */
+  owner?: string;
+  name?: string;
+  /** The worktree's branch: the one commits and pushes go to. */
+  branch: string;
+  /** What `branch` started from (a branch name on the remote) — the pull request's base. */
+  base: string;
+  /** True when the session works directly on an existing remote branch (no new branch). */
+  existingBranch: boolean;
+  /** Whether push / PR / merge are available (App installed + repo linked to this user). */
+  pushable: boolean;
+  /** The remote sha of `branch` the next push leases against ("" = must not exist yet). */
+  remoteSha: string;
+  /** The session's pull request, once opened. */
+  pr?: { number: number; url: string };
 }
 
 /** A session summary as returned to list/get callers (identical shape today). */

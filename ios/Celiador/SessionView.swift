@@ -42,6 +42,10 @@ private final class SessionTranscript {
     var items: [TranscriptItem] = []
     var state: SessionState = .idle
     var runnerConnected = false
+    /// A cloud session: the daemon is its runner, so follow-ups don't need an editor.
+    var isCloud = false
+    /// A cloud session's worktree branch (set once the daemon has checked it out).
+    var repo: SessionRepo?
     var liveLine = ""
     var pendingApproval: PendingApproval?
     var pendingQuestion: PendingQuestion?
@@ -70,6 +74,8 @@ private final class SessionTranscript {
                 if let s = try? await Api.shared.getSession(sessionId) {
                     if first { self?.state = s.state }
                     self?.runnerConnected = s.runnerConnected
+                    self?.isCloud = s.isCloud
+                    self?.repo = s.repo
                     first = false
                 }
                 try? await Task.sleep(for: .seconds(10))
@@ -246,9 +252,15 @@ struct SessionView: View {
         model.sessions.first { $0.id == sessionId }?.title ?? "Session"
     }
 
-    /// Live git review runs on the editor's working copy — editor runs only.
+    /// Live git review: the editor's working copy over the relay, or a cloud
+    /// session's worktree on the daemon (sessions started with a repo checkout).
     private var canReviewLive: Bool {
-        model.sessions.first { $0.id == sessionId }?.runner == "editor"
+        if cloudRepo != nil { return true }
+        return model.sessions.first { $0.id == sessionId }?.runner == "editor"
+    }
+
+    private var cloudRepo: SessionRepo? {
+        transcript.repo ?? model.sessions.first { $0.id == sessionId }?.repo
     }
 
     var body: some View {
@@ -326,7 +338,7 @@ struct SessionView: View {
             }
         }
         .sheet(isPresented: $showChanges) {
-            ChangesView(title: title, diffs: transcript.diffs, liveSessionId: canReviewLive ? sessionId : nil)
+            ChangesView(title: title, diffs: transcript.diffs, liveSessionId: canReviewLive ? sessionId : nil, cloud: cloudRepo)
                 .trackScreen(.changes)
         }
         .trackScreen(.session)
@@ -472,13 +484,18 @@ struct SessionView: View {
     }
 
     private var composerBar: some View {
-        let offline = !transcript.runnerConnected
+        // A cloud session takes the follow-up as its next turn once the current one is done.
+        let offline = !transcript.isCloud && !transcript.runnerConnected
+        let busy = transcript.isCloud && (transcript.state == .running || transcript.state == .awaiting)
+        let blocked = offline || busy
+        let placeholder = offline ? "Editor offline…" : busy ? "Working… follow up when it's done" : "Send a follow-up…"
         return HStack(alignment: .bottom, spacing: 8) {
             if offline { Image(systemName: "bolt.slash.fill").font(.caption).foregroundStyle(.secondary) }
-            TextField(offline ? "Editor offline…" : "Send a follow-up…", text: $composer, axis: .vertical)
+            if transcript.isCloud && !busy { Image(systemName: "cloud").font(.caption).foregroundStyle(.secondary) }
+            TextField(placeholder, text: $composer, axis: .vertical)
                 .lineLimit(1...4)
-                .disabled(offline)
-            SendButton(enabled: !offline && !composer.trimmingCharacters(in: .whitespaces).isEmpty) {
+                .disabled(blocked)
+            SendButton(enabled: !blocked && !composer.trimmingCharacters(in: .whitespaces).isEmpty) {
                 Haptics.tap(); transcript.send(composer); composer = ""
             }
         }

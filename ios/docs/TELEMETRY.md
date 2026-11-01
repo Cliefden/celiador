@@ -43,7 +43,7 @@ their names/parameters are frozen.
 | `celiador/sessionOpened` **v2** | `state`: idle, running, awaiting, done, error, cancelled, unknown; `editor`: online, offline, cloud, unknown | `SessionView.onAppear` (per appearance) | Do people open live runs or finished ones? How often is the editor offline when they try to steer? |
 | `celiador/approvalResolved` **v2** | `decision`: approve, deny; `tool`: write, shell, fetch, other; `latency`: <10s, 10-60s, 1-5m, 5-60m, 1h+ | `SessionTranscript.resolve` | Approve/deny ratio per tool class; how fast do people respond from the phone? |
 | `celiador/questionAnswered` **v2** | `latency`: as above | `SessionTranscript.answer` | Are agent questions answered from the phone, and how quickly? |
-| `celiador/cloudRunStarted` **v2** | — | `NewRunView.start` (server-side run) | Is the cloud-run path used at all vs. editor runs (`phoneRun`)? |
+| `celiador/cloudRunStarted` **v2** | `branch`: new, existing; `app`: true, false | `NewRunView.start` (server-side run) | Is the cloud-run path used at all vs. editor runs (`phoneRun`)? Do people continue existing branches, and on repos with the GitHub App? |
 | `celiador/changesViewed` **v2** | `mode`: live, transcript, liveUnavailable; `files`: 0, 1, 2-5, 6+ | `ChangesView` after its first load | Is the phone diff review used, and does live git review work? |
 | `celiador/changesCommitted` **v2** | — | `ChangesView.commit` | Do people commit from the phone? |
 | `celiador/fileReverted` **v2** | — | `ChangesView.revert` | Is per-file discard used? |

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { costUsd, type TokenCounts } from "../agent/pricing";
-import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRunner, SessionState, SessionUsage } from "./types";
+import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRepo, SessionRunner, SessionState, SessionUsage } from "./types";
 
 /** Max events retained per session (older ones fall out of the ring). */
 const RING = 2000;
@@ -143,6 +143,16 @@ export class SessionStore {
     const events = ring.filter((e) => e.seq > cursor);
     if (cursor + 1 < oldest) return { events, truncatedFrom: oldest };
     return { events };
+  }
+
+  /** Set / update a cloud session's repo metadata. */
+  setRepo(id: string, repo: SessionRepo): Session | undefined {
+    const session = this.get(id);
+    if (!session) return undefined;
+    session.repo = repo;
+    session.updatedAt = new Date().toISOString();
+    this.saveMetaNow();
+    return session;
   }
 
   setRunnerConnected(id: string, connected: boolean): void {

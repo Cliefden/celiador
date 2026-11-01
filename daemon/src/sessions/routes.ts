@@ -7,10 +7,11 @@ import { requireUser } from "../auth";
 import { sessionStores } from "./instance";
 import { sessionBus } from "./bus";
 import { publishSessionEvent } from "./publish";
-import { cancelServerRun, startServerRun } from "../runner/manager";
+import { cancelServerRun } from "../runner/manager";
+import { cloudBranches, cloudGit, cloudRepos, cloudSessionFollowUp, removeCloudSession, repoAccess, startCloudSession, validBranch } from "./cloudSession";
 import { taskStores } from "../tasks/dispatch";
 import { publishTaskChange } from "../tasks/events";
-import { removeWorkspace, workspaceDir } from "../runner/workspace";
+import { workspaceDir } from "../runner/workspace";
 import { listDir, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
 import type { FsCommand, FsResult, FsResultInput, GitCommand, Session, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
 
@@ -119,12 +120,20 @@ export function sessionRoutes(): Hono<AppEnv> {
     const userId = c.get("user").userId;
     const isServer = runner === "server";
 
-    // A server run executes on the daemon (no desktop needed) — it must name a repo
-    // and a prompt. Validate before creating the session so a bad request doesn't
-    // leave an orphaned, never-started session lying around.
+    // A server (cloud) run executes on the daemon (no desktop needed) — it must name
+    // a repo and a prompt. Validate before creating the session so a bad request
+    // doesn't leave an orphaned, never-started session lying around.
     const repoUrl = isServer ? (repo?.url as unknown) : undefined;
-    if (isServer && (typeof repoUrl !== "string" || !/^https?:\/\//.test(repoUrl) || !str(prompt))) {
+    if (isServer && (typeof repoUrl !== "string" || !/^https?:\/\//.test(repoUrl) || repoUrl.length > 2048 || !str(prompt) || !prompt.trim())) {
       return c.json({ error: "a server run needs repo.url (http/https) and a prompt" }, 400);
+    }
+    const repoBranch = isServer && repo?.branch !== undefined && repo.branch !== null && repo.branch !== "" ? repo.branch : undefined;
+    if (repoBranch !== undefined && !validBranch(repoBranch)) return c.json({ error: "bad repo.branch" }, 400);
+    const existingBranch = isServer && repo?.existingBranch === true;
+    if (existingBranch && !repoBranch) return c.json({ error: "repo.existingBranch needs repo.branch" }, 400);
+    if (isServer) {
+      const access = repoAccess(userId, repoUrl as string);
+      if (!access.ok) return c.json({ error: access.error }, access.status);
     }
 
     // One mirror per runner-side session: another window already mirroring this
@@ -152,12 +161,8 @@ export function sessionRoutes(): Hono<AppEnv> {
     });
 
     if (isServer) {
-      startServerRun({
-        userId,
-        sessionId: session.id,
-        repo: { url: repoUrl as string, branch: typeof repo?.branch === "string" ? repo.branch : undefined },
-        prompt: prompt as string,
-      }).catch((err) => console.error("[runner] start failed:", err instanceof Error ? err.message : err));
+      startCloudSession(userId, session, { url: repoUrl as string, branch: repoBranch, existingBranch, prompt: prompt as string })
+        .catch((err) => console.error("[runner] start failed:", err instanceof Error ? err.message : err));
     }
     // An editor run of an agent task: link the task to this session so the phone's
     // queue can open the live transcript.
@@ -166,6 +171,20 @@ export function sessionRoutes(): Hono<AppEnv> {
   });
 
   app.get("/", (c) => c.json({ sessions: stores.for(c.get("user").userId).list() }));
+
+  // ---- Cloud sessions: what the phone can start one on -----------------------
+
+  /** The user's repos (linked in the queue), with whether the Celiador GitHub App can act on each. */
+  app.get("/cloud/repos", async (c) => c.json({ repos: await cloudRepos(c.get("user").userId) }));
+
+  /** One linked repo's branches, default first (via the App). */
+  app.get("/cloud/branches", async (c) => {
+    const url = c.req.query("remoteUrl") ?? "";
+    if (!url || url.length > 2048) return c.json({ error: "remoteUrl is required" }, 400);
+    const r = await cloudBranches(c.get("user").userId, url);
+    if ("error" in r) return c.json({ error: r.error }, r.status);
+    return c.json(r);
+  });
 
   app.get("/:id", (c) => {
     const session = stores.for(c.get("user").userId).get(c.req.param("id"));
@@ -176,9 +195,10 @@ export function sessionRoutes(): Hono<AppEnv> {
   app.delete("/:id", (c) => {
     const userId = c.get("user").userId;
     const id = c.req.param("id");
+    const session = stores.for(userId).get(id);
     const ok = stores.for(userId).delete(id);
-    // Reclaim the server-run workspace we kept around for file browsing.
-    void removeWorkspace(userId, id);
+    // Reclaim the server-run workspace we kept around for file browsing (and its worktree).
+    void removeCloudSession(userId, session, id);
     return c.json({ ok });
   });
 
@@ -235,6 +255,11 @@ export function sessionRoutes(): Hono<AppEnv> {
     const { text } = await c.req.json().catch(() => ({}));
     if (typeof text !== "string" || !text.trim()) return c.json({ error: "text is required" }, 400);
     if (text.length > 50_000) return c.json({ error: "text too long" }, 413);
+    // A cloud session's runner is the daemon: a follow-up is another turn in its worktree.
+    if (session.runner === "server") {
+      const sent = await cloudSessionFollowUp(userId, session, text.trim());
+      return "error" in sent ? c.json({ error: sent.error }, sent.status) : c.json({ ok: true });
+    }
     if (!sessionBus.hasRunner(session.id)) return c.json({ error: "runner offline" }, 409);
     // The daemon is the single source of the user turn in the log.
     publish(userId, session.id, { kind: "message", role: "user", text: text.trim() });
@@ -415,8 +440,8 @@ export function sessionRoutes(): Hono<AppEnv> {
   // Review what a run changed in the working copy: status, per-file diff, commit,
   // revert — then push the branch and open its pull request — round-tripped to
   // the editor runner, which executes them through the editor's git machinery
-  // and GitHub sign-in. Editor runs only in v1 (a server run's clone has no user
-  // git identity or push credentials).
+  // and GitHub sign-in. A cloud session runs them here, in its worktree, with
+  // the Celiador GitHub App (sessions/cloudSession.ts).
 
   /** Commit can run hooks; give review round-trips a longer leash than fs. */
   const GIT_TIMEOUT_MS = 30_000;
@@ -483,10 +508,13 @@ export function sessionRoutes(): Hono<AppEnv> {
   async function relayGit(c: Context<AppEnv>, command: GitCommand, timeoutMs = GIT_TIMEOUT_MS) {
     const session = stores.for(c.get("user").userId).get(c.req.param("id") ?? "");
     if (!session) return c.json({ error: "not found" }, 404);
-    if (session.runner !== "editor") return c.json({ error: "review is only available for editor runs" }, 409);
-    if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
     let result: FsResult;
-    try {
+    if (session.runner === "server") {
+      result = await cloudGit(c.get("user").userId, session, command);
+      // A cloud run without a worktree (a cloud task's, or one from before) has no review: 409 like an offline editor.
+      if (!result.ok && !session.repo) return c.json({ error: result.error ?? "review isn't available for this cloud run" }, 409);
+    } else try {
+      if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
       result = await sessionBus.requestFs(session.id, command, timeoutMs);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

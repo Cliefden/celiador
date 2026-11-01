@@ -12,10 +12,11 @@ it (or without the image) cloud runs use the deterministic placeholder agent.
 
 Isolation the daemon applies (`dockerRunArgs`): `--network none` (the only way out is
 the per-run gateway socket → the daemon's own Anthropic gateway, authenticated with a
-runner token for that user and run), read-only root, tmpfs `/tmp` and `$HOME`,
+runner token for that user and run), read-only root, tmpfs `/tmp`, the run's own `$HOME` (kept for follow-up turns),
 `--cap-drop ALL`, `no-new-privileges`, the daemon's non-root uid, 1.5 CPU / 3 GB /
 512 pids, a 30-minute wall clock (`CELIADOR_RUNNER_TIMEOUT_MS`) and `docker kill`
-on cancel. Only the run's workspace is writable.
+on cancel. Only the run's workspace and `$HOME` are writable — plus, for a git
+worktree, the user's mirror of that repo, mounted at its own path.
 
 Bumping Claude Code: change `CLAUDE_CODE_VERSION`, rebuild with a new tag, point
 `CELIADOR_RUNNER_IMAGE` at it.

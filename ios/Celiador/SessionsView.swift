@@ -182,6 +182,8 @@ struct SessionRow: View {
 
     private var subtitle: String {
         if session.state.isActive, let liveLine, !liveLine.isEmpty { return liveLine }
+        // A cloud session: where it works (its worktree branch).
+        if let repo = session.repo { return "\(session.state.label) · \(repo.branch)" }
         return session.state.label
     }
 
@@ -189,7 +191,8 @@ struct SessionRow: View {
         session.state == .awaiting ? Theme.attention : Theme.dim
     }
 
-    private var editorOffline: Bool { !session.runnerConnected && session.state.isActive }
+    /// Only editor runs have an editor to lose; a cloud run's runner is the daemon.
+    private var editorOffline: Bool { !session.isCloud && !session.runnerConnected && session.state.isActive }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -241,6 +244,13 @@ private struct NewRunView: View {
     @State private var error: String?
     @State private var recents = RepoRecents.list()
     @State private var editorWorkspaces: [EditorWorkspace] = []
+    /// Your repos (linked in the queue) — with the GitHub App, private ones work and runs can push.
+    @State private var cloudRepos: [CloudRepo] = []
+    /// The picked repo's branches (App repos only); empty → free-text branch field.
+    @State private var branches: [String] = []
+    @State private var loadingBranches = false
+    /// Work directly on `branch` instead of a new `celiador/…` branch off it.
+    @State private var workOnBranch = false
     // Compose mode: tapping an editor repo opens a chat composer for it. The first
     // message you send creates the run on your Mac and drops you into the live chat.
     @State private var composing: EditorWorkspace?
@@ -252,7 +262,30 @@ private struct NewRunView: View {
     private var canStart: Bool {
         let validRepo = repoURL.hasPrefix("http://") || repoURL.hasPrefix("https://")
         let hasPrompt = !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return validRepo && hasPrompt
+        let hasBranch = !workOnBranch || !trimmedBranch.isEmpty
+        return validRepo && hasPrompt && hasBranch
+    }
+
+    private var trimmedBranch: String { branch.trimmingCharacters(in: .whitespaces) }
+
+    /// The linked repo the URL field points at, if any (case-insensitive, `.git` optional).
+    private var pickedCloudRepo: CloudRepo? {
+        let norm = { (u: String) -> String in
+            let t = u.trimmingCharacters(in: .whitespaces).lowercased()
+            return t.hasSuffix(".git") ? String(t.dropLast(4)) : t
+        }
+        return cloudRepos.first { norm($0.url) == norm(repoURL) }
+    }
+
+    /// Load the picked repo's branches (App repos), defaulting to its default branch.
+    private func loadBranches() async {
+        guard let repo = pickedCloudRepo, repo.app else { branches = []; return }
+        loadingBranches = true
+        let list = (try? await Api.shared.cloudBranches(remoteUrl: repo.url)) ?? []
+        loadingBranches = false
+        guard pickedCloudRepo?.url == repo.url else { return } // the pick changed meanwhile
+        branches = list
+        if !list.contains(trimmedBranch) { branch = repo.defaultBranch ?? list.first ?? "" }
     }
 
     var body: some View {
@@ -265,8 +298,12 @@ private struct NewRunView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: repoURL) { await loadBranches() }
             .task {
+                async let repos = Api.shared.cloudRepos()
                 editorWorkspaces = (try? await Api.shared.editorWorkspaces()) ?? []
+                cloudRepos = (try? await repos) ?? []
+                await loadBranches()
                 Telemetry.signal(.newRunOpened, ["editorRepos": Telemetry.bucket(editorWorkspaces.count)])
                 if !editorWorkspaces.isEmpty { Telemetry.onboarding(.editorPaired) }
             }
@@ -333,14 +370,40 @@ private struct NewRunView: View {
                 }
             }
 
+            if !cloudRepos.isEmpty {
+                Section {
+                    ForEach(cloudRepos) { repo in
+                        Button {
+                            Haptics.tap()
+                            repoURL = repo.url
+                        } label: {
+                            HStack {
+                                Image(systemName: repo.private == true ? "lock" : "shippingbox")
+                                    .foregroundStyle(Theme.dim)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(repo.label).foregroundStyle(Theme.ink).lineLimit(1)
+                                    if !repo.app {
+                                        Text("No GitHub App — public only, no push")
+                                            .font(.caption).foregroundStyle(Theme.dim)
+                                    }
+                                }
+                                Spacer()
+                                if pickedCloudRepo?.url == repo.url {
+                                    Image(systemName: "checkmark").foregroundStyle(Theme.accentBright)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text(editorWorkspaces.isEmpty ? "Your repos" : "Or run in the cloud")
+                }
+            }
+
             Section {
                 TextField("https://github.com/owner/repo.git", text: $repoURL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
-                TextField("Branch (optional)", text: $branch)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
                 Button {
                     if let pasted = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
                        !pasted.isEmpty {
@@ -352,7 +415,29 @@ private struct NewRunView: View {
                 }
                 .disabled(!UIPasteboard.general.hasStrings)
             } header: {
-                Text(editorWorkspaces.isEmpty ? "Repository" : "Or run in the cloud")
+                Text(!cloudRepos.isEmpty ? "Any repo" : editorWorkspaces.isEmpty ? "Repository" : "Or run in the cloud")
+            }
+
+            Section {
+                if branches.isEmpty {
+                    HStack {
+                        TextField(workOnBranch ? "Branch" : "Start from (default branch)", text: $branch)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        if loadingBranches { ProgressView() }
+                    }
+                } else {
+                    Picker(workOnBranch ? "Branch" : "Start from", selection: $branch) {
+                        ForEach(branches, id: \.self) { Text($0).tag($0) }
+                    }
+                }
+                Toggle("Work directly on this branch", isOn: $workOnBranch)
+            } header: {
+                Text("Branch")
+            } footer: {
+                Text(workOnBranch
+                     ? "The agent continues \(trimmedBranch.isEmpty ? "the branch" : "“\(trimmedBranch)”") in its own worktree; pushing adds its commits to that branch."
+                     : "The agent works in its own git worktree on a new celiador/… branch off \(trimmedBranch.isEmpty ? "the default branch" : "“\(trimmedBranch)”"), ready for a pull request.")
             }
             if !recents.isEmpty {
                 Section("Recent") {
@@ -390,7 +475,7 @@ private struct NewRunView: View {
                 Text(error).font(.footnote).foregroundStyle(Theme.red)
             }
             Section {
-                Text("Runs on Celiador's servers — clones the repo (public repos only for now). You'll watch it here and get a diff back.")
+                Text("Runs on Celiador's servers, no computer needed. You watch it here, send follow-ups, review the diff, then push and open the pull request from the phone. Private repos, push and pull requests need the repo in your repos with the Celiador GitHub App installed.")
                     .font(.footnote).foregroundStyle(Theme.dim)
             }
         }
@@ -477,9 +562,9 @@ private struct NewRunView: View {
         error = nil
         do {
             let repo = repoURL.trimmingCharacters(in: .whitespaces)
-            let br = branch.trimmingCharacters(in: .whitespaces).isEmpty ? nil : branch.trimmingCharacters(in: .whitespaces)
-            let session = try await Api.shared.startServerRun(repoURL: repo, branch: br, prompt: prompt)
-            Telemetry.signal(.cloudRunStarted)
+            let br = trimmedBranch.isEmpty ? nil : trimmedBranch
+            let session = try await Api.shared.startServerRun(repoURL: repo, branch: br, existingBranch: workOnBranch, prompt: prompt)
+            Telemetry.signal(.cloudRunStarted, ["branch": workOnBranch ? "existing" : "new", "app": pickedCloudRepo?.app == true ? "true" : "false"])
             RepoRecents.remember(repo)
             await model.refresh()
             dismiss()

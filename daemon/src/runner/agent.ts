@@ -12,6 +12,12 @@ export interface IRunnerAgentContext {
   readonly signal: AbortSignal;
   readonly workspaceDir: string;
   readonly prompt: string;
+  /**
+   * Continue the run's previous agent conversation (a follow-up turn) instead of
+   * starting a fresh one. Best-effort: the agent falls back to a fresh
+   * conversation when there is none to continue.
+   */
+  readonly continueConversation?: boolean;
   /** Publish a relay event (activity/tool/toolResult/delta/message/…) to watchers. */
   readonly publish: (event: SessionEventInput) => void;
 }

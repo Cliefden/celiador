@@ -1,6 +1,6 @@
 # Cloud runs: switching the sandboxed runner on
 
-The sandboxed runner (`src/runner/sandbox.ts`) runs the real Claude agent in a per-run Docker container: no network except a Unix-socket bridge to the daemon's gateway, read-only root, tmpfs, all capabilities dropped, non-root, 30-minute cap, killed on cancel. It is built and verified (`scripts/sandbox-check.ts`) but **off** until the daemon's user can run Docker.
+The sandboxed runner (`src/runner/sandbox.ts`) runs the real Claude agent in a per-run Docker container: no network except a Unix-socket bridge to the daemon's gateway, read-only root, tmpfs `/tmp`, all capabilities dropped, non-root, 30-minute cap, killed on cancel. It is built and verified (`scripts/sandbox-check.ts`) but **off** until the daemon's user can run Docker.
 
 Decision (2026-10-22): **rootless Docker for the daemon user**, not the `docker` group (which is root-equivalent).
 
@@ -39,18 +39,31 @@ If `dockerd-rootless-setuptool.sh` is missing, install Docker's `docker-ce-rootl
 
 ## What it means for the queue
 
-With `CELIADOR_RUNNER_AGENT=sandbox` the daemon routes a queued task to the editor when one is online with the repository open, and to the sandbox otherwise (the laptop-off case). The **GitHub App must be installed on the repository** (`docs/GITHUB_APP.md`): the container has no network, so the daemon does the git work around it with the App's installation token — and that is what pushes the branch and opens the pull request. A repository without the App keeps its task `queued` with `error: "waiting for an editor: cloud runs need the Celiador GitHub App on this repo"` (the repo isn't asked about again for 10 minutes), until an editor with it open comes online. (`POST /api/sessions` with `runner: "server"` — a cloud run not tied to a task — still works as before, public repos included; it clones, runs and publishes diffs but pushes nothing.)
+With `CELIADOR_RUNNER_AGENT=sandbox` the daemon routes a queued task to the editor when one is online with the repository open, and to the sandbox otherwise (the laptop-off case). The **GitHub App must be installed on the repository** (`docs/GITHUB_APP.md`): the container has no network, so the daemon does the git work around it with the App's installation token — and that is what pushes the branch and opens the pull request. A repository without the App keeps its task `queued` with `error: "waiting for an editor: cloud runs need the Celiador GitHub App on this repo"` (the repo isn't asked about again for 10 minutes), until an editor with it open comes online. (`POST /api/sessions` with `runner: "server"` — a **cloud session** started from the phone, not tied to a task — is described below.)
 
 A cloud task's run, step by step (`src/tasks/cloud.ts`):
 
 1. Dispatch marks the task `dispatched` / `runner: "cloud"`, creates a relay session (`origin: "phone"`, `runner: "server"`, title = the task) linked to it, and moves it to `running` — the "Picked up" comment says "in the Celiador cloud".
-2. Workspace: shallow clone of the default branch, `git switch -c <task.branch>` (or the branch's remote tip when an earlier attempt already pushed it). The agent runs in the container with the task prompt; its gateway requests are attributed to the session (`usage`).
+2. Workspace: a git worktree of the user's mirror of the repo (see "Worktrees" below) on `<task.branch>`, new from the default branch (or from the branch's remote tip when an earlier attempt already pushed it). The agent runs in the container with the task prompt; its gateway requests are attributed to the session (`usage`).
 3. After the container exits: whatever the agent left uncommitted is committed as `"<title> (#n)"` by `Celiador <noreply@celiador.ai>`; the branch is pushed to `https://x-access-token:<token>@github.com/owner/name.git` with `--force-with-lease` against the sha the branch had when the turn started (the token is only ever in that one command's argv, never in `.git/config` — the workspace is browsable from the phone); the pull request is opened as the App (base = default branch, body per `docs/CLIENT_INTEGRATION.md`); the task is `pr-open` with the PR's size, the "Pull request opened" comment is posted and the PR card refreshed.
 4. An agent that changed nothing → `failed` ("The agent finished without changing anything.") with a **Failed.** comment; any other error → `failed` with a readable message.
 
 Follow-ups (`POST /api/tasks/:id/followup`, and the checks-failed auto-fix) run another turn in the same retained workspace — fast-forwarding onto the branch first if someone pushed to it — and finish the same way (PR body refreshed via PATCH). Cancel (`POST /api/tasks/:id/cancel` or the session's cancel) kills the container; the task and session end `cancelled`. Cloud runs count against the user's `CELIADOR_TASK_CONCURRENCY` slots like editor runs. Workspaces are swept at boot (`reapOrphanRuns`); a follow-up after a restart re-clones and picks the branch up from GitHub, and cloud tasks a dead daemon left `dispatched` / `running` go back to `queued` on the next dispatch.
 
 Without the runner image the daemon re-queues the task with the sandbox's own message and doesn't probe Docker again for a minute.
+
+## Worktrees
+
+Every cloud checkout — task or session — is a `git worktree`, not a clone (`src/runner/worktrees.ts`):
+
+- Each user has one bare **mirror** per repository, `data/repos/<userId>/<hash of the URL>.git`. It is fetched (`+refs/heads/*:refs/remotes/origin/*`, `origin/HEAD` set to the default branch) before each new worktree, so a repo is downloaded once and then only incrementally. The mirror never stores a remote URL or token: the App token rides in the URL of the one command, as before.
+- A run's workspace, `data/runs/<userId>/<runId>/repo`, is `git worktree add -B <branch>` of that mirror. Git refuses to check one branch out twice, so two runs can't share a branch.
+- In the sandbox the mirror is mounted read-write **at its own path** (a worktree's `.git` file points there); it holds only that user's copy of that repo. The run's `$HOME` is now `data/runs/<userId>/<runId>/home` instead of a tmpfs, so a follow-up turn can `claude --continue` the conversation.
+- Mirror mutations (fetch, worktree add / remove / prune) are serialised per mirror. Deleting a session removes its worktree and local branch. The boot sweep still removes `data/runs/` (and `git worktree prune` releases those branches on the next fetch); a session whose workspace went that way checks its branch out again on its next follow-up — from GitHub if it was pushed. Mirrors are kept across restarts and removed with the account.
+
+## Cloud sessions from the phone
+
+`POST /api/sessions` with `runner: "server"` (`src/sessions/cloudSession.ts`; API in `docs/CLIENT_INTEGRATION.md`): a worktree on a new `celiador/…` branch off the chosen base (or directly on an existing branch), the agent runs, and the phone can send follow-ups (another turn, same worktree, `--continue`) and review the result with the same `git/*` endpoints editor runs use — the daemon commits, pushes and opens / merges the pull request with the App. The App's token is used only for repos linked to that user (`POST /api/tasks/repos`); a repo linked to another account is refused, and any other public repo runs anonymously without push.
 
 ## Rollback
 
