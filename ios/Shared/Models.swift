@@ -94,8 +94,8 @@ extension Session {
 typealias SessionSummary = Session
 
 /// What one run cost: the gateway requests the daemon attributed to its session,
-/// priced at the daemon's published rate card (`GET /api/limits` → `prices`, USD
-/// per million tokens; cache reads count as input). Shared by `Session.usage` and
+/// each priced at its model's rates (`GET /api/limits` → `prices` / `modelPrices`,
+/// USD per million tokens; cache reads and writes at their own rates). Shared by `Session.usage` and
 /// `Task.usage`.
 struct RunUsage: Codable, Hashable {
     let requests: Int
@@ -255,6 +255,19 @@ struct Me: Codable {
     let resetsAt: String
     /// Agent task counts (absent on an older daemon).
     let tasks: AgentTaskSummary?
+    /// This UTC calendar month so far, today included (absent on an older daemon).
+    var period: UsagePeriod? = nil
+}
+
+/// `Me.period`: the same sums as `Me.usage`, over the current UTC month.
+/// Informational — the enforced budgets are daily.
+struct UsagePeriod: Codable {
+    /// ISO timestamps: the first instant of this month and of the next.
+    let start: String
+    let end: String
+    /// Days this month with any agent usage.
+    let activeDays: Int
+    let usage: AgentUsage
 }
 
 /// The account's agent tasks: what runs now, what waits for review, and the
@@ -273,8 +286,13 @@ struct AgentTaskSummary: Codable {
 /// Today's agent usage (UTC day), as metered by the daemon's quota tracker.
 struct AgentUsage: Codable {
     let requests: Int
+    /// All input, prompt-cache reads and writes included.
     let inputTokens: Int
     let outputTokens: Int
+    /// Of `inputTokens`, the prompt-cache reads (absent on an older daemon).
+    var cacheReadTokens: Int? = nil
+    /// What it cost in USD, each request at its model's rates (absent on an older daemon).
+    var costUsd: Double? = nil
 }
 
 /// Active per-user daily limits. A `0` means that limit is disabled (unlimited).
@@ -282,8 +300,11 @@ struct AgentLimits: Codable {
     let rpm: Int
     let concurrency: Int
     let dailyRequests: Int
+    /// Optional token caps — off (0) by default since the dollar budget.
     let dailyInput: Int
     let dailyOutput: Int
+    /// The daily agent budget in USD (absent on an older daemon, which budgets tokens only).
+    var dailyUsd: Double? = nil
 }
 
 /// A durable past conversation (public.chats). A chat is a persisted session.

@@ -794,6 +794,24 @@ async function main(): Promise<void> {
 	ok("CELIADOR_AGENT_DAILY_USD=0 disables the budget", unlimited.status === 200, `got ${unlimited.status}`);
 	delete process.env.CELIADOR_AGENT_DAILY_USD;
 	gwStartUsage = '{"input_tokens":5,"output_tokens":0}';
+	// This month so far = finished days of the month (history) + today.
+	type MePeriod = MeUsage & { period?: { start: string; end: string; activeDays: number; usage: { requests: number; costUsd: number } } };
+	const todayUtc = new Date().toISOString().slice(0, 10);
+	const firstOfMonth = `${todayUtc.slice(0, 7)}-01`;
+	const histFile = path.join(HOME, "data", "quota", "history.json");
+	const inMonth = todayUtc !== firstOfMonth; // on the 1st there is no finished day this month
+	fs.mkdirSync(path.dirname(histFile), { recursive: true });
+	fs.writeFileSync(histFile, JSON.stringify([
+		{ day: "2000-01-01", users: { "budget-user": { requests: 99, inputTokens: 0, outputTokens: 0, costUsd: 99 } } }, // another month: not counted
+		...(inMonth ? [{ day: firstOfMonth, users: { "budget-user": { requests: 7, inputTokens: 70, outputTokens: 7, costUsd: 0.5 }, "someone-else": { requests: 3, inputTokens: 1, outputTokens: 1, costUsd: 1 } } }] : []),
+	]));
+	const pMe = (await (await app.request("http://localhost/api/me", { headers: budgetH })).json()) as MePeriod;
+	const todayReq = pMe.usage?.requests ?? -1;
+	const todayCost = pMe.usage?.costUsd ?? -1;
+	const histReq = inMonth ? 7 : 0;
+	const histCost = inMonth ? 0.5 : 0;
+	ok("GET /api/me → period = this UTC month so far, today + this month's finished days, only the caller's", pMe.period?.start === `${firstOfMonth}T00:00:00.000Z` && Date.parse(pMe.period.end) > Date.now() && pMe.period.usage.requests === todayReq + histReq && Math.abs(pMe.period.usage.costUsd - (todayCost + histCost)) < 1e-9 && pMe.period.activeDays >= 1, JSON.stringify(pMe.period));
+	fs.rmSync(histFile, { force: true });
 
 	// ── PR body helper (pure) ────────────────────────────────────────────────
 	console.log("\n== pr body ==");

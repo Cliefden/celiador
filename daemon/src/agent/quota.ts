@@ -265,6 +265,24 @@ class AgentQuota {
     return { usage: used, limits: userLimits(), resetsAt };
   }
 
+  /**
+   * One user's usage summed over the current UTC calendar month, today
+   * included — the "this period" figure the account panels show. Read-only,
+   * like {@link snapshot}; reads the history file (small: HISTORY_DAYS entries).
+   */
+  period(userId: string): { start: string; end: string; activeDays: number; usage: DayUsage } {
+    this.rollover();
+    const d = this.usage.day;
+    const month = d.slice(0, 7);
+    const [y, m] = month.split("-").map(Number) as [number, number];
+    const start = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+    const end = new Date(Date.UTC(y, m, 1)).toISOString(); // first instant of next month
+    const days = [...this.readHistory().filter((h) => h.day.startsWith(month) && h.day !== d), this.usage];
+    const total = sum(Object.fromEntries(days.map((h) => [h.day, h.users[userId] ?? {}])));
+    const activeDays = days.filter((h) => h.users[userId]).length;
+    return { start, end, activeDays, usage: total };
+  }
+
   /** Charge one request's tokens (as reported by the upstream stream) to the user's day. Returns the request's cost. */
   record(userId: string, tokens: TokenCounts): number {
     const used = this.day(userId);

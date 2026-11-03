@@ -70,16 +70,7 @@ struct AccountView: View {
             }
 
             if let me {
-                Section {
-                    UsageMeter(label: "Requests", used: me.usage.requests, limit: me.limits.dailyRequests)
-                    UsageMeter(label: "Input tokens", used: me.usage.inputTokens, limit: me.limits.dailyInput)
-                    UsageMeter(label: "Output tokens", used: me.usage.outputTokens, limit: me.limits.dailyOutput)
-                } header: {
-                    Text("Today's usage")
-                } footer: {
-                    Text(resetsFooter)
-                }
-            .listRowBackground(Theme.panel)
+                UsageSections(me: me) // today vs. the daily limits + this month (UsageSections.swift)
 
                 if let tasks = me.tasks {
                     Section {
@@ -146,17 +137,6 @@ struct AccountView: View {
         }
     }
 
-    /// "Resets in 7h" / "Resets in 45m" from the daemon's next-UTC-midnight reset.
-    private var resetsFooter: String {
-        guard let me, let reset = ISO8601DateFormatter().date(from: me.resetsAt) else {
-            return "Daily usage resets at midnight UTC."
-        }
-        let seconds = max(0, reset.timeIntervalSinceNow)
-        let hours = Int(seconds / 3600)
-        let text = hours >= 1 ? "\(hours)h" : "\(max(1, Int(seconds / 60)))m"
-        return "Daily usage resets in \(text). A limit of 0 means unlimited."
-    }
-
     private func load() async {
         #if DEBUG
         if DemoData.isActive {
@@ -164,10 +144,16 @@ struct AccountView: View {
             name = DemoData.profile.displayName ?? ""
             me = Me(
                 userId: "u1", email: DemoData.profile.email, plan: DemoData.profile.plan,
-                usage: AgentUsage(requests: 128, inputTokens: 2_100_000, outputTokens: 142_000),
-                limits: AgentLimits(rpm: 30, concurrency: 2, dailyRequests: 500, dailyInput: 5_000_000, dailyOutput: 300_000),
+                usage: AgentUsage(requests: 128, inputTokens: 2_100_000, outputTokens: 142_000, cacheReadTokens: 1_900_000, costUsd: 3.41),
+                limits: AgentLimits(rpm: 30, concurrency: 2, dailyRequests: 500, dailyInput: 0, dailyOutput: 0, dailyUsd: 10),
                 resetsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7 * 3600)),
-                tasks: AgentTaskSummary(running: 1, prOpen: 2, mergedLast7Days: 5, concurrency: 3, costUsdLast7Days: 4.12)
+                tasks: AgentTaskSummary(running: 1, prOpen: 2, mergedLast7Days: 5, concurrency: 3, costUsdLast7Days: 4.12),
+                period: UsagePeriod(
+                    start: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-2 * 86_400)),
+                    end: ISO8601DateFormatter().string(from: Date().addingTimeInterval(28 * 86_400)),
+                    activeDays: 3,
+                    usage: AgentUsage(requests: 342, inputTokens: 6_400_000, outputTokens: 390_000, cacheReadTokens: 5_800_000, costUsd: 9.87)
+                )
             )
             return
         }
@@ -214,44 +200,6 @@ struct AccountView: View {
                 Telemetry.error(.profile, "save", error)
                 self.error = error.localizedDescription
             }
-        }
-    }
-}
-
-/// One labeled usage meter: used-of-limit with a track + fill. A `limit` of 0 means
-/// that limit is disabled, so we show "unlimited" and a quiet full-width track. The
-/// fill turns amber past 80% so a user sees a cap approaching before it bites.
-private struct UsageMeter: View {
-    let label: String
-    let used: Int
-    let limit: Int
-
-    private var fraction: Double { limit > 0 ? min(1, Double(used) / Double(limit)) : 0 }
-    private var fillColor: Color { fraction >= 0.8 ? Theme.attention : Theme.accent }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(label)
-                Spacer()
-                Text(limit > 0 ? "\(Self.compact(used)) / \(Self.compact(limit))" : "\(Self.compact(used)) · unlimited")
-                    .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            ProgressView(value: fraction)
-                .tint(fillColor)
-        }
-        .padding(.vertical, 4)
-    }
-
-    /// 1_234 → "1,234", 45_000 → "45k", 2_100_000 → "2.1M".
-    static func compact(_ n: Int) -> String {
-        switch n {
-        case 1_000_000...:
-            return String(format: "%.1fM", Double(n) / 1_000_000).replacingOccurrences(of: ".0M", with: "M")
-        case 10_000...:
-            return "\(n / 1000)k"
-        default:
-            return n.formatted(.number.grouping(.automatic))
         }
     }
 }

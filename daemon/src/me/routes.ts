@@ -27,8 +27,8 @@ function taskSummary(userId: string): { running: number; prOpen: number; mergedL
 
 /**
  * `GET /api/me` — the signed-in account summary the editor/iOS account panel reads:
- * identity, plan, and the caller's current daily agent usage against the active
- * quota. Usage is tracked server-side by {@link agentQuota} (the only place the
+ * identity, plan, the caller's agent usage today against the active daily quota
+ * (dollars, requests, optional token caps) and so far this month. Usage is tracked server-side by {@link agentQuota} (the only place the
  * paid key is metered); this is the one read-back of it. Profile is best-effort —
  * absent in token/none auth mode (no DB) and for a Supabase user with no row yet —
  * so the panel always renders, usage included.
@@ -50,9 +50,13 @@ export function meRoutes(): Hono<AppEnv> {
       // null in token/none (self-host/dev) mode and before a profile row exists;
       // the panel renders that as a local/unknown plan rather than a billing tier.
       plan: profile?.plan ?? null,
+      // Today (UTC) against the daily limits — `usage.costUsd` vs `limits.dailyUsd`.
       usage,
       limits,
       resetsAt,
+      // This UTC calendar month so far, today included: `{start, end, activeDays, usage}`.
+      // Informational — the enforced budgets are daily.
+      period: agentQuota.period(user.userId),
       tasks: taskSummary(user.userId),
     });
   });
