@@ -57,6 +57,7 @@ export async function agentProxy(c: Context) {
     let inputTokens = 0;
     let cacheRead = 0;
     let cacheWrite = 0;
+    let cacheWrite1h = 0;
     let outputTokens = 0;
     try {
       const upstream = (await getClient().messages.create(request as never, {
@@ -67,6 +68,7 @@ export async function agentProxy(c: Context) {
           const u = event.message?.usage;
           cacheWrite = u?.cache_creation_input_tokens ?? 0;
           cacheRead = u?.cache_read_input_tokens ?? 0;
+          cacheWrite1h = u?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
           inputTokens = (u?.input_tokens ?? 0) + cacheWrite + cacheRead;
         } else if (event.type === "message_delta" && typeof event.usage?.output_tokens === "number") {
           outputTokens = event.usage.output_tokens; // cumulative
@@ -79,8 +81,9 @@ export async function agentProxy(c: Context) {
         await stream.writeSSE({ data: JSON.stringify({ type: "error", error: { message: "The agent request failed upstream." } }) });
       }
     } finally {
-      agentQuota.record(quotaKey, inputTokens, outputTokens);
-      attributeUsage(user, mirrorKey, { input: inputTokens, cacheRead, cacheWrite, output: outputTokens }); // per-run cost (sessions/usage.ts)
+      const tokens = { input: inputTokens, cacheRead, cacheWrite, cacheWrite1h, output: outputTokens, model: AGENT_MODEL };
+      agentQuota.record(quotaKey, tokens); // the dollar budget (agent/quota.ts)
+      attributeUsage(user, mirrorKey, tokens); // per-run cost (sessions/usage.ts)
       release();
     }
   });
@@ -90,7 +93,13 @@ export async function agentProxy(c: Context) {
 interface UsageEvent {
   type: string;
   message?: {
-    usage?: { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
+    usage?: {
+      input_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+      /** Cache creation split by TTL; the 1-hour writes cost 2× input instead of 1.25×. */
+      cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number };
+    };
   };
   usage?: { output_tokens?: number };
 }

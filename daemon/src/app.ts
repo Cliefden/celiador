@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { AGENT_MODEL, COMMIT, ENV, VERSION } from "./config";
 import { failureReport } from "./health";
 import { activeLimits } from "./agent/quota";
-import { prices } from "./agent/pricing";
+import { prices, servedModelPrices } from "./agent/pricing";
 import { taskConcurrency } from "./tasks/dispatch";
 import { authMode, requireUser, type AppEnv } from "./auth";
 import { signInMethods } from "./signin";
@@ -77,9 +77,12 @@ export function createApp(): Hono<AppEnv> {
         limits: activeLimits(),
         // Agent tasks (queued GitHub issues) running at once per user — published like the rest.
         tasks: { concurrency: taskConcurrency() },
-        // The rate card a run's cost (Session.usage / Task.usage) is priced at.
+        // The rate card a run's cost (Session.usage / Task.usage) and the daily
+        // dollar budget (limits.dailyUsd) are priced at: `prices` for the agent
+        // model, `modelPrices` for every model the gateway will run.
         prices: prices(),
-        window: "Daily budgets reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
+        modelPrices: servedModelPrices(),
+        window: "Daily budgets (requests, dollars) reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
       },
       200,
       { "cache-control": "public, max-age=300" }

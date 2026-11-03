@@ -11,9 +11,11 @@ export type AgentLimits = {
   concurrency: number;
   /** Requests per UTC day. */
   dailyRequests: number;
-  /** Input tokens per UTC day. */
+  /** Agent usage per UTC day, in US dollars at each model's list price (cache reads and writes at their own rates). */
+  dailyUsd: number;
+  /** Optional hard cap: input tokens per UTC day (0 = off, the default). */
   dailyInput: number;
-  /** Output tokens per UTC day. */
+  /** Optional hard cap: output tokens per UTC day (0 = off, the default). */
   dailyOutput: number;
 };
 
@@ -37,9 +39,9 @@ const API = (process.env.CELIADOR_LIMITS_API ?? "https://celiador.ai/api/limits"
 const DOCUMENTED_DEFAULTS: PublishedLimits = {
   plan: "early-access",
   model: "claude-opus-4-8",
-  limits: { rpm: 30, concurrency: 2, dailyRequests: 500, dailyInput: 5_000_000, dailyOutput: 300_000 },
+  limits: { rpm: 30, concurrency: 2, dailyRequests: 500, dailyUsd: 10, dailyInput: 0, dailyOutput: 0 },
   tasks: { concurrency: 3 },
-  window: "Daily budgets reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
+  window: "Daily budgets (requests, dollars) reset at 00:00 UTC; the per-minute window and concurrency are instantaneous.",
   live: false,
 };
 
@@ -52,7 +54,8 @@ export async function publishedLimits(): Promise<PublishedLimits> {
     return {
       plan: data.plan ?? DOCUMENTED_DEFAULTS.plan,
       model: data.model ?? DOCUMENTED_DEFAULTS.model,
-      limits: { ...DOCUMENTED_DEFAULTS.limits, ...data.limits },
+      // A daemon from before the dollar budget sends no dailyUsd: it enforces none (0 = unlimited).
+      limits: { ...DOCUMENTED_DEFAULTS.limits, dailyUsd: 0, ...(data.limits as Partial<AgentLimits>) },
       tasks: { ...DOCUMENTED_DEFAULTS.tasks, ...(data.tasks ?? {}) },
       window: data.window ?? DOCUMENTED_DEFAULTS.window,
       live: true,
@@ -60,6 +63,12 @@ export async function publishedLimits(): Promise<PublishedLimits> {
   } catch {
     return DOCUMENTED_DEFAULTS;
   }
+}
+
+/** "unlimited" for 0, otherwise whole dollars (cents when not whole). */
+export function formatUsdLimit(n: number): string {
+  if (n === 0) return "unlimited";
+  return Number.isInteger(n) ? `$${n.toLocaleString("en-US")}` : `$${n.toFixed(2)}`;
 }
 
 /** "unlimited" for 0, otherwise a grouped number. */

@@ -4,7 +4,7 @@ import { Button, Container, Eyebrow, SectionHeading } from "@/components/ui";
 import { FAQ } from "@/components/FAQ";
 import { CheckIcon } from "@/components/icons";
 import { tiers } from "@/lib/site";
-import { formatLimit, publishedLimits } from "@/lib/limits";
+import { formatLimit, formatUsdLimit, publishedLimits } from "@/lib/limits";
 
 export const metadata: Metadata = {
   title: "Pricing",
@@ -18,8 +18,10 @@ export default async function PricingPage() {
     { label: "Concurrent agent requests", value: formatLimit(published.limits.concurrency), note: "at any moment" },
     { label: "Agent tasks running at once", value: formatLimit(published.tasks.concurrency), note: "queued issues, each in its own worktree" },
     { label: "Agent requests per day", value: formatLimit(published.limits.dailyRequests), note: "UTC day" },
-    { label: "Input tokens per day", value: formatLimit(published.limits.dailyInput), note: "UTC day" },
-    { label: "Output tokens per day", value: formatLimit(published.limits.dailyOutput), note: "UTC day" },
+    { label: "Agent usage per day", value: formatUsdLimit(published.limits.dailyUsd), note: "UTC day, at the model's list price" },
+    // Token caps are optional (0 = off); listed only when one is set.
+    ...(published.limits.dailyInput ? [{ label: "Input tokens per day", value: formatLimit(published.limits.dailyInput), note: "UTC day" }] : []),
+    ...(published.limits.dailyOutput ? [{ label: "Output tokens per day", value: formatLimit(published.limits.dailyOutput), note: "UTC day" }] : []),
   ];
 
   return (

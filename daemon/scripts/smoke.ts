@@ -32,6 +32,8 @@ async function main(): Promise<void> {
 
 	// Stub the Anthropic upstream the gateway forwards to.
 	let gwBody: Record<string, unknown> | null = null;
+	// The `message_start` usage the stub reports (a test swaps it to exercise cache pricing).
+	let gwStartUsage = '{"input_tokens":5,"output_tokens":0}';
 	const realFetch = globalThis.fetch;
 	// GitHub's REST API, stubbed per section (never the real network): 404 unless a test installs a handler.
 	type GhCall = { method: string; path: string; body?: Record<string, unknown> };
@@ -44,7 +46,7 @@ async function main(): Promise<void> {
 		}
 		if (String(url).includes("/v1/messages")) {
 			gwBody = JSON.parse(init.body ?? "{}");
-			const sse = `event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}\n\n`
+			const sse = `event: message_start\ndata: {"type":"message_start","message":{"usage":${gwStartUsage}}}\n\n`
 				+ `event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":3}}\n\n`;
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		}
@@ -726,18 +728,29 @@ async function main(): Promise<void> {
 	};
 	type Usage = { requests: number; inputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; outputTokens: number; costUsd: number };
 	// The rate card: cache reads are most of an agent turn's input and must not be priced as fresh input.
-	ok("costUsd: uncached input + output at the card", costUsd({ input: 5, cacheRead: 0, cacheWrite: 0, output: 3 }) === 0.0003);
-	ok("costUsd: cache reads at the cache-read rate (456k in, 440k cached, 1.6k out → cents, not dollars)", costUsd({ input: 456_000, cacheRead: 440_000, cacheWrite: 10_000, output: 1_600 }) === Math.round((6_000 * 15 + 10_000 * 18.75 + 440_000 * 1.5 + 1_600 * 75) / 1_000_000 * 1_000_000) / 1_000_000 && costUsd({ input: 456_000, cacheRead: 440_000, cacheWrite: 10_000, output: 1_600 }) < 1.1);
+	// AGENT_MODEL defaults to claude-opus-4-8: $5 in / $25 out, cache write 1.25× (5m) or 2× (1h) input, cache read $0.50.
+	ok("costUsd: uncached input + output at the model's rates", costUsd({ input: 5, cacheRead: 0, cacheWrite: 0, output: 3 }) === 0.0001);
+	ok("costUsd: cache reads at the cache-read rate (456k in, 440k cached, 1.6k out → cents, not dollars)", costUsd({ input: 456_000, cacheRead: 440_000, cacheWrite: 10_000, output: 1_600 }) === Math.round((6_000 * 5 + 10_000 * 6.25 + 440_000 * 0.5 + 1_600 * 25) / 1_000_000 * 1_000_000) / 1_000_000 && costUsd({ input: 456_000, cacheRead: 440_000, cacheWrite: 10_000, output: 1_600 }) < 0.4);
+	ok("costUsd: 1-hour cache writes at 2× input, the rest at 1.25×", costUsd({ input: 1_000_000, cacheRead: 0, cacheWrite: 1_000_000, cacheWrite1h: 400_000, output: 0 }) === 7.75); // 600k × 6.25 + 400k × 10
+	ok("costUsd: priced per model (haiku-4-5, dated id)", costUsd({ input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 1_000_000, model: "claude-haiku-4-5-20251001" }) === 6);
+	ok("costUsd: model-specific cache-read rate (opus-5-5 reads at $0.20)", costUsd({ input: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0, output: 0, model: "claude-opus-5-5" }) === 0.2);
+	ok("costUsd: an unknown model is priced at the dearest tier", costUsd({ input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0, model: "claude-unknown-9" }) === 10);
+	process.env.CELIADOR_PRICE_INPUT_PER_MTOK = "15";
+	ok("CELIADOR_PRICE_* overrides one rate for every model", costUsd({ input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 1_000_000 }) === 40);
+	delete process.env.CELIADOR_PRICE_INPUT_PER_MTOK;
 	ok("formatUsage shows the cached share", formatUsage({ requests: 9, inputTokens: 456_431, cacheReadTokens: 440_000, cacheWriteTokens: 0, outputTokens: 1_629, costUsd: 0.9 }) === "$0.90 (456.4k in, 440.0k cached / 1.6k out tokens)");
 	const getSession = async (id: string) => ((await (await app.request(`http://localhost/api/sessions/${id}`, { headers: authH })).json()) as { session?: { id: string; title: string; origin: string; runner: string; state: string; usage?: Usage } }).session;
-	const limits2 = (await (await app.request("http://localhost/api/limits")).json()) as { prices?: { currency: string; inputPerMtok: number; cacheWritePerMtok: number; cacheReadPerMtok: number; outputPerMtok: number } };
-	ok("GET /api/limits publishes the rate card (defaults 15 / 18.75 / 1.5 / 75 USD per Mtok)", limits2.prices?.currency === "USD" && limits2.prices.inputPerMtok === 15 && limits2.prices.cacheWritePerMtok === 18.75 && limits2.prices.cacheReadPerMtok === 1.5 && limits2.prices.outputPerMtok === 75, JSON.stringify(limits2.prices));
+	type Card = { currency: string; model: string; inputPerMtok: number; cacheWritePerMtok: number; cacheWrite1hPerMtok: number; cacheReadPerMtok: number; outputPerMtok: number };
+	const limits2 = (await (await app.request("http://localhost/api/limits")).json()) as { prices?: Card; modelPrices?: Record<string, Card>; limits?: { dailyUsd?: number; dailyInput?: number; dailyOutput?: number } };
+	ok("GET /api/limits publishes the agent model's rate card (5 / 6.25 / 10 / 0.5 / 25 USD per Mtok)", limits2.prices?.currency === "USD" && limits2.prices.model === AGENT_MODEL && limits2.prices.inputPerMtok === 5 && limits2.prices.cacheWritePerMtok === 6.25 && limits2.prices.cacheWrite1hPerMtok === 10 && limits2.prices.cacheReadPerMtok === 0.5 && limits2.prices.outputPerMtok === 25, JSON.stringify(limits2.prices));
+	ok("GET /api/limits publishes a rate card per served model", limits2.modelPrices?.[AGENT_MODEL]?.inputPerMtok === 5, JSON.stringify(limits2.modelPrices));
+	ok("GET /api/limits: the daily budget is in dollars (default $10); token caps are off by default", limits2.limits?.dailyUsd === 10 && limits2.limits.dailyInput === 0 && limits2.limits.dailyOutput === 0, JSON.stringify(limits2.limits));
 	const CREPO = "https://github.com/Cliefden/cost-repo.git";
 	const costTask = ((await (await app.request(T, { method: "POST", headers: userH, body: JSON.stringify({ remoteUrl: CREPO, title: "Price the run" }) })).json()) as { task: ATask & { usage?: Usage } }).task;
 	const mirrored = ((await (await app.request("http://localhost/api/sessions", { method: "POST", headers: userH, body: JSON.stringify({ title: "Price the run", origin: "editor", runner: "editor", mirrorKey: "agent-host:mirror-1", taskId: costTask.id }) })).json()) as { session: { id: string } }).session;
 	await (await app.request(GW, { method: "POST", headers: { ...userH, "x-celiador-mirror": "agent-host:mirror-1" }, body: gwBodyPlain })).text();
 	const usage1 = (await getSession(mirrored.id))?.usage;
-	ok("gateway request with X-Celiador-Mirror → the mirrored session's usage, priced at the rate card", usage1?.requests === 1 && usage1.inputTokens === 5 && usage1.outputTokens === 3 && usage1.costUsd === 0.0003, JSON.stringify(usage1));
+	ok("gateway request with X-Celiador-Mirror → the mirrored session's usage, priced at the rate card", usage1?.requests === 1 && usage1.inputTokens === 5 && usage1.outputTokens === 3 && usage1.costUsd === 0.0001, JSON.stringify(usage1));
 	ok("task.usage mirrors the linked session's", JSON.stringify((await getTask(costTask.id) as ATask & { usage?: Usage })?.usage) === JSON.stringify(usage1));
 	await (await app.request(GW, { method: "POST", headers: { ...userH, "x-celiador-mirror": "agent-host:nobody" }, body: gwBodyPlain })).text();
 	await (await app.request(GW, { method: "POST", headers: userH, body: gwBodyPlain })).text();
@@ -745,7 +758,7 @@ async function main(): Promise<void> {
 	const runTok = { "content-type": "application/json", authorization: `Bearer ${mintRunnerToken("smoke-user", mirrored.id, 300)!}` };
 	await (await app.request(GW, { method: "POST", headers: runTok, body: gwBodyPlain })).text();
 	const usage2 = (await getSession(mirrored.id))?.usage;
-	ok("runner token → attributed by its run id (no header needed)", usage2?.requests === 2 && usage2.costUsd === 0.0006, JSON.stringify(usage2));
+	ok("runner token → attributed by its run id (no header needed)", usage2?.requests === 2 && usage2.costUsd === 0.0002, JSON.stringify(usage2));
 	const sessOnDisk = JSON.parse(fs.readFileSync(path.join(HOME, "data", "sessions", "meta", "smoke-user.json"), "utf8")) as { sessions: Array<{ id: string; usage?: Usage }> };
 	await tick(300);
 	const sessOnDisk2 = JSON.parse(fs.readFileSync(path.join(HOME, "data", "sessions", "meta", "smoke-user.json"), "utf8")) as { sessions: Array<{ id: string; usage?: Usage }> };
@@ -753,7 +766,34 @@ async function main(): Promise<void> {
 	await postStatus(costTask.id, { state: "running", sessionId: mirrored.id });
 	await postStatus(costTask.id, { state: "pr-open", prUrl: "https://github.com/Cliefden/cost-repo/pull/3" });
 	const me = (await (await app.request("http://localhost/api/me", { headers: userH })).json()) as { tasks?: { costUsdLast7Days?: number; prOpen?: number } };
-	ok("GET /api/me → tasks.costUsdLast7Days sums pr-open + merged tasks finished in the window", me.tasks?.costUsdLast7Days === 0.0006, JSON.stringify(me.tasks));
+	ok("GET /api/me → tasks.costUsdLast7Days sums pr-open + merged tasks finished in the window", me.tasks?.costUsdLast7Days === 0.0002, JSON.stringify(me.tasks));
+
+	// ── Dollar budget: each request charged at its model's rates ─────────────
+	console.log("\n== budget ==");
+	const budgetJwt = (() => {
+		const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
+		const now = Math.floor(Date.now() / 1000);
+		const input = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: "budget-user", role: "authenticated", aud: "authenticated", iat: now, exp: now + 600 })}`;
+		return `${input}.${crypto.createHmac("sha256", process.env.SUPABASE_JWT_SECRET!).update(input).digest("base64url")}`;
+	})();
+	const budgetH = { "content-type": "application/json", authorization: `Bearer ${budgetJwt}` };
+	// A cache-heavy turn: 4 uncached + 1,000 cache-read + 100 cache-write (40 of them 1-hour) input tokens, 3 out.
+	gwStartUsage = '{"input_tokens":4,"cache_read_input_tokens":1000,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":60,"ephemeral_1h_input_tokens":40},"output_tokens":0}';
+	await (await app.request(GW, { method: "POST", headers: budgetH, body: gwBodyPlain })).text();
+	const turnUsd = Math.round((4 * 5 + 60 * 6.25 + 40 * 10 + 1000 * 0.5 + 3 * 25) / 1_000_000 * 1_000_000) / 1_000_000;
+	type MeUsage = { usage?: { requests: number; inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number; costUsd: number }; limits?: { dailyUsd?: number } };
+	const bMe = (await (await app.request("http://localhost/api/me", { headers: budgetH })).json()) as MeUsage;
+	ok("GET /api/me → today's usage carries the cache split and its dollar cost", bMe.usage?.inputTokens === 1104 && bMe.usage.cacheReadTokens === 1000 && bMe.usage.cacheWriteTokens === 100 && bMe.usage.costUsd === turnUsd && bMe.limits?.dailyUsd === 10, JSON.stringify(bMe));
+	process.env.CELIADOR_AGENT_DAILY_USD = String(turnUsd); // the budget is now exactly spent
+	const overBudget = await app.request(GW, { method: "POST", headers: budgetH, body: gwBodyPlain });
+	await overBudget.text();
+	ok("a spent dollar budget → 429 with a reset hint", overBudget.status === 429, `got ${overBudget.status}`);
+	process.env.CELIADOR_AGENT_DAILY_USD = "0"; // 0 = unlimited
+	const unlimited = await app.request(GW, { method: "POST", headers: budgetH, body: gwBodyPlain });
+	await unlimited.text();
+	ok("CELIADOR_AGENT_DAILY_USD=0 disables the budget", unlimited.status === 200, `got ${unlimited.status}`);
+	delete process.env.CELIADOR_AGENT_DAILY_USD;
+	gwStartUsage = '{"input_tokens":5,"output_tokens":0}';
 
 	// ── PR body helper (pure) ────────────────────────────────────────────────
 	console.log("\n== pr body ==");
@@ -955,7 +995,7 @@ async function main(): Promise<void> {
 	const cDone = (await getTask(cTask.id)) as ATask & { usage?: Usage; sessionId?: string };
 	const cSess = cDone.sessionId ? await getSession(cDone.sessionId) : undefined;
 	ok("linked relay session: origin phone, runner server, title = task, done", cSess?.origin === "phone" && cSess.runner === "server" && cSess.title === "Fix it in the cloud" && cSess.state === "done", JSON.stringify(cSess));
-	ok("the run's gateway usage is attributed to the task via the runner token", cDone.usage?.requests === 1 && cDone.usage.costUsd === 0.0003 && cSess?.usage?.requests === 1, JSON.stringify(cDone.usage));
+	ok("the run's gateway usage is attributed to the task via the runner token", cDone.usage?.requests === 1 && cDone.usage.costUsd === 0.0001 && cSess?.usage?.requests === 1, JSON.stringify(cDone.usage));
 	const logLine = (await run("git", ["-C", bare, "log", "-1", "--format=%an <%ae>|%cn|%s", cTask.branch])).stdout.trim();
 	ok("branch pushed with the agent's work committed as Celiador <noreply@celiador.ai>, message \"<title> (#n)\"", logLine === "Celiador <noreply@celiador.ai>|Celiador|Fix it in the cloud (#40)", logLine);
 	ok("the pushed commit carries the agent's file", (await run("git", ["-C", bare, "ls-tree", "--name-only", cTask.branch])).stdout.includes("fix.ts"));

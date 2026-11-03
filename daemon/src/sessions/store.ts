@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { costUsd, type TokenCounts } from "../agent/pricing";
+import { costUsd, round6, type TokenCounts } from "../agent/pricing";
 import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRepo, SessionRunner, SessionState, SessionUsage } from "./types";
 
 /** Max events retained per session (older ones fall out of the ring). */
@@ -164,8 +164,8 @@ export class SessionStore {
   }
 
   /**
-   * Add one gateway request's tokens to the session's usage and re-price the
-   * total at the published rates. Debounced to disk like event appends — a run
+   * Add one gateway request's tokens to the session's usage and its cost (at
+   * the request's model rates, agent/pricing.ts) to the total. Debounced to disk like event appends — a run
    * makes many requests, and the session's own updatedAt isn't touched (usage is
    * not activity).
    */
@@ -179,7 +179,9 @@ export class SessionStore {
     usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + Math.max(0, tokens.cacheRead || 0);
     usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + Math.max(0, tokens.cacheWrite || 0);
     usage.outputTokens += Math.max(0, tokens.output || 0);
-    usage.costUsd = costUsd({ input: usage.inputTokens, cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, output: usage.outputTokens });
+    // Priced per request (each at its own model's rates) and summed — a run can
+    // span models, so the total can't be re-priced from the token sums.
+    usage.costUsd = round6((usage.costUsd ?? 0) + costUsd(tokens));
     session.usage = usage;
     this.scheduleMetaSave();
     return { ...usage };

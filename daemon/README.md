@@ -49,7 +49,7 @@ curl -s localhost:4661/api/config
 |---|---|---|---|
 | GET | `/api/health` | none | Liveness + version |
 | GET | `/api/config` | none | `authMode` + Supabase client config + `signIn {password, magicLink, github}` (which sign-in methods this environment offers, from GoTrue's settings + `CELIADOR_MAGIC_LINK`; absent when GoTrue is unreachable — clients then show every method) |
-| GET | `/api/limits` | none | The per-user agent limits in force (same object `/api/me` returns) — what the pricing page shows — plus `prices` (`{currency, inputPerMtok, cacheWritePerMtok, cacheReadPerMtok, outputPerMtok}`, the rate card a run's cost is priced at: `CELIADOR_PRICE_{INPUT,CACHE_WRITE,CACHE_READ,OUTPUT}_PER_MTOK`, default 15 / 18.75 / 1.5 / 75 USD) |
+| GET | `/api/limits` | none | The per-user agent limits in force (same object `/api/me` returns) — what the pricing page shows — including `dailyUsd` (the daily dollar budget; token caps `dailyInput` / `dailyOutput` are 0 = off by default), plus `prices` (`{currency, model, inputPerMtok, cacheWritePerMtok, cacheWrite1hPerMtok, cacheReadPerMtok, outputPerMtok}`, the agent model's rate card) and `modelPrices` (one card per served model) — what a run's cost and the dollar budget are priced at (Anthropic list prices per model; `CELIADOR_PRICE_*_PER_MTOK` override) |
 | GET | `/api/me` | user | The signed-in account: identity, plan, today's usage vs. quota, and `tasks` (`running`, `prOpen`, `mergedLast7Days`, `costUsdLast7Days` = the cost of merged + pr-open tasks finished in the last 7 days, `concurrency`) |
 | GET | `/api/tasks` | user | The agent task queue (+ concurrency, linked repos); `GET /api/tasks/stream` = live changes (SSE). Tasks carry `runner` (`mac` / `cloud`), `machine`, `startedAt`, `finishedAt`, live `activity` / `awaiting` (from the linked session), `pr` (size, checks, mergeable — refreshed from GitHub with the App, lazily when older than 60 s) and `usage` (`{requests, inputTokens, outputTokens, costUsd}` — the linked session's, see §cost in `docs/CLIENT_INTEGRATION.md`) |
 | POST | `/api/tasks` | user | A task by hand: `{remoteUrl, title, details?}` or `{remoteUrl, issue: {number, title, url}, details?}` (github.com repos; an open task for the same issue is returned, `deduped: true`) |
@@ -87,7 +87,7 @@ src/
   config.ts      env-derived constants, version
   auth.ts        Supabase JWT verify + requireUser middleware + fail-closed guard
   anthropic.ts   agent proxy (SSE relay of the Anthropic stream)
-  agent/         policy.ts (server-owned system prompt + tool allowlist), quota.ts (per-user limits), pricing.ts (the rate card)
+  agent/         policy.ts (server-owned system prompt + tool allowlist), quota.ts (per-user limits), pricing.ts (per-model rate card, dollar cost)
   account/       DELETE /api/account
   sessions/      relay (bus, store, routes, notify, persist, usage = per-run cost attribution)
   data/, db/     profile + chat-history routes and Postgres access
@@ -123,9 +123,12 @@ by which vars are set: `SUPABASE_JWT_SECRET` → supabase, else `CELIADOR_TOKEN`
 token, else none (loopback dev with `CELIADOR_ALLOW_NO_AUTH=1` only). Push is a
 no-op unless the `APNS_*` vars are set. Cloud runs need `CELIADOR_RUNNER_AGENT=sandbox`
 (+ Docker and the runner image, `docs/CLOUD_RUNS.md`) and the GitHub App installed
-on the repo. The rate card is `CELIADOR_PRICE_{INPUT,CACHE_WRITE,CACHE_READ,OUTPUT}_PER_MTOK`
-(USD, default 15 / 18.75 / 1.5 / 75 — cache reads are most of an agent turn's input, so they
-have their own rate); the checks-failed fix cap is `CELIADOR_TASK_CI_FIX_ATTEMPTS`
+on the repo. Agent usage is budgeted in dollars (`CELIADOR_AGENT_DAILY_USD`, default 10 per
+user; `CELIADOR_AGENT_GLOBAL_DAILY_USD`, default 100 across all users), each request priced
+at its model's list price in `agent/pricing.ts` — cache writes at 1.25× (5-minute) or 2× (1-hour)
+input, cache reads at the model's read rate, because cache reads are most of an agent turn's
+input. `CELIADOR_PRICE_{INPUT,CACHE_WRITE,CACHE_WRITE_1H,CACHE_READ,OUTPUT}_PER_MTOK` override a rate
+for every model; the checks-failed fix cap is `CELIADOR_TASK_CI_FIX_ATTEMPTS`
 (default 2). Under systemd `EnvironmentFile`, keep comments on their own lines —
 inline `# …` becomes part of the value.
 
