@@ -130,6 +130,10 @@ struct ContentView: View {
             NavigationStack { ExplorerView() }
         case "code":
             NavigationStack { CodeFileView(sessionId: "s1", path: "src/auth/middleware.ts") }
+        case "newrun":
+            NewRunView()
+        case "newrun-compose":
+            NewRunView(composing: DemoData.editorWorkspaces.first)
         default:
             TabShell()
         }
