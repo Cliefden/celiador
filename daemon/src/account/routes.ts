@@ -11,6 +11,7 @@ import { purgeUserRuns } from "../runner/workspace";
 import { purgeUserMirrors } from "../runner/worktrees";
 import { taskStores } from "../tasks/dispatch";
 import { deletedUsers } from "../deleted-users";
+import { disconnectGitHub } from "../github/access";
 
 /**
  * Account self-service. `DELETE /api/account` permanently deletes the caller's
@@ -52,6 +53,7 @@ export function accountRoutes(): Hono<AppEnv> {
     pushStores.purge(userId);
     workspacePresence.clear(userId);
     editorControl.clear(userId);
+    await disconnectGitHub(userId).catch(() => undefined); // their GitHub connection (token revoked at GitHub, best-effort)
     taskStores.purge(userId);
     await purgeUserRuns(userId); // server-run workspaces (best-effort)
     await purgeUserMirrors(userId); // their cached repo mirrors

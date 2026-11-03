@@ -1,3 +1,4 @@
+import { hasProvenLink } from "../github/access";
 import { appRequest, commentOnIssue, githubApp, PUBLIC_URL, updatePullRequestBody } from "../github/app";
 import { postFailedComment } from "./comments";
 import { dispatchTasks, taskStores } from "./dispatch";
@@ -27,10 +28,10 @@ const FAILED = new Set(["failure", "timed_out", "cancelled", "action_required", 
  * refuses (403/404: the installation hasn't approved checks/statuses read)
  * is unknown; unknown wins over "passing"/"none", since what it hides could fail.
  */
-async function checksFor(task: Task, sha: string): Promise<TaskChecks> {
+async function checksFor(userId: string, task: Task, sha: string): Promise<TaskChecks> {
   const [runs, status] = await Promise.all([
-    appRequest(task.repo, "GET", `/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`).catch(() => null),
-    appRequest(task.repo, "GET", `/commits/${encodeURIComponent(sha)}/status`).catch(() => null),
+    appRequest({ userId }, task.repo, "GET", `/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`).catch(() => null),
+    appRequest({ userId }, task.repo, "GET", `/commits/${encodeURIComponent(sha)}/status`).catch(() => null),
   ]);
   let unknown = false, failing = false, pending = false, any = false;
   if (runs?.status === 200 && Array.isArray(runs.json?.check_runs)) {
@@ -92,18 +93,18 @@ async function doRefresh(userId: string, taskId: string): Promise<Task | undefin
   const number = task.pr?.number ?? prNumberFromUrl(task.prUrl);
   let pull: any;
   if (number) {
-    const res = await appRequest(task.repo, "GET", `/pulls/${number}`);
+    const res = await appRequest({ userId }, task.repo, "GET", `/pulls/${number}`);
     if (res?.status !== 200) return undefined;
     pull = res.json;
   } else {
     const head = encodeURIComponent(`${task.repo.owner}:${task.branch}`);
-    const res = await appRequest(task.repo, "GET", `/pulls?head=${head}&state=all&per_page=5`);
+    const res = await appRequest({ userId }, task.repo, "GET", `/pulls?head=${head}&state=all&per_page=5`);
     if (res?.status !== 200 || !Array.isArray(res.json) || res.json.length === 0) return undefined;
     pull = res.json[0];
   }
   if (typeof pull?.number !== "number" || typeof pull.html_url !== "string") return undefined;
   const sha = typeof pull.head?.sha === "string" ? pull.head.sha : undefined;
-  const checks = sha ? await checksFor(task, sha) : "unknown";
+  const checks = sha ? await checksFor(userId, task, sha) : "unknown";
   const int = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined);
   const pr: TaskPullRequest = {
     number: pull.number,
@@ -158,7 +159,7 @@ export async function mergeViaApp(
     number = task.pr?.number;
   }
   if (!number) return null;
-  const res = await appRequest(task.repo, "PUT", `/pulls/${number}/merge`, method ? { merge_method: method } : {});
+  const res = await appRequest({ userId }, task.repo, "PUT", `/pulls/${number}/merge`, method ? { merge_method: method } : {});
   if (!res || res.status === 401 || res.status === 403 || res.status === 404) return null;
   if (res.status === 200 && res.json?.merged === true) {
     return { merged: true, sha: typeof res.json.sha === "string" ? res.json.sha : undefined, url: task.pr?.url ?? task.prUrl ?? "" };
@@ -167,8 +168,8 @@ export async function mergeViaApp(
 }
 
 /** The repo's default branch as GitHub says, else "main". */
-export async function defaultBranch(task: Task): Promise<string> {
-  const res = await appRequest(task.repo, "GET", "").catch(() => null);
+export async function defaultBranch(userId: string, task: Task): Promise<string> {
+  const res = await appRequest({ userId }, task.repo, "GET", "").catch(() => null);
   return typeof res?.json?.default_branch === "string" ? res.json.default_branch : "main";
 }
 
@@ -195,17 +196,17 @@ export function postTaskComments(userId: string, taskId: string): void {
   if (!githubApp()) return;
   const store = taskStores.for(userId);
   const task = store.get(taskId);
-  if (!task?.issue) return;
+  if (!task?.issue || !hasProvenLink(userId, task.repo.url)) return;
   const issue = task.issue.number;
   if (task.state === "running" && !task.posted?.pickedUp) {
     store.update(task.id, { posted: { ...task.posted, pickedUp: true } });
-    void defaultBranch(task)
-      .then((base) => commentOnIssue(task.repo, issue, pickedUpComment(task, base)))
+    void defaultBranch(userId, task)
+      .then((base) => commentOnIssue({ userId }, task.repo, issue, pickedUpComment(task, base)))
       .catch(() => undefined);
   }
   if (task.state === "pr-open" && task.prUrl && !task.posted?.prOpened) {
     store.update(task.id, { posted: { ...task.posted, prOpened: true } });
-    void commentOnIssue(task.repo, issue, `Pull request opened: ${task.prUrl}`).catch(() => undefined);
+    void commentOnIssue({ userId }, task.repo, issue, `Pull request opened: ${task.prUrl}`).catch(() => undefined);
   }
   if (task.state === "failed") postFailedComment(userId, task);
 }
@@ -230,5 +231,5 @@ export async function applyPrBody(userId: string, taskId: string, summary: strin
     elapsedMs: task.startedAt && task.finishedAt ? Date.parse(task.finishedAt) - Date.parse(task.startedAt) : undefined,
     usage: task.usage,
   });
-  return updatePullRequestBody(task.repo, number, body).catch(() => false);
+  return updatePullRequestBody({ userId }, task.repo, number, body).catch(() => false);
 }

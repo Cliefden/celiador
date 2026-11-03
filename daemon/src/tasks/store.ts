@@ -295,30 +295,79 @@ export class TaskStore {
   }
 }
 
+/**
+ * Proof that a link's owner can write to the repo on GitHub, checked with their
+ * own GitHub identity (github/access.ts). Only a link with a current proof lets
+ * the Celiador GitHub App act on the repo for that user.
+ */
+export interface RepoLinkProof {
+  /** The GitHub account that proved it (the user's connected identity). */
+  readonly githubId: number;
+  readonly login: string;
+  /** GitHub's id for the repo when it was checked (survives renames; a different id = a different repo). */
+  readonly repoId: number;
+  /** The user's effective permission: what made it pass. */
+  readonly permission: "admin" | "maintain" | "push";
+  /** When GitHub last confirmed it (re-checked once it is older than the verify TTL). */
+  readonly at: string;
+}
+
+export interface RepoLink {
+  readonly userId: string;
+  readonly url: string;
+  /** Absent: a link without proof (made before #79, or by a user without GitHub connected). Never gets the App's token. */
+  readonly verified?: RepoLinkProof;
+}
+
 /** Which user a repo's issues belong to. One owner per repo in v1. */
 export class RepoLinks {
-  private links: Record<string, { userId: string; url: string }>;
+  private links: Record<string, RepoLink>;
 
   constructor(private readonly file: string) {
-    this.links = readJson<Record<string, { userId: string; url: string }>>(file) ?? {};
+    this.links = readJson<Record<string, RepoLink>>(file) ?? {};
   }
 
   owner(url: string): string | undefined {
     return this.links[repoKey(url)]?.userId;
   }
 
+  get(url: string): RepoLink | undefined {
+    return this.links[repoKey(url)];
+  }
+
   forUser(userId: string): string[] {
     return Object.values(this.links).filter((l) => l.userId === userId).map((l) => l.url);
   }
 
-  /** Link a repo to a user; false when another user already owns it. */
-  link(userId: string, url: string): boolean {
+  /** The user's links with their proof state (for the clients' "your repos" list). */
+  detailedForUser(userId: string): RepoLink[] {
+    return Object.values(this.links).filter((l) => l.userId === userId);
+  }
+
+  /**
+   * Link a repo to a user. Without `proof`: only when nobody else has it (and an
+   * own link keeps its proof). With `proof`: also takes the repo over from
+   * another user whose link has none — a proven writer beats a first-come claim —
+   * but never from another user's proven link. "taken" when refused.
+   */
+  link(userId: string, url: string, proof?: RepoLinkProof): "linked" | "taken" {
     const key = repoKey(url);
     const existing = this.links[key];
-    if (existing && existing.userId !== userId) return false;
-    this.links[key] = { userId, url };
+    if (existing && existing.userId !== userId && (existing.verified || !proof)) return "taken";
+    const keep = existing?.userId === userId ? existing.verified : undefined;
+    this.links[key] = { userId, url: existing?.userId === userId ? existing.url : url, ...(proof ?? keep ? { verified: proof ?? keep } : {}) };
     writeJson(this.file, this.links);
-    return true;
+    return "linked";
+  }
+
+  /** Record (or, with undefined, drop) the proof on a user's link. No-op when the link isn't theirs. */
+  setProof(userId: string, url: string, proof: RepoLinkProof | undefined): void {
+    const key = repoKey(url);
+    const existing = this.links[key];
+    if (!existing || existing.userId !== userId) return;
+    const { verified: _old, ...rest } = existing;
+    this.links[key] = proof ? { ...rest, verified: proof } : rest;
+    writeJson(this.file, this.links);
   }
 
   unlink(userId: string, url: string): void {
