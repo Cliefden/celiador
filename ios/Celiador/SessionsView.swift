@@ -234,7 +234,7 @@ struct SessionRow: View {
 
 /// Start a server-side (cloud) run from the phone — the daemon clones a repo and runs
 /// the agent itself, no desktop needed. On success it navigates straight into the run.
-private struct NewRunView: View {
+struct NewRunView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var repoURL = ""
@@ -257,6 +257,11 @@ private struct NewRunView: View {
     @State private var firstMessage = ""
     @State private var sending = false
     @FocusState private var composerFocused: Bool
+
+    /// `composing` opens straight into the composer for that editor repo (screenshots).
+    init(composing: EditorWorkspace? = nil) {
+        _composing = State(initialValue: composing)
+    }
 
     /// Cloud runs execute unattended, so the form needs a repo URL and a task.
     private var canStart: Bool {
@@ -297,9 +302,17 @@ private struct NewRunView: View {
                     formView
                 }
             }
+            .navigationTitle(composing?.name ?? "New run")
             .navigationBarTitleDisplayMode(.inline)
             .task(id: repoURL) { await loadBranches() }
             .task {
+                #if DEBUG
+                if DemoData.isActive {
+                    editorWorkspaces = DemoData.editorWorkspaces
+                    if recents.isEmpty { recents = DemoData.repoRecents }
+                    return
+                }
+                #endif
                 async let repos = Api.shared.cloudRepos()
                 editorWorkspaces = (try? await Api.shared.editorWorkspaces()) ?? []
                 cloudRepos = (try? await repos) ?? []
@@ -318,21 +331,47 @@ private struct NewRunView: View {
                         Button("Cancel") { dismiss() }
                     }
                 }
-                ToolbarItem(placement: .principal) {
-                    Text(composing?.name ?? "New Run").font(.headline)
-                }
                 if composing == nil {
                     ToolbarItem(placement: .confirmationAction) {
                         if starting {
                             ProgressView()
                         } else {
                             Button("Start") { Task { await start() } }
+                                .fontWeight(.semibold)
                                 .disabled(!canStart)
                         }
                     }
                 }
             }
         }
+    }
+
+    /// One tappable row in the sheet: a Settings-style badge, a title and a
+    /// secondary line, like the run rows on the Runs and Queue tabs.
+    private func optionRow(icon: String, color: Color, title: String, subtitle: String?, trailing: String? = nil) -> some View {
+        HStack(spacing: 12) {
+            IconBadge(systemName: icon, color: color)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.dim)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 4)
+            if let trailing {
+                Image(systemName: trailing)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(trailing == "checkmark" ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.tertiary))
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
 
     private var formView: some View {
@@ -344,30 +383,17 @@ private struct NewRunView: View {
                             Haptics.tap()
                             composing = ws
                         } label: {
-                            HStack {
-                                Image(systemName: "laptopcomputer")
-                                    .foregroundStyle(Theme.dim)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(ws.name)
-                                        .foregroundStyle(Theme.ink)
-                                        .lineLimit(1)
-                                    Text(RepoRecents.shortLabel(ws.remoteUrl))
-                                        .font(.caption)
-                                        .foregroundStyle(Theme.dim)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold)).foregroundStyle(Theme.dim)
-                            }
+                            optionRow(icon: "laptopcomputer", color: Theme.accent, title: ws.name,
+                                      subtitle: RepoRecents.shortLabel(ws.remoteUrl), trailing: "chevron.right")
                         }
+                        .buttonStyle(.plain)
                     }
                 } header: {
-                    Text("From your editor")
+                    Text("On your Mac")
                 } footer: {
-                    Text("Opens a chat on your Mac — runs on the local copy, no clone.")
+                    Text("Opens a chat with the editor. Runs on your local copy, no clone.")
                 }
+                .listRowBackground(Theme.panel)
             }
 
             if !cloudRepos.isEmpty {
@@ -377,46 +403,38 @@ private struct NewRunView: View {
                             Haptics.tap()
                             repoURL = repo.url
                         } label: {
-                            HStack {
-                                Image(systemName: repo.private == true ? "lock" : "shippingbox")
-                                    .foregroundStyle(Theme.dim)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(repo.label).foregroundStyle(Theme.ink).lineLimit(1)
-                                    if !repo.app {
-                                        Text("No GitHub App — public only, no push")
-                                            .font(.caption).foregroundStyle(Theme.dim)
-                                    }
-                                }
-                                Spacer()
-                                if pickedCloudRepo?.url == repo.url {
-                                    Image(systemName: "checkmark").foregroundStyle(Theme.accentBright)
-                                }
-                            }
+                            optionRow(icon: repo.private == true ? "lock.fill" : "shippingbox.fill", color: Theme.accent,
+                                      title: repo.label,
+                                      subtitle: repo.app ? nil : "No GitHub App — public only, no push",
+                                      trailing: pickedCloudRepo?.url == repo.url ? "checkmark" : nil)
                         }
+                        .buttonStyle(.plain)
                     }
                 } header: {
                     Text(editorWorkspaces.isEmpty ? "Your repos" : "Or run in the cloud")
                 }
+                .listRowBackground(Theme.panel)
             }
 
             Section {
-                TextField("https://github.com/owner/repo.git", text: $repoURL)
+                // Verbatim: a string-literal placeholder is markdown, and the URL would render as a link.
+                TextField("Repository URL", text: $repoURL, prompt: Text(verbatim: "https://github.com/owner/repo.git"))
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
-                Button {
-                    if let pasted = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-                       !pasted.isEmpty {
-                        repoURL = pasted
-                        Haptics.tap()
-                    }
-                } label: {
-                    Label("Paste repo URL", systemImage: "doc.on.clipboard")
+                    .textContentType(.URL)
+                PasteButton(payloadType: String.self) { strings in
+                    guard let pasted = strings.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !pasted.isEmpty else { return }
+                    Task { @MainActor in repoURL = pasted; Haptics.tap() }
                 }
-                .disabled(!UIPasteboard.general.hasStrings)
+                .labelStyle(.titleAndIcon)
+                .buttonBorderShape(.capsule)
+                .tint(Theme.accent)
             } header: {
-                Text(!cloudRepos.isEmpty ? "Any repo" : editorWorkspaces.isEmpty ? "Repository" : "Or run in the cloud")
+                Text(!cloudRepos.isEmpty ? "Any repo" : editorWorkspaces.isEmpty ? "Run in the cloud" : "Or run in the cloud")
             }
+            .listRowBackground(Theme.panel)
 
             Section {
                 if branches.isEmpty {
@@ -439,46 +457,46 @@ private struct NewRunView: View {
                      ? "The agent continues \(trimmedBranch.isEmpty ? "the branch" : "“\(trimmedBranch)”") in its own worktree; pushing adds its commits to that branch."
                      : "The agent works in its own git worktree on a new celiador/… branch off \(trimmedBranch.isEmpty ? "the default branch" : "“\(trimmedBranch)”"), ready for a pull request.")
             }
+            .listRowBackground(Theme.panel)
+
             if !recents.isEmpty {
-                Section("Recent") {
+                Section("Recent repos") {
                     ForEach(recents, id: \.self) { url in
                         Button {
                             repoURL = url
-                            Haptics.tap()
+                            Haptics.select()
                         } label: {
-                            HStack {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .foregroundStyle(Theme.dim)
-                                Text(RepoRecents.shortLabel(url))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .foregroundStyle(Theme.ink)
-                                Spacer()
-                                if url == repoURL.trimmingCharacters(in: .whitespaces) {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(Theme.accentBright)
-                                }
-                            }
+                            optionRow(icon: "clock.arrow.circlepath", color: .gray, title: RepoRecents.shortLabel(url),
+                                      subtitle: nil,
+                                      trailing: url == repoURL.trimmingCharacters(in: .whitespaces) ? "checkmark" : nil)
                         }
+                        .buttonStyle(.plain)
                     }
                     .onDelete { offsets in
                         for i in offsets { RepoRecents.forget(recents[i]) }
                         recents = RepoRecents.list()
                     }
                 }
+                .listRowBackground(Theme.panel)
             }
-            Section("Task") {
+
+            Section {
                 TextField("What should the agent do?", text: $prompt, axis: .vertical)
                     .lineLimit(3...8)
+            } header: {
+                Text("Task")
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let error {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Theme.red)
+                    }
+                    Text("Runs on Celiador's servers, no computer needed. You watch it here, send follow-ups, review the diff, then push and open the pull request from the phone. Private repos, push and pull requests need the repo in your repos with the Celiador GitHub App installed.")
+                }
             }
-            if let error {
-                Text(error).font(.footnote).foregroundStyle(Theme.red)
-            }
-            Section {
-                Text("Runs on Celiador's servers, no computer needed. You watch it here, send follow-ups, review the diff, then push and open the pull request from the phone. Private repos, push and pull requests need the repo in your repos with the Celiador GitHub App installed.")
-                    .font(.footnote).foregroundStyle(Theme.dim)
-            }
+            .listRowBackground(Theme.panel)
         }
+        .brandGround()
     }
 
     /// A chat-style first-message composer for a repo open in the editor. Sending the
@@ -488,14 +506,21 @@ private struct NewRunView: View {
             Spacer()
             VStack(spacing: 10) {
                 Image(systemName: "laptopcomputer")
-                    .font(.system(size: 40)).foregroundStyle(Theme.accent)
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 64)
+                    .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .padding(.bottom, 4)
                 Text("Chat with \(ws.name)")
-                    .font(.title3.weight(.semibold))
-                Text("Runs on your Mac · \(RepoRecents.shortLabel(ws.remoteUrl))")
+                    .font(.title2.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                StatusPill(text: "Runs on your Mac", color: Theme.accent, icon: "laptopcomputer")
+                Text(RepoRecents.shortLabel(ws.remoteUrl))
                     .font(.subheadline).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
                 if let error {
-                    Text(error).font(.footnote).foregroundStyle(Theme.red)
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote).foregroundStyle(Theme.red)
                         .multilineTextAlignment(.center).padding(.top, 4)
                 }
             }

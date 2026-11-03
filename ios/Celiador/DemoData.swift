@@ -189,6 +189,18 @@ enum DemoData {
         ]
     }
 
+    /// Repos "open in the editor" for the New run sheet.
+    static let editorWorkspaces: [EditorWorkspace] = [
+        EditorWorkspace(name: "celiador-editor", remoteUrl: "https://github.com/Cliefden/celiador-editor.git", branch: "main"),
+        EditorWorkspace(name: "celiador", remoteUrl: "https://github.com/Cliefden/celiador.git", branch: "main"),
+    ]
+
+    /// Recently used cloud-run repos for the New run sheet.
+    static let repoRecents = [
+        "https://github.com/Cliefden/celiador-loop-sandbox.git",
+        "https://github.com/Cliefden/celiador-remote.git",
+    ]
+
     static let chats: [ChatSummary] = [
         ChatSummary(id: "c1", title: "Refactor auth middleware", origin: "editor", status: "done", updatedAt: iso(7200), lastMessageAt: iso(7200)),
         ChatSummary(id: "c2", title: "Fix flaky checkout test", origin: "editor", status: "error", updatedAt: iso(90000), lastMessageAt: iso(90000)),

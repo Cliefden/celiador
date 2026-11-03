@@ -72,8 +72,22 @@ final class LiveActivityManager {
         ChatActivityAttributes.ContentState(statusLabel: session.state.label, activityText: line ?? "")
     }
 
+    /// Where the activity's elapsed timer counts from: the session's creation for a
+    /// fresh run, otherwise now (a long-lived chat picking up a new turn shouldn't
+    /// read "3 days").
+    private func startDate(_ session: Session) -> Date {
+        guard let created = RelativeTime.date(session.createdAt),
+              Date().timeIntervalSince(created) < 3600 else { return Date() }
+        return created
+    }
+
     private func start(_ session: Session, state: ChatActivityAttributes.ContentState) {
-        let attributes = ChatActivityAttributes(sessionId: session.id, sessionTitle: session.title)
+        let attributes = ChatActivityAttributes(
+            sessionId: session.id,
+            sessionTitle: session.title,
+            startedAt: startDate(session),
+            runner: session.runner
+        )
         do {
             let activity = try Activity.request(
                 attributes: attributes,

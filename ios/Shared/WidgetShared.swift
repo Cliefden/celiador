@@ -65,6 +65,11 @@ struct ChatActivityAttributes: ActivityAttributes {
 
     var sessionId: String
     var sessionTitle: String
+    /// When the run started, for the live elapsed timer. Optional so activities
+    /// started by an older build still decode.
+    var startedAt: Date? = nil
+    /// "editor" (runs on your Mac) | "server" (runs in the cloud); optional as above.
+    var runner: String? = nil
 }
 #endif
 
