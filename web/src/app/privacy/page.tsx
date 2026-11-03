@@ -53,6 +53,22 @@ export default function PrivacyPage() {
         Those numbers are shown back to you, in full, inside the app — the same figures we enforce.
       </p>
 
+      <h2 id="waitlist">Waitlist and &ldquo;get notified&rdquo; sign-ups</h2>
+      <p>
+        When you leave your email on this site (for example to hear when the Windows build ships),
+        we store only that address, which list you asked for, and when you signed up and confirmed.
+        We don&rsquo;t store your IP address or browser details with it. We first send one email
+        with a confirmation link; you are on the list only after you click it, and an unconfirmed
+        sign-up is deleted after 7 days. We use the address only to email you about what you signed
+        up for, and we don&rsquo;t sell it or share it with anyone else.
+      </p>
+      <p>
+        Every email has an unsubscribe link. Using it deletes your address from our records, not
+        just from the mailing. You can also write to{" "}
+        <a href="mailto:hello@celiador.ai">hello@celiador.ai</a> to have it removed or to ask what
+        we hold.
+      </p>
+
       <h2>Product telemetry</h2>
       <p>
         The editor can send a small amount of anonymous usage data so we know which features are

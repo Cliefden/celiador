@@ -120,6 +120,11 @@ CELIADOR_MAGIC_LINK=$MAGIC_LINK
 GOTRUE_URL=http://127.0.0.1:$GPORT
 APNS_TOPIC=$APNS_TOPIC
 APNS_ENV=production
+# The website waitlist's confirmation mail (README § Waitlist); empty = waitlist off (503).
+CELIADOR_SMTP_HOST=${CELIADOR_SMTP_PASS:+smtp.migadu.com}
+CELIADOR_SMTP_PORT=587
+CELIADOR_SMTP_USER=${CELIADOR_SMTP_PASS:+stefan@celiador.ai}
+CELIADOR_SMTP_PASS=${CELIADOR_SMTP_PASS:-}
 # APNS_KEY_ID= / APNS_TEAM_ID= / APNS_KEY_PATH= : add to enable push (the team key serves every app)
 EOF
 

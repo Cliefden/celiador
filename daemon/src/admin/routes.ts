@@ -19,7 +19,7 @@ function list(name: string): Set<string> {
   return new Set((process.env[name] ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 }
 
-function isAdmin(user: { userId: string; email?: string }): boolean {
+export function isAdmin(user: { userId: string; email?: string }): boolean {
   return list("CELIADOR_ADMIN_USER_IDS").has(user.userId.toLowerCase()) ||
     (!!user.email && list("CELIADOR_ADMIN_EMAILS").has(user.email.toLowerCase()));
 }

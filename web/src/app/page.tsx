@@ -257,7 +257,7 @@ export default function HomePage() {
             </Button>
           </div>
           <div className="mt-8">
-            <EmailCapture subject="Celiador for Windows" hint="Need the editor on Windows? One email when it ships." />
+            <EmailCapture lists={["windows"]} subject="Celiador for Windows"hint="Need the editor on Windows? One email when it ships." />
           </div>
         </Container>
       </section>
