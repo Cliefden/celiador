@@ -68,8 +68,10 @@ Edit copy in **`src/lib/site.ts`** — pages read from it, so text stays in one 
   every 5 min; `CELIADOR_RELEASES_API` overrides) and fall back to the notify form
   when nothing is published. Set `site.testflightUrl` once the public TestFlight
   link exists.
-- **Email capture**: `src/components/EmailCapture.tsx` and `ContactForm.tsx` are
-  UI-only (they show a success state, no request). Wire `submit` to your waitlist
-  backend (Supabase, Loops, Resend, etc.).
+- **Email capture**: DONE — `src/components/EmailCapture.tsx` posts to the
+  daemon's double-opt-in waitlist (`POST /api/waitlist`, same origin;
+  `NEXT_PUBLIC_CELIADOR_API` overrides the base) and falls back to a pre-filled
+  mail when the daemon can't take sign-ups. Export: `daemon/scripts/admin-waitlist.py`
+  (daemon README § Waitlist). `ContactForm.tsx` still composes a mail.
 - **Legal**: `/privacy` and `/terms` are placeholders — replace with reviewed copy.
 - **OG image**: add `src/app/opengraph-image.png` for rich link previews.

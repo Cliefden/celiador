@@ -72,6 +72,9 @@ curl -s localhost:4661/api/config
 | GET/PATCH | `/api/profile` | user | Profile (DB) |
 | GET/PATCH/DELETE | `/api/chats`, `/api/chats/:id` | user | Durable chat history (DB) |
 | DELETE | `/api/account` | user (supabase mode) | Delete the caller's account (GoTrue user + DB rows + relay/push files) |
+| POST | `/api/waitlist` | none (rate limited) | The site's "get notified" form: `{email, lists?: ["early-access"\|"windows"\|"linux"]}` → always 202 `{ok:true}` (never says whether the address is known); mails a double-opt-in link. 400 bad address, 429 per-IP limit, 503 when no SMTP is configured (see §Waitlist) |
+| GET/POST | `/api/waitlist/confirm`, `/api/waitlist/unsubscribe` | link token | The mail's links: GET shows a button, POST acts (unsubscribe also takes RFC 8058 one-click) |
+| GET/DELETE | `/api/admin/waitlist` | admin | Export sign-ups (`?status=confirmed\|pending\|all`, `?list=`, `?format=csv`) / erase one (`?email=`) — `scripts/admin-waitlist.py` |
 | GET | `/api/update/:platform/:quality/:commit` | none | Editor update feed (Squirrel.Mac): 204 = up to date, else the newest build's descriptor |
 | GET | `/api/releases` | none | Every published editor build (newest first) with download URLs |
 | GET | `/api/releases/latest/:platform/:quality[/dmg\|/archive]` | none | Newest build descriptor, or a 302 to its DMG / update archive |
@@ -103,7 +106,31 @@ src/
   runner/        cloud runs: manager, run, sandbox (Docker, no network), workspace (clone / git helper), agent
   github/        the Celiador GitHub App (manifest setup, installation tokens)
   open/          /api/open/* deep-link bounce pages
+  waitlist/      the site's double-opt-in waitlist: store (data/waitlist/list.json), mailer (SMTP), routes + admin export
 ```
+
+## Waitlist
+
+The website's "get notified" form posts to `POST /api/waitlist`. Double opt-in:
+the address gets a mail with a confirm link and is only on the list after the
+click. Stored in `data/waitlist/list.json` (mode 600): the address, which lists,
+when it signed up / confirmed — no IP, no user agent. Unconfirmed requests are
+forgotten after 7 days; unsubscribing deletes the record. Links carry a random
+id + an HMAC token (secret `CELIADOR_WAITLIST_SECRET`, else generated into
+`data/waitlist/secret`), never the address.
+
+Limits: 5 sign-ups per client IP per 10 minutes (`CELIADOR_WAITLIST_IP_PER_10MIN`,
+in memory only), one confirmation mail per address per 5 minutes and 3 per day,
+`CELIADOR_WAITLIST_MAILS_PER_HOUR` (default 100) mails overall, and a honeypot
+field. Mail goes out over SMTP — `CELIADOR_SMTP_HOST`, `CELIADOR_SMTP_PORT` (587),
+`CELIADOR_SMTP_USER`, `CELIADOR_SMTP_PASS`, optional `CELIADOR_MAIL_FROM`; without
+them the endpoint answers 503 and the site falls back to a `mailto:` link (in a
+`local` environment the links are logged instead).
+
+Export: `python3 scripts/admin-waitlist.py you@example.com --list=windows --csv`
+(your account in `CELIADOR_ADMIN_EMAILS`). The CSV has each confirmed address's
+own unsubscribe URL for the announcement mail's footer and `List-Unsubscribe`
+header. `--status=pending` shows unconfirmed requests; `--delete=addr` erases one.
 
 ## Editor releases
 

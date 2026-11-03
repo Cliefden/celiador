@@ -107,8 +107,9 @@ export default async function DownloadPage() {
               <div className="mt-3">
                 <EmailCapture
                   compact
+                  lists={release ? (linux ? ["windows"] : ["windows", "linux"]) : undefined}
                   subject={release ? (linux ? "Celiador for Windows" : "Celiador for Windows / Linux") : undefined}
-                  hint={release ? (linux ? "One email when the Windows build ships." : "Tell us which platform you need; one email when it ships.") : undefined}
+                  hint={release ? (linux ? "One email when the Windows build ships." : "One email when the Windows or Linux build ships.") : undefined}
                 />
               </div>
             </div>
