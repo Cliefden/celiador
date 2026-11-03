@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { AuthResult } from "../auth";
-import { authenticateToken, bearerFrom, safeEqual } from "../auth";
+import { authenticateToken, bearerFrom, RUNNER_TOKEN_REFUSED, safeEqual } from "../auth";
 import { agentQuota } from "./quota";
 import { dbEnabled } from "../db/pool";
 import { getProfile } from "../db/repo";
@@ -50,11 +50,17 @@ export function refuse(c: Context, auth: AuthorizeRefusal) {
   return c.json(refusalEnvelope(auth), auth.status);
 }
 
-export async function authorizeAgent(c: Context): Promise<AuthorizeResult> {
+/**
+ * `allowRunner`: whether a daemon-minted runner token may use this endpoint.
+ * Only the first-party gateway (gateway.ts) — the one thing the sandboxed agent
+ * talks to — passes true; see mintRunnerToken.
+ */
+export async function authorizeAgent(c: Context, opts: { allowRunner?: boolean } = {}): Promise<AuthorizeResult> {
   const bearer = bearerFrom(c);
   const user = authenticateToken(bearer);
   const sharedOk = safeEqual(bearer, process.env.CELIADOR_AGENT_TOKEN);
   if (!user && !sharedOk) return { ok: false, status: 401, error: "unauthorized" };
+  if (user?.runner && !opts.allowRunner) return { ok: false, status: 403, error: RUNNER_TOKEN_REFUSED };
   const quotaKey = user?.userId ?? "shared-agent-token";
 
   // Optional plan gate (only meaningful for real users; the shared token is ops-only).

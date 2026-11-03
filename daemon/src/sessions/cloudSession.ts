@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { installationToken, openPullRequest, appRequest } from "../github/app";
 import { hasActiveServerRun, runServerRun } from "../runner/manager";
 import { git, removeWorkspace, workspaceDir } from "../runner/workspace";
-import { addWorktree, hasCheckout, removeWorktree } from "../runner/worktrees";
+import { addWorktree, fetchBranch, hasCheckout, isAncestor, removeWorktree } from "../runner/worktrees";
 import { cloudFollowUp } from "../tasks/cloud";
 import { taskStores } from "../tasks/dispatch";
 import { sessionStores } from "./instance";
@@ -147,24 +147,91 @@ export async function cloudSessionFollowUp(userId: string, session: Session, tex
   publishSessionEvent(userId, session.id, { kind: "message", role: "user", text });
   void (async () => {
     const dir = workspaceDir(userId, session.id);
+    const fail = (message: string) => {
+      publishSessionEvent(userId, session.id, { kind: "error", message });
+      publishSessionEvent(userId, session.id, { kind: "state", state: "error" });
+    };
+    publishSessionEvent(userId, session.id, { kind: "state", state: "running" });
     if (!hasCheckout(dir)) {
       // The workspace went with a server restart: pick the branch up again — from
       // GitHub if it was pushed, else from its base (unpushed work is gone).
       try {
-        publishSessionEvent(userId, session.id, { kind: "state", state: "running" });
         publishSessionEvent(userId, session.id, { kind: "activity", text: "The workspace was reset by a server restart; checking the branch out again…" });
         const token = repo.pushable ? await tokenFor(userId, repo.url) : undefined;
         const wt = await addWorktree({ userId, url: repo.url, remote: remoteFor(repo.url, token), token, dir, branch: repo.branch, base: repo.base });
+        // A branch the session had on GitHub that is gone now: don't quietly start it over from the base.
+        if (repo.remoteSha && !wt.remoteSha) return fail(branchDeletedMessage(repo.branch));
         sessionStores.for(userId).setRepo(session.id, { ...repo, remoteSha: wt.remoteSha });
       } catch (err) {
-        publishSessionEvent(userId, session.id, { kind: "error", message: `Couldn't check the branch out again: ${err instanceof Error ? err.message : String(err)}` });
-        publishSessionEvent(userId, session.id, { kind: "state", state: "error" });
-        return;
+        return fail(`Couldn't check the branch out again: ${scrub(err)}`);
       }
+    } else {
+      const synced = await syncWithRemote(userId, session, repo, dir);
+      if (!synced.ok) return fail(synced.error);
+      if (synced.note) publishSessionEvent(userId, session.id, { kind: "activity", text: synced.note });
     }
     await runServerRun({ userId, sessionId: session.id, repo: { url: repo.url }, prompt: text, workspaceReady: true, continueConversation: true });
   })();
   return { ok: true };
+}
+
+function scrub(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw.replace(/x-access-token:[^@\s]+@/g, "x-access-token:***@");
+}
+
+function branchDeletedMessage(branch: string): string {
+  return `${branch} no longer exists on GitHub (was its pull request merged?). Start a new session to keep working.`;
+}
+
+/**
+ * Before a follow-up turn on a retained worktree: fetch the session's branch
+ * from GitHub and fast-forward onto anything that landed there meanwhile (a
+ * reviewer's commit, a push from the editor), so the agent works on the
+ * current branch and the next push is a fast-forward. Refuses — rather than
+ * silently running on a stale copy — when the branch was deleted on GitHub
+ * after the session had it there, or when the two sides diverged. A failed
+ * fetch (network) is not fatal: the turn runs on the session's copy and the
+ * push re-checks against GitHub anyway. Records the fetched sha as the
+ * session's `remoteSha`. Exported for the smoke test.
+ */
+export async function syncWithRemote(userId: string, session: Session, repo: SessionRepo, dir: string): Promise<{ ok: true; repo: SessionRepo; note?: string } | { ok: false; error: string }> {
+  const token = repo.pushable ? await tokenFor(userId, repo.url) : undefined;
+  let remoteSha: string;
+  try {
+    remoteSha = await fetchBranch({ userId, url: repo.url, remote: remoteFor(repo.url, token), token, branch: repo.branch });
+  } catch (err) {
+    return { ok: true, repo, note: `Couldn't check GitHub for new commits on ${repo.branch} (${scrub(err).split("\n")[0]}); continuing on the session's copy.` };
+  }
+  if (!remoteSha) {
+    // Never pushed (a new celiador/ branch): nothing to catch up with.
+    if (!repo.remoteSha) return { ok: true, repo };
+    return { ok: false, error: branchDeletedMessage(repo.branch) };
+  }
+  const head = await headSha(dir);
+  let note: string | undefined;
+  if (remoteSha !== head && !(await isAncestor(dir, remoteSha, head))) {
+    if (!(await isAncestor(dir, head, remoteSha))) {
+      return {
+        ok: false,
+        error: `${repo.branch} has commits on GitHub that this session doesn't have, and the session has commits GitHub doesn't, so it can't be brought up to date by a fast-forward. Celiador won't rewrite either side; start a new session on ${repo.branch} to continue from GitHub's version.`,
+      };
+    }
+    try {
+      await git(dir, ["merge", "--ff-only", "-q", remoteSha]);
+    } catch (err) {
+      const raw = scrub(err);
+      return {
+        ok: false,
+        error: /overwritten|uncommitted|untracked working tree/i.test(raw)
+          ? `${repo.branch} has new commits on GitHub that touch files with uncommitted changes in this session. Commit or revert them from Changes, then send the follow-up again.`
+          : `Couldn't bring ${repo.branch} up to date with GitHub: ${raw.split("\n")[0]}`,
+      };
+    }
+    note = `Brought ${repo.branch} up to date with GitHub (${remoteSha.slice(0, 7)}).`;
+  }
+  const updated = sessionStores.for(userId).setRepo(session.id, { ...repo, remoteSha })?.repo ?? { ...repo, remoteSha };
+  return { ok: true, repo: updated, note };
 }
 
 /** Delete-time cleanup: detach the worktree from the mirror and drop the run's directory. */
@@ -198,20 +265,61 @@ async function headSha(dir: string): Promise<string> {
   return (await git(dir, ["rev-parse", "HEAD"])).trim();
 }
 
-/** Push the worktree's HEAD to its branch, leasing against the last known remote sha. */
+/**
+ * Push the worktree's HEAD to its branch.
+ *
+ * - An existing branch the user chose to work on directly (`existingBranch`,
+ *   possibly the default branch): fast-forward only, never forced. The live
+ *   remote tip is fetched first and must be an ancestor of HEAD; otherwise the
+ *   push would rewrite history someone else owns (an agent's amend / rebase /
+ *   reset, or commits GitHub has that the session doesn't), and it's refused
+ *   with the reason. The plain push is also refused by git if the branch moves
+ *   between the check and the push.
+ * - The session's own fresh `celiador/…` branch: `--force-with-lease` against
+ *   the last sha the session pushed (or "must not exist yet"). The branch is
+ *   the session's scratch branch, so an agent tidying its own unmerged commits
+ *   is fine, while the lease still refuses to clobber anything pushed by
+ *   someone else since.
+ */
 async function push(userId: string, session: Session, repo: SessionRepo, dir: string): Promise<SessionRepo> {
   const token = await tokenFor(userId, repo.url);
   if (!token) throw new Error("pushing needs the Celiador GitHub App on this repo, and the repo in your repos");
   const head = await headSha(dir);
-  if (head === repo.remoteSha) return repo;
-  try {
-    await git(dir, ["push", "-q", `--force-with-lease=refs/heads/${repo.branch}:${repo.remoteSha}`, remoteFor(repo.url, token), `HEAD:refs/heads/${repo.branch}`], { timeout: NETWORK_TIMEOUT_MS, secret: token });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (/stale info|rejected|fetch first|non-fast-forward/i.test(msg)) throw new Error(`${repo.branch} moved on GitHub since this session last saw it; send a follow-up to bring the session up to date first`);
-    throw err;
+  const remote = remoteFor(repo.url, token);
+  const store = sessionStores.for(userId);
+  if (repo.existingBranch) {
+    const live = await fetchBranch({ userId, url: repo.url, remote, token, branch: repo.branch });
+    if (live === head) return live === repo.remoteSha ? repo : store.setRepo(session.id, { ...repo, remoteSha: live })?.repo ?? { ...repo, remoteSha: live };
+    if (!live && repo.remoteSha) throw new Error(branchDeletedMessage(repo.branch));
+    if (live && !(await isAncestor(dir, live, head))) throw new Error(nonFastForwardMessage(repo.branch, await isAncestor(dir, head, live)));
+    try {
+      await git(dir, ["push", "-q", remote, `HEAD:refs/heads/${repo.branch}`], { timeout: NETWORK_TIMEOUT_MS, secret: token });
+    } catch (err) {
+      if (/rejected|fetch first|non-fast-forward/i.test(scrub(err))) throw new Error(nonFastForwardMessage(repo.branch, false));
+      throw err;
+    }
+  } else {
+    // No "already pushed" shortcut on the cached sha: the push (a no-op when GitHub
+    // has it) is what notices the branch was deleted or moved there since.
+    try {
+      await git(dir, ["push", "-q", `--force-with-lease=refs/heads/${repo.branch}:${repo.remoteSha}`, remote, `HEAD:refs/heads/${repo.branch}`], { timeout: NETWORK_TIMEOUT_MS, secret: token });
+    } catch (err) {
+      if (/stale info|rejected|fetch first|non-fast-forward/i.test(scrub(err))) {
+        throw new Error(`${repo.branch} changed on GitHub since this session last saw it. Send a follow-up: it fast-forwards the session onto GitHub's version first (or says why it can't).`);
+      }
+      throw err;
+    }
   }
-  return sessionStores.for(userId).setRepo(session.id, { ...repo, remoteSha: head })?.repo ?? { ...repo, remoteSha: head };
+  return store.setRepo(session.id, { ...repo, remoteSha: head })?.repo ?? { ...repo, remoteSha: head };
+}
+
+/** Why a push to an existing branch was refused. `behind`: GitHub only has extra commits (a follow-up fixes it). */
+function nonFastForwardMessage(branch: string, behind: boolean): string {
+  return behind
+    ? `${branch} has new commits on GitHub that this session doesn't have yet. Send a follow-up to bring the session up to date, then push.`
+    : `Pushing would rewrite ${branch}'s history on GitHub, and Celiador never force-pushes a branch you chose to work on directly. ` +
+      `The session's commits don't sit on top of GitHub's ${branch} (the agent amended, rebased or reset commits that are already there, or both sides have new commits). ` +
+      `Ask the agent to redo its change as new commits on top of origin/${branch}, or start a new session.`;
 }
 
 /**

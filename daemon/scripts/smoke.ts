@@ -58,8 +58,17 @@ async function main(): Promise<void> {
 	const { runsRoot } = await import("../src/runner/workspace.ts");
 
 	const app = createApp();
-	const token = mintRunnerToken("smoke-user", "smoke-run", 300)!;
+	// A plain end-user token (what the editor and the phone send). Runner tokens are gateway-only.
+	const { createHmac } = await import("node:crypto");
+	const userToken = (sub: string): string => {
+		const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
+		const now = Math.floor(Date.now() / 1000);
+		const input = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub, role: "authenticated", aud: "authenticated", iat: now, exp: now + 600 })}`;
+		return `${input}.${createHmac("sha256", process.env.SUPABASE_JWT_SECRET!).update(input).digest("base64url")}`;
+	};
+	const token = userToken("smoke-user");
 	const authH = { "content-type": "application/json", authorization: `Bearer ${token}` };
+	const runnerH = { "content-type": "application/json", authorization: `Bearer ${mintRunnerToken("smoke-user", "smoke-run", 300)!}` };
 
 	// ── Gateway ──────────────────────────────────────────────────────────────
 	console.log("\n== gateway ==");
@@ -105,6 +114,37 @@ async function main(): Promise<void> {
 	ok("all events validated", ((await pub.json()) as { lastSeq?: number })?.lastSeq === 5);
 	const bad = await app.request(`http://localhost/api/sessions/${sid}/events`, { method: "POST", headers: authH, body: JSON.stringify([{ kind: "tool" }]) });
 	ok("invalid event → 400", bad.status === 400, `got ${bad.status}`);
+
+	// ── Runner tokens: the sandbox's token is good on the Anthropic gateway only ──
+	console.log("\n== runner token scope ==");
+	const rgw = await app.request(GW, { method: "POST", headers: runnerH, body });
+	ok("runner token on the gateway → 200", rgw.status === 200, `got ${rgw.status}`);
+	await rgw.text();
+	const runnerRefused: Array<[string, string, string?]> = [
+		["POST", "/api/sessions", JSON.stringify({ origin: "phone", runner: "server", prompt: "x", repo: { url: "https://github.com/Cliefden/private.git", branch: "main", existingBranch: true } })],
+		["GET", "/api/sessions"],
+		["POST", `/api/sessions/${sid}/events`, JSON.stringify([{ kind: "done" }])],
+		["POST", `/api/sessions/${sid}/message`, JSON.stringify({ text: "x" })],
+		["POST", `/api/sessions/${sid}/git/commit`, JSON.stringify({ message: "x" })],
+		["POST", `/api/sessions/${sid}/git/push`],
+		["POST", `/api/sessions/${sid}/git/pr`, JSON.stringify({ title: "x" })],
+		["POST", `/api/sessions/${sid}/git/merge`, JSON.stringify({})],
+		["DELETE", "/api/account"],
+		["GET", "/api/profile"],
+		["PATCH", "/api/profile", JSON.stringify({ displayName: "x" })],
+		["GET", "/api/chats"],
+		["GET", "/api/me"],
+		["POST", "/api/tasks", JSON.stringify({ remoteUrl: "https://github.com/Cliefden/x.git", title: "x" })],
+		["POST", "/api/push/register", JSON.stringify({ token: "x" })],
+		["POST", "/api/complete", JSON.stringify({ prefix: "x" })],
+	];
+	for (const [method, p, b] of runnerRefused) {
+		const r = await app.request(`http://localhost${p}`, { method, headers: runnerH, ...(b ? { body: b } : {}) });
+		ok(`runner token on ${method} ${p} → 403`, r.status === 403, `got ${r.status}`);
+	}
+	const lockedProxy = await app.request("http://localhost/api/agent/messages", { method: "POST", headers: runnerH, body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }) });
+	ok("runner token on the locked agent proxy → 403", lockedProxy.status === 403, `got ${lockedProxy.status}`);
+	ok("…the session it tried to drive is untouched (a user token still sees it)", (await app.request(`http://localhost/api/sessions/${sid}`, { headers: authH })).status === 200);
 
 	// ── Run review (git over the relay) ──────────────────────────────────────
 	console.log("\n== git review ==");
@@ -670,6 +710,45 @@ async function main(): Promise<void> {
 	const notActive = await app.request(`http://localhost/api/sessions/${sid}/cancel`, { method: "POST", headers: authH });
 	ok("cancel on an editor session without a runner → 409 (unchanged)", notActive.status === 409, `got ${notActive.status}`);
 
+	// The gateway socket bridge: only /api/anthropic/* reaches the daemon, even on a kept-alive connection.
+	const { gatewayPath, openGatewaySocket } = await import("../src/runner/sandbox.ts");
+	ok("gatewayPath: gateway paths pass (query kept)", gatewayPath("/api/anthropic/v1/messages?beta=true") === "/api/anthropic/v1/messages?beta=true" && gatewayPath("/api/anthropic/v1/models") === "/api/anthropic/v1/models");
+	ok("gatewayPath: anything else, traversal, encoded traversal, other origins, look-alikes → refused",
+		["/api/sessions", "/api/account", "/api/anthropic/../sessions", "/api/anthropic/%2e%2e/account", "/api/anthropic/%2E%2E/%2E%2E/api/account", "//evil.test/api/anthropic/v1/messages", "/api/anthropicx/v1", "/api/anthropic", "api/anthropic/v1/messages", "http://localhost/api/anthropic/v1/messages", "\\api\\anthropic\\..\\sessions", ""].every((u) => gatewayPath(u) === undefined),
+		JSON.stringify(["/api/anthropic/../sessions", "/api/anthropic/%2e%2e/account"].map(gatewayPath)));
+	{
+		const http = await import("node:http");
+		const { serve } = await import("@hono/node-server");
+		const daemon = await new Promise<import("node:net").Server>((resolve) => { const s = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" }, () => resolve(s as unknown as import("node:net").Server)); });
+		const port = (daemon.address() as import("node:net").AddressInfo).port;
+		const sock = path.join(HOME, "gw.sock");
+		const bridge = await openGatewaySocket(sock, { host: "127.0.0.1", port });
+		const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+		const viaSock = (method: string, p: string, b?: string) => new Promise<{ status: number; text: string }>((resolve, reject) => {
+			const req = http.request({ socketPath: sock, agent, method, path: p, headers: { ...runnerH, host: "127.0.0.1:8080" } }, (res) => {
+				let text = "";
+				res.on("data", (d: Buffer) => { text += d.toString(); });
+				res.on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+			});
+			req.on("error", reject);
+			req.end(b);
+		});
+		const g1 = await viaSock("POST", "/api/anthropic/v1/messages", body);
+		ok("bridge: a gateway request goes through to the daemon (SSE streamed back)", g1.status === 200 && g1.text.includes("message_start"), `${g1.status} ${g1.text.slice(0, 80)}`);
+		const d1 = await viaSock("DELETE", "/api/account");
+		ok("bridge: DELETE /api/account on the same kept-alive connection → 403 from the bridge", d1.status === 403 && d1.text.includes("only reach the agent gateway"), `${d1.status} ${d1.text}`);
+		const s1 = await viaSock("POST", "/api/sessions", JSON.stringify({ title: "x", origin: "phone", runner: "editor" }));
+		ok("bridge: POST /api/sessions → 403", s1.status === 403, `${s1.status}`);
+		const t1 = await viaSock("POST", "/api/anthropic/../sessions", JSON.stringify({ title: "x", origin: "phone", runner: "editor" }));
+		ok("bridge: traversal out of the gateway prefix → 403", t1.status === 403, `${t1.status}`);
+		const g2 = await viaSock("POST", "/api/anthropic/v1/messages", body);
+		ok("bridge: the connection still serves the gateway after refusals", g2.status === 200, `${g2.status}`);
+		agent.destroy();
+		bridge.close();
+		bridge.closeAllConnections();
+		daemon.close();
+	}
+
 	// ── Server runner (offline local repo) ────────────────────────────────────
 	console.log("\n== server runner ==");
 	const repo = path.join(HOME, "origin");
@@ -711,13 +790,7 @@ async function main(): Promise<void> {
 	const { overrideServerRunnerForTests } = await import("../src/runner/manager.ts");
 	const { overrideCloudRemoteForTests, WAITING_FOR_APP } = await import("../src/tasks/cloud.ts");
 	// A plain user token (no run id) — what the editor sends.
-	const userJwt = (() => {
-		const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
-		const now = Math.floor(Date.now() / 1000);
-		const input = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: "smoke-user", role: "authenticated", aud: "authenticated", iat: now, exp: now + 600 })}`;
-		return `${input}.${crypto.createHmac("sha256", process.env.SUPABASE_JWT_SECRET!).update(input).digest("base64url")}`;
-	})();
-	const userH = { "content-type": "application/json", authorization: `Bearer ${userJwt}` };
+	const userH = { "content-type": "application/json", authorization: `Bearer ${userToken("smoke-user")}` };
 	const gwBodyPlain = JSON.stringify({ model: AGENT_MODEL, max_tokens: 10, stream: true, messages: [{ role: "user", content: "hi" }] });
 	const until = async (pred: () => Promise<boolean> | boolean, ms = 10_000): Promise<boolean> => {
 		const t0 = Date.now();
@@ -1089,19 +1162,63 @@ async function main(): Promise<void> {
 	ok("…the session remembers the PR and the pushed sha", (await getCs(cs.id))?.repo?.pr?.number === 7 && (await getCs(cs.id))?.repo?.remoteSha === cm.sha, JSON.stringify((await getCs(cs.id))?.repo));
 	const mg = (await (await app.request(`${S}/${cs.id}/git/merge`, { method: "POST", headers: authH, body: JSON.stringify({ method: "squash" }) })).json()) as { merged?: boolean };
 	ok("git/merge → merged via the App (squash)", mg.merged === true && csCalls.some((c) => c.method === "PUT" && c.path === `${csBase}/pulls/7/merge` && c.body?.merge_method === "squash"), JSON.stringify(mg));
+	// A follow-up first brings the session up to date with GitHub: a reviewer's commit lands on the branch meanwhile.
+	const csEvents = (id: string) => sessionStores.for("smoke-user").replay(id, 0).events;
+	const lastError = (id: string) => (csEvents(id).filter((e) => e.kind === "error").pop() as { message?: string } | undefined)?.message ?? "";
+	const reviewer = path.join(HOME, "cs-reviewer");
+	await run("git", ["clone", "-q", "-b", branch, csBare, reviewer]);
+	fs.writeFileSync(path.join(reviewer, "review.md"), "reviewed\n");
+	await run("git", ["-C", reviewer, "add", "-A"]);
+	await run("git", ["-C", reviewer, "-c", "user.name=r", "-c", "user.email=r@r", "commit", "-q", "-m", "review"]);
+	await run("git", ["-C", reviewer, "push", "-q", "origin", branch]);
+	const reviewSha = (await run("git", ["-C", reviewer, "rev-parse", "HEAD"])).stdout.trim();
+	const ffFu = await app.request(`${S}/${cs.id}/message`, { method: "POST", headers: authH, body: JSON.stringify({ text: "third turn" }) });
+	ok("follow-up after a reviewer pushed → 200, the turn runs", ffFu.status === 200 && await until(() => csTurns.length === 3) && await until(async () => (await getCs(cs.id))?.state === "done"), JSON.stringify({ status: ffFu.status, turns: csTurns.length, err: lastError(cs.id) }));
+	ok("…on the fast-forwarded branch (the reviewer's file is in the worktree, HEAD contains their commit)", fs.existsSync(path.join(csDir, "review.md")) && (await run("git", ["-C", csDir, "merge-base", "--is-ancestor", reviewSha, "HEAD"]).then(() => true, () => false)));
+	ok("…told on the session log, and the session's remote sha is GitHub's", csEvents(cs.id).some((e) => e.kind === "activity" && (e as { text?: string }).text?.startsWith(`Brought ${branch} up to date with GitHub`)) && (await getCs(cs.id))?.repo?.remoteSha === reviewSha, JSON.stringify((await getCs(cs.id))?.repo));
+	await app.request(`${S}/${cs.id}/git/commit`, { method: "POST", headers: authH, body: JSON.stringify({ message: "Turn 3" }) });
+	const ffPush = await app.request(`${S}/${cs.id}/git/push`, { method: "POST", headers: authH });
+	ok("…so the next push is a plain fast-forward on top of the reviewer's commit", ffPush.status === 200 && (await run("git", ["-C", csBare, "merge-base", "--is-ancestor", reviewSha, branch]).then(() => true, () => false)) && (await run("git", ["-C", csBare, "rev-parse", branch])).stdout.trim() === (await run("git", ["-C", csDir, "rev-parse", "HEAD"])).stdout.trim(), `got ${ffPush.status}`);
+	// The branch is deleted on GitHub (the PR was merged): the follow-up says so instead of running on a ghost.
+	await run("git", ["-C", csBare, "branch", "-q", "-D", branch]);
+	const delFu = await app.request(`${S}/${cs.id}/message`, { method: "POST", headers: authH, body: JSON.stringify({ text: "fourth turn" }) });
+	ok("follow-up after the branch was deleted on GitHub → session error with the reason, no turn", delFu.status === 200 && await until(async () => (await getCs(cs.id))?.state === "error") && csTurns.length === 3 && lastError(cs.id).includes("no longer exists on GitHub"), JSON.stringify({ turns: csTurns.length, err: lastError(cs.id) }));
+	const delPush = await app.request(`${S}/${cs.id}/git/push`, { method: "POST", headers: authH });
+	ok("…and its own celiador/ branch isn't silently re-created by a push either (lease fails)", delPush.status === 400 && !(await run("git", ["-C", csBare, "rev-parse", "--verify", "-q", branch]).then(() => true, () => false)), `got ${delPush.status}`);
 	// An existing branch: work on it directly; a second session can't take the same branch.
 	const exRes = await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt: "Continue feature", repo: { url: CSREPO, branch: "feature", existingBranch: true } }) });
 	const ex = ((await exRes.json()) as { session: { id: string } }).session;
 	ok("existingBranch → works directly on it (remote sha known, base = default branch)", await until(async () => (await getCs(ex.id))?.state === "done") && (await getCs(ex.id))?.repo?.branch === "feature" && (await getCs(ex.id))?.repo?.existingBranch === true && (await getCs(ex.id))?.repo?.base === "main" && !!(await getCs(ex.id))?.repo?.remoteSha, JSON.stringify(await getCs(ex.id)));
 	const ex2 = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt: "Same branch", repo: { url: CSREPO, branch: "feature", existingBranch: true } }) })).json()) as { session: { id: string } }).session;
 	ok("…a second session on that branch while the first has it → error, not a shared checkout", await until(async () => (await getCs(ex2.id))?.state === "error"));
+	// Pushing an existing branch: fast-forward only, never forced.
+	const exDir = workspaceDir("smoke-user", ex.id);
+	const featureSha = async () => (await run("git", ["-C", csBare, "rev-parse", "feature"])).stdout.trim();
+	const exCm = (await (await app.request(`${S}/${ex.id}/git/commit`, { method: "POST", headers: authH, body: JSON.stringify({ message: "On feature" }) })).json()) as { sha?: string };
+	const exPush = await app.request(`${S}/${ex.id}/git/push`, { method: "POST", headers: authH });
+	ok("existingBranch: commit + push → a fast-forward of feature on GitHub", exPush.status === 200 && !!exCm.sha && await featureSha() === exCm.sha, `got ${exPush.status}`);
+	// The agent rewrites a commit that is already on GitHub (amend): the push must not force it over.
+	await run("git", ["-C", exDir, "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-q", "--amend", "-m", "rewritten by the agent"]);
+	const rwPush = await app.request(`${S}/${ex.id}/git/push`, { method: "POST", headers: authH });
+	const rwErr = rwPush.status === 200 ? "" : (((await rwPush.json()) as { error?: string }).error ?? "");
+	ok("existingBranch: push after the agent amended a pushed commit → refused, GitHub's feature untouched", rwPush.status === 400 && /never force-pushes/.test(rwErr) && await featureSha() === exCm.sha, `${rwPush.status} ${rwErr}`);
+	const turnsBefore = csTurns.length;
+	const dvFu = await app.request(`${S}/${ex.id}/message`, { method: "POST", headers: authH, body: JSON.stringify({ text: "carry on" }) });
+	ok("…and a follow-up on the diverged branch → session error with the reason, no turn", dvFu.status === 200 && await until(async () => (await getCs(ex.id))?.state === "error") && csTurns.length === turnsBefore && lastError(ex.id).includes("can't be brought up to date by a fast-forward"), JSON.stringify({ err: lastError(ex.id) }));
+	// Behind GitHub (e.g. the agent reset): the push says to send a follow-up, and the follow-up does fast-forward.
+	await run("git", ["-C", exDir, "reset", "-q", "--hard", "HEAD~1"]);
+	const bhPush = await app.request(`${S}/${ex.id}/git/push`, { method: "POST", headers: authH });
+	const bhErr = bhPush.status === 200 ? "" : (((await bhPush.json()) as { error?: string }).error ?? "");
+	ok("existingBranch: push while behind GitHub → refused with \"send a follow-up\"", bhPush.status === 400 && /Send a follow-up to bring the session up to date/.test(bhErr) && await featureSha() === exCm.sha, `${bhPush.status} ${bhErr}`);
+	const bhFu = await app.request(`${S}/${ex.id}/message`, { method: "POST", headers: authH, body: JSON.stringify({ text: "carry on" }) });
+	ok("…which works: the follow-up fast-forwards onto GitHub's feature and runs the turn", bhFu.status === 200 && await until(() => csTurns.length === turnsBefore + 1) && await until(async () => (await getCs(ex.id))?.state === "done") && (await run("git", ["-C", exDir, "rev-parse", "HEAD"])).stdout.trim() === exCm.sha, JSON.stringify({ err: lastError(ex.id) }));
 	ok("existingBranch without a branch → 400", (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "x", repo: { url: CSREPO, existingBranch: true } }) })).status === 400);
 	ok("a bad branch name → 400", (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "x", repo: { url: CSREPO, branch: "--upload-pack=evil" } }) })).status === 400);
 	// Deleting the session detaches its worktree and drops its local branch from the mirror.
 	await app.request(`${S}/${ex.id}`, { method: "DELETE", headers: authH });
 	ok("delete → worktree gone from the mirror", await until(async () => !(await run("git", ["-C", mirrorDir("smoke-user", CSREPO), "worktree", "list"])).stdout.includes(workspaceDir("smoke-user", ex.id))));
 	// Someone else's repo: refused. An unlinked repo: runs without the App, can't push.
-	const otherH = { "content-type": "application/json", authorization: `Bearer ${mintRunnerToken("other-user", "other-run", 300)!}` };
+	const otherH = { "content-type": "application/json", authorization: `Bearer ${userToken("other-user")}` };
 	const OTHER = "https://github.com/Cliefden/other-repo.git";
 	await app.request(`${T}/repos`, { method: "POST", headers: otherH, body: JSON.stringify({ remoteUrl: OTHER }) });
 	ok("a repo linked to another account → 403", (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "x", repo: { url: OTHER } }) })).status === 403);

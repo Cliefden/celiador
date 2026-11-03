@@ -1,6 +1,6 @@
 import { spawn, execFile } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
+import http from "node:http";
 import path from "node:path";
 import readline from "node:readline";
 import { promisify } from "node:util";
@@ -21,11 +21,13 @@ const execFileP = promisify(execFile);
  * - `--network none`: no egress at all — not the internet, not the box, not
  *   other containers. The only way out is a Unix socket the daemon creates for
  *   this run and mounts in; a tiny bridge inside the container exposes it as
- *   127.0.0.1:8080, and the daemon side forwards it to the daemon's own
- *   Anthropic gateway. So the agent can talk to the model and nothing else.
+ *   127.0.0.1:8080, and the daemon side (openGatewaySocket) forwards only
+ *   /api/anthropic/* requests to the daemon's own Anthropic gateway. So the
+ *   agent can talk to the model and nothing else.
  * - Auth to the gateway is a runner token minted for this user and run (2 h),
- *   so model usage meters against the user's quota like any other request, and
- *   the token is useless outside this run's gateway path.
+ *   so model usage meters against the user's quota like any other request. The
+ *   daemon accepts runner tokens on the gateway only (auth.ts), so a token the
+ *   agent leaks can't start sessions, push, merge or touch the account.
  * - Read-only root filesystem, tmpfs for /tmp and $HOME, all capabilities
  *   dropped, no-new-privileges, the daemon's own non-root uid, CPU / memory /
  *   pid caps, a wall-clock limit, and `docker kill` on cancel.
@@ -83,19 +85,72 @@ export function streamLineResult(line: string): { ok: boolean; text: string } | 
   }
 }
 
+/** The only path prefix the sandbox may reach on the daemon: the Anthropic gateway. */
+export const GATEWAY_PREFIX = "/api/anthropic/";
+
 /**
- * Bridge a per-run Unix socket to the daemon's own HTTP port. Raw byte piping —
- * the gateway's normal auth, quota and logging apply unchanged.
+ * The normalised path + query a sandbox request may be forwarded with, or
+ * undefined when it falls outside the gateway. Normalising first (`..`, `%2e`,
+ * `\`) and forwarding the normalised form means the check and the daemon's
+ * router see the same path. Pure; exported for tests.
  */
-async function openGatewaySocket(socketPath: string): Promise<net.Server> {
+export function gatewayPath(rawUrl: string | undefined): string | undefined {
+  if (!rawUrl || !rawUrl.startsWith("/")) return undefined;
+  const origin = "http://gateway.invalid";
+  let u: URL;
+  try {
+    u = new URL(rawUrl, origin);
+  } catch {
+    return undefined;
+  }
+  // `//host/...` would resolve to another origin.
+  if (u.origin !== origin || !u.pathname.startsWith(GATEWAY_PREFIX)) return undefined;
+  return u.pathname + u.search;
+}
+
+/** Hop-by-hop headers, never forwarded by a proxy. */
+const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"]);
+function endToEnd(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  const out: http.OutgoingHttpHeaders = {};
+  for (const [k, v] of Object.entries(headers)) if (v !== undefined && !HOP_BY_HOP.has(k)) out[k] = v;
+  return out;
+}
+
+/** Where the bridge forwards to: the daemon's own HTTP port. */
+function daemonTarget(): { host: string; port: number } {
+  return { host: HOST === "0.0.0.0" || HOST === "::" ? "127.0.0.1" : HOST, port: PORT };
+}
+
+/**
+ * Bridge a per-run Unix socket to the daemon's own HTTP port — the Anthropic
+ * gateway only. Celiador edit (cloud-session hardening): this used to pipe raw
+ * bytes to the WHOLE daemon port; it is now an HTTP proxy that parses each
+ * request (keep-alive included) and forwards only paths under GATEWAY_PREFIX,
+ * answering 403 to anything else (upgrades / CONNECT are dropped by Node). The
+ * gateway's normal auth, quota and logging still apply; requireUser refusing
+ * runner tokens is the other half (auth.ts). Exported (with a target) for tests.
+ */
+export async function openGatewaySocket(socketPath: string, target = daemonTarget()): Promise<http.Server> {
   await fs.promises.rm(socketPath, { force: true });
-  const target = { host: HOST === "0.0.0.0" || HOST === "::" ? "127.0.0.1" : HOST, port: PORT };
-  const server = net.createServer((inbound) => {
-    const outbound = net.connect(target);
-    inbound.pipe(outbound).pipe(inbound);
-    const close = () => { inbound.destroy(); outbound.destroy(); };
-    inbound.on("error", close);
-    outbound.on("error", close);
+  const server = http.createServer((req, res) => {
+    const forwardPath = gatewayPath(req.url);
+    if (!forwardPath) {
+      req.resume();
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "error", error: { type: "permission_error", message: "the cloud runner can only reach the agent gateway" }, request_id: null }));
+      return;
+    }
+    const upstream = http.request({ host: target.host, port: target.port, method: req.method, path: forwardPath, headers: endToEnd(req.headers) }, (up) => {
+      res.writeHead(up.statusCode ?? 502, endToEnd(up.headers));
+      up.pipe(res);
+    });
+    upstream.on("error", () => {
+      if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+      res.end();
+    });
+    // The agent hung up mid-stream → stop the upstream turn too.
+    res.on("close", () => { if (!res.writableFinished) upstream.destroy(); });
+    req.pipe(upstream);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -226,6 +281,7 @@ export const sandboxAgent: RunnerAgent = async (ctx) => {
     if (!result.ok) throw new Error(`the agent stopped: ${result.text || "error"}`);
   } finally {
     server.close();
+    server.closeAllConnections();
     await fs.promises.rm(gatewayDir, { recursive: true, force: true });
   }
 };

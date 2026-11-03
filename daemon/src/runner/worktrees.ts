@@ -154,10 +154,18 @@ export async function fetchBranch(p: { userId: string; url: string; remote?: str
   const remote = authedUrl(p.remote ?? p.url, p.token);
   return withMirror(mirror, async () => {
     const ref = `refs/heads/${p.branch}`;
-    const sha = (await git(mirror, ["ls-remote", remote, ref], { timeout: NETWORK_TIMEOUT_MS, secret: p.token })).split(/\s+/)[0] ?? "";
+    // ls-remote patterns match on a tail (`refs/heads/x` also matches `refs/heads/a/refs/heads/x`): take the exact ref.
+    const out = await git(mirror, ["ls-remote", remote, ref], { timeout: NETWORK_TIMEOUT_MS, secret: p.token });
+    const sha = out.split("\n").map((l) => l.split(/\s+/)).find((cols) => cols[1] === ref)?.[0] ?? "";
     if (sha) await git(mirror, ["fetch", "-q", "--no-tags", remote, `+${ref}:refs/remotes/origin/${p.branch}`], { timeout: NETWORK_TIMEOUT_MS, secret: p.token });
+    else await git(mirror, ["update-ref", "-d", `refs/remotes/origin/${p.branch}`]).catch(() => undefined);
     return sha;
   });
+}
+
+/** Whether commit `a` is an ancestor of (or equal to) `b` in `dir`. Any git failure counts as "no". */
+export async function isAncestor(dir: string, a: string, b: string): Promise<boolean> {
+  return git(dir, ["merge-base", "--is-ancestor", a, b]).then(() => true, () => false);
 }
 
 /** Whether `dir` holds a live worktree (or any checkout). */
