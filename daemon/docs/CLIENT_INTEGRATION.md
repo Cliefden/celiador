@@ -80,9 +80,11 @@ Usage accumulates on the session and is persisted with it:
 
 `inputTokens` is the total input, cache included; `cacheReadTokens` / `cacheWriteTokens`
 break it down (an agent turn re-reads its whole context on every request, so most input is
-cache reads). `costUsd` = tokens × the daemon's published rate card (`GET /api/limits` →
-`prices: { currency: "USD", inputPerMtok: 15, cacheWritePerMtok: 18.75, cacheReadPerMtok: 1.5, outputPerMtok: 75 }`
-by default). Exposed as:
+cache reads). `costUsd` is the sum of each request's cost at its model's rates — the same
+pricing the daily dollar budget (`limits.dailyUsd`) is charged at. The rate cards are public:
+`GET /api/limits` → `prices` (the agent model, e.g. claude-opus-4-8:
+`{ currency: "USD", model: "claude-opus-4-8", inputPerMtok: 5, cacheWritePerMtok: 6.25, cacheWrite1hPerMtok: 10, cacheReadPerMtok: 0.5, outputPerMtok: 25 }`)
+and `modelPrices` (one card per model the gateway serves). Exposed as:
 
 | Where | Field |
 |---|---|

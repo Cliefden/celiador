@@ -109,6 +109,7 @@ export async function anthropicGateway(c: Context) {
     forwarded.output_config = withoutEffort(body.output_config);
   }
   const streaming = forwarded.stream === true;
+  const model = forwarded.model as string; // what the request is priced at
 
   const ac = new AbortController();
   c.req.raw.signal.addEventListener("abort", () => ac.abort());
@@ -134,10 +135,13 @@ export async function anthropicGateway(c: Context) {
       const text = await upstream.text();
       if (upstream.ok) {
         try {
-          const json = JSON.parse(text) as { usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } };
+          const json = JSON.parse(text) as {
+            usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; cache_creation?: { ephemeral_1h_input_tokens?: number } };
+          };
           const cacheWrite = json.usage?.cache_creation_input_tokens ?? 0;
           const cacheRead = json.usage?.cache_read_input_tokens ?? 0;
-          recordUsage(quotaKey, user, mirrorKey, { input: (json.usage?.input_tokens ?? 0) + cacheWrite + cacheRead, cacheRead, cacheWrite, output: json.usage?.output_tokens ?? 0 });
+          const cacheWrite1h = json.usage?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+          recordUsage(quotaKey, user, mirrorKey, { input: (json.usage?.input_tokens ?? 0) + cacheWrite + cacheRead, cacheRead, cacheWrite, cacheWrite1h, output: json.usage?.output_tokens ?? 0, model });
         } catch {
           /* non-JSON body — skip accounting */
         }
@@ -166,7 +170,7 @@ export async function anthropicGateway(c: Context) {
     } catch (err) {
       if (!ac.signal.aborted) console.error("[gateway] stream error:", err instanceof Error ? err.message : err);
     } finally {
-      recordUsage(quotaKey, user, mirrorKey, usage.tokens);
+      recordUsage(quotaKey, user, mirrorKey, { ...usage.tokens, model });
       release();
     }
   });
@@ -191,10 +195,9 @@ export async function anthropicModels(c: Context) {
 
 /** Quota (per user) + run attribution (per session) for one request's tokens. */
 function recordUsage(quotaKey: string, user: AuthResult | null, mirrorKey: string | undefined, tokens: TokenCounts): void {
-  const inputTokens = Math.max(0, tokens.input);
-  const outputTokens = Math.max(0, tokens.output);
-  agentQuota.record(quotaKey, inputTokens, outputTokens); // the quota counts every input token alike
-  attributeUsage(user, mirrorKey, { ...tokens, input: inputTokens, output: outputTokens });
+  const counted = { ...tokens, input: Math.max(0, tokens.input), output: Math.max(0, tokens.output) };
+  agentQuota.record(quotaKey, counted); // the dollar budget: each token kind at the model's rate
+  attributeUsage(user, mirrorKey, counted);
 }
 
 /**
@@ -205,11 +208,11 @@ function recordUsage(quotaKey: string, user: AuthResult | null, mirrorKey: strin
  */
 function newUsageScanner() {
   let carry = "";
-  const state = { inputTokens: 0, cacheRead: 0, cacheWrite: 0, outputTokens: 0, gotInput: false };
+  const state = { inputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, outputTokens: 0, gotInput: false };
   return {
     /** Totals so far; `input` includes the cache tokens, which are also broken out. */
     get tokens(): TokenCounts {
-      return { input: state.inputTokens, cacheRead: state.cacheRead, cacheWrite: state.cacheWrite, output: state.outputTokens };
+      return { input: state.inputTokens, cacheRead: state.cacheRead, cacheWrite: state.cacheWrite, cacheWrite1h: state.cacheWrite1h, output: state.outputTokens };
     },
     scan(chunk: string) {
       const text = carry + chunk;
@@ -218,6 +221,7 @@ function newUsageScanner() {
         if (input) {
           state.cacheWrite = Number(/"cache_creation_input_tokens":\s*(\d+)/.exec(text)?.[1] ?? 0);
           state.cacheRead = Number(/"cache_read_input_tokens":\s*(\d+)/.exec(text)?.[1] ?? 0);
+          state.cacheWrite1h = Number(/"ephemeral_1h_input_tokens":\s*(\d+)/.exec(text)?.[1] ?? 0);
           state.inputTokens = Number(input[1]) + state.cacheWrite + state.cacheRead;
           state.gotInput = true;
         }

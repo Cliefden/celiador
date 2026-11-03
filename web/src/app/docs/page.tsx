@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
-import { formatLimit, publishedLimits } from "@/lib/limits";
+import { formatLimit, formatUsdLimit, publishedLimits } from "@/lib/limits";
 import { latestMacDmgHref, latestMacRelease } from "@/lib/releases";
 import { site } from "@/lib/site";
 
@@ -185,8 +185,10 @@ export default async function DocsPage() {
                 ["Agent requests per minute", formatLimit(limits.limits.rpm)],
                 ["Concurrent agent requests", formatLimit(limits.limits.concurrency)],
                 ["Agent requests per day (UTC)", formatLimit(limits.limits.dailyRequests)],
-                ["Input tokens per day (UTC)", formatLimit(limits.limits.dailyInput)],
-                ["Output tokens per day (UTC)", formatLimit(limits.limits.dailyOutput)],
+                ["Agent usage per day (UTC, at list price)", formatUsdLimit(limits.limits.dailyUsd)],
+                // Optional token caps (0 = off); listed only when one is set.
+                ...(limits.limits.dailyInput ? [["Input tokens per day (UTC)", formatLimit(limits.limits.dailyInput)]] : []),
+                ...(limits.limits.dailyOutput ? [["Output tokens per day (UTC)", formatLimit(limits.limits.dailyOutput)]] : []),
                 ["Model", limits.model],
               ].map(([k, v]) => (
                 <tr key={k} className="border-b border-line last:border-b-0">

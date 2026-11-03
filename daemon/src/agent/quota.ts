@@ -1,34 +1,48 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT } from "../config";
+import { costUsd, round6, type TokenCounts } from "./pricing";
 
 /**
  * Per-user limits for the Anthropic proxy (the daemon's shared, paid key).
+ * The budget is in DOLLARS (agent/pricing.ts: each request priced at its model's
+ * input / cache-write / cache-read / output rates), so a cache-heavy agent turn
+ * counts what it really costs instead of as millions of "input tokens".
  * Signup is open, so every account gets:
  *   - a per-minute request rate      CELIADOR_AGENT_RPM                 (default 30)
  *   - a concurrent-stream cap        CELIADOR_AGENT_CONCURRENCY         (default 2)
  *   - a daily request budget         CELIADOR_AGENT_DAILY_REQUESTS      (default 500)
- *   - a daily input-token budget     CELIADOR_AGENT_DAILY_INPUT_TOKENS  (default 5,000,000)
- *   - a daily output-token budget    CELIADOR_AGENT_DAILY_OUTPUT_TOKENS (default 300,000)
+ *   - a daily spend budget, USD      CELIADOR_AGENT_DAILY_USD           (default 10)
  * and, across ALL accounts together (so scripted signups can't run the key dry):
- *   - a daily request cap            CELIADOR_AGENT_GLOBAL_DAILY_REQUESTS      (default 3,000)
- *   - a daily input-token cap        CELIADOR_AGENT_GLOBAL_DAILY_INPUT_TOKENS  (default 20,000,000)
- *   - a daily output-token cap       CELIADOR_AGENT_GLOBAL_DAILY_OUTPUT_TOKENS (default 1,000,000)
- * Set any of them to 0 to disable that limit. Days are UTC. Daily usage persists
- * to <CELIADOR_HOME>/data/quota/usage.json so a restart doesn't reset budgets; the
- * per-minute window and concurrency are in-memory only. Finished days are kept
- * (HISTORY_DAYS) in data/quota/history.json for GET /api/admin/usage.
+ *   - a daily request cap            CELIADOR_AGENT_GLOBAL_DAILY_REQUESTS (default 3,000)
+ *   - a daily spend cap, USD         CELIADOR_AGENT_GLOBAL_DAILY_USD      (default 100)
+ * The token budgets are still honoured as optional hard caps, OFF by default
+ * (they count every input token alike, cache reads included):
+ *   CELIADOR_AGENT_DAILY_INPUT_TOKENS, CELIADOR_AGENT_DAILY_OUTPUT_TOKENS,
+ *   CELIADOR_AGENT_GLOBAL_DAILY_INPUT_TOKENS, CELIADOR_AGENT_GLOBAL_DAILY_OUTPUT_TOKENS
+ * Set any of them to 0 to disable that limit. Days are UTC. Budgets are checked
+ * before a request and charged after it (a request's cost is only known once it
+ * has run), so the last request of the day can overshoot by one turn. Daily usage
+ * persists to <CELIADOR_HOME>/data/quota/usage.json so a restart doesn't reset
+ * budgets; the per-minute window and concurrency are in-memory only. Finished days
+ * are kept (HISTORY_DAYS) in data/quota/history.json for GET /api/admin/usage.
  */
 
-interface DayUsage {
+export interface DayUsage {
   requests: number;
+  /** All input tokens, cache reads and writes included. */
   inputTokens: number;
   outputTokens: number;
+  /** Of `inputTokens`: prompt-cache reads / writes (absent on days recorded before the dollar budget). */
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** What those tokens cost, USD, at each request's model rates. */
+  costUsd: number;
 }
 
 interface UsageFile {
   day: string;
-  users: Record<string, DayUsage>;
+  users: Record<string, Partial<DayUsage>>;
 }
 
 /** Finished days kept for the admin usage view. */
@@ -45,20 +59,34 @@ const limits = () => ({
   rpm: limit("CELIADOR_AGENT_RPM", 30),
   concurrency: limit("CELIADOR_AGENT_CONCURRENCY", 2),
   dailyRequests: limit("CELIADOR_AGENT_DAILY_REQUESTS", 500),
-  dailyInput: limit("CELIADOR_AGENT_DAILY_INPUT_TOKENS", 5_000_000),
-  dailyOutput: limit("CELIADOR_AGENT_DAILY_OUTPUT_TOKENS", 300_000),
+  dailyUsd: limit("CELIADOR_AGENT_DAILY_USD", 10),
+  dailyInput: limit("CELIADOR_AGENT_DAILY_INPUT_TOKENS", 0),
+  dailyOutput: limit("CELIADOR_AGENT_DAILY_OUTPUT_TOKENS", 0),
   globalDailyRequests: limit("CELIADOR_AGENT_GLOBAL_DAILY_REQUESTS", 3_000),
-  globalDailyInput: limit("CELIADOR_AGENT_GLOBAL_DAILY_INPUT_TOKENS", 20_000_000),
-  globalDailyOutput: limit("CELIADOR_AGENT_GLOBAL_DAILY_OUTPUT_TOKENS", 1_000_000),
+  globalDailyUsd: limit("CELIADOR_AGENT_GLOBAL_DAILY_USD", 100),
+  globalDailyInput: limit("CELIADOR_AGENT_GLOBAL_DAILY_INPUT_TOKENS", 0),
+  globalDailyOutput: limit("CELIADOR_AGENT_GLOBAL_DAILY_OUTPUT_TOKENS", 0),
 });
 
-function sum(users: Record<string, DayUsage>): DayUsage {
-  const total = { requests: 0, inputTokens: 0, outputTokens: 0 };
-  for (const u of Object.values(users)) {
+const empty = (): DayUsage => ({ requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 });
+
+/** Fill the fields a record written by an older daemon lacks. */
+function normalize(u: Partial<DayUsage> | undefined): DayUsage {
+  return { ...empty(), ...(u ?? {}) };
+}
+
+function sum(users: Record<string, Partial<DayUsage>>): DayUsage {
+  const total = empty();
+  for (const raw of Object.values(users)) {
+    const u = normalize(raw);
     total.requests += u.requests;
     total.inputTokens += u.inputTokens;
     total.outputTokens += u.outputTokens;
+    total.cacheReadTokens += u.cacheReadTokens;
+    total.cacheWriteTokens += u.cacheWriteTokens;
+    total.costUsd += u.costUsd;
   }
+  total.costUsd = round6(total.costUsd);
   return total;
 }
 
@@ -72,10 +100,10 @@ export function activeLimits(): UserLimits {
 }
 
 /** The per-account limits only; the global caps stay private (no point telling anyone the headroom). */
-type UserLimits = Pick<ReturnType<typeof limits>, "rpm" | "concurrency" | "dailyRequests" | "dailyInput" | "dailyOutput">;
+export type UserLimits = Pick<ReturnType<typeof limits>, "rpm" | "concurrency" | "dailyRequests" | "dailyUsd" | "dailyInput" | "dailyOutput">;
 function userLimits(): UserLimits {
-  const { rpm, concurrency, dailyRequests, dailyInput, dailyOutput } = limits();
-  return { rpm, concurrency, dailyRequests, dailyInput, dailyOutput };
+  const { rpm, concurrency, dailyRequests, dailyUsd, dailyInput, dailyOutput } = limits();
+  return { rpm, concurrency, dailyRequests, dailyUsd, dailyInput, dailyOutput };
 }
 
 /** One day of usage as the admin view reports it. */
@@ -120,7 +148,9 @@ class AgentQuota {
 
   private day(userId: string): DayUsage {
     this.rollover();
-    return (this.usage.users[userId] ??= { requests: 0, inputTokens: 0, outputTokens: 0 });
+    const u = normalize(this.usage.users[userId]);
+    this.usage.users[userId] = u;
+    return u;
   }
 
   private readHistory(): UsageFile[] {
@@ -155,7 +185,12 @@ class AgentQuota {
     return all
       .sort((a, b) => b.day.localeCompare(a.day))
       .slice(0, Math.max(1, days))
-      .map((d) => ({ day: d.day, total: sum(d.users), accounts: Object.keys(d.users).length, users: d.users }));
+      .map((d) => ({
+        day: d.day,
+        total: sum(d.users),
+        accounts: Object.keys(d.users).length,
+        users: Object.fromEntries(Object.entries(d.users).map(([k, v]) => [k, normalize(v)])),
+      }));
   }
 
   /**
@@ -171,6 +206,9 @@ class AgentQuota {
     if (l.dailyRequests && used.requests >= l.dailyRequests) {
       return { error: "Daily request limit reached.", retryAfter: secondsToMidnight };
     }
+    if (l.dailyUsd && used.costUsd >= l.dailyUsd) {
+      return { error: "Daily agent budget used up.", retryAfter: secondsToMidnight };
+    }
     if (l.dailyInput && used.inputTokens >= l.dailyInput) {
       return { error: "Daily input-token budget used up.", retryAfter: secondsToMidnight };
     }
@@ -180,10 +218,11 @@ class AgentQuota {
     const total = sum(this.usage.users);
     if (
       (l.globalDailyRequests && total.requests >= l.globalDailyRequests) ||
+      (l.globalDailyUsd && total.costUsd >= l.globalDailyUsd) ||
       (l.globalDailyInput && total.inputTokens >= l.globalDailyInput) ||
       (l.globalDailyOutput && total.outputTokens >= l.globalDailyOutput)
     ) {
-      console.warn(`[quota] global daily cap reached (${total.requests} requests, ${total.inputTokens} in, ${total.outputTokens} out)`);
+      console.warn(`[quota] global daily cap reached (${total.requests} requests, $${total.costUsd.toFixed(2)}, ${total.inputTokens} in, ${total.outputTokens} out)`);
       return { error: "Celiador's agent capacity for today is used up. It resets at midnight UTC.", retryAfter: secondsToMidnight };
     }
     if (l.concurrency && (this.active.get(userId) ?? 0) >= l.concurrency) {
@@ -221,17 +260,22 @@ class AgentQuota {
   snapshot(userId: string): { usage: DayUsage; limits: UserLimits; resetsAt: string } {
     this.rollover();
     const d = this.usage.day;
-    const used = this.usage.users[userId] ?? { requests: 0, inputTokens: 0, outputTokens: 0 };
+    const used = normalize(this.usage.users[userId]);
     const resetsAt = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString();
-    return { usage: { ...used }, limits: userLimits(), resetsAt };
+    return { usage: used, limits: userLimits(), resetsAt };
   }
 
-  /** Record token usage reported by the upstream stream. */
-  record(userId: string, inputTokens: number, outputTokens: number): void {
+  /** Charge one request's tokens (as reported by the upstream stream) to the user's day. Returns the request's cost. */
+  record(userId: string, tokens: TokenCounts): number {
     const used = this.day(userId);
-    used.inputTokens += Math.max(0, inputTokens || 0);
-    used.outputTokens += Math.max(0, outputTokens || 0);
+    const cost = costUsd(tokens);
+    used.inputTokens += Math.max(0, tokens.input || 0);
+    used.outputTokens += Math.max(0, tokens.output || 0);
+    used.cacheReadTokens += Math.max(0, tokens.cacheRead || 0);
+    used.cacheWriteTokens += Math.max(0, tokens.cacheWrite || 0);
+    used.costUsd = round6(used.costUsd + cost);
     this.scheduleSave();
+    return cost;
   }
 
   private scheduleSave(): void {
