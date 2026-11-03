@@ -1,7 +1,7 @@
 import { installationToken, openPullRequest, updatePullRequestBody, type PullRequestInfo } from "../github/app";
 import { cloudRunnerAvailable, cloudRunsEnabled, hasActiveServerRun, runServerRun } from "../runner/manager";
 import type { IServerRunOutcome } from "../runner/run";
-import { git, workspaceDir } from "../runner/workspace";
+import { git, gitAddAll, workspaceDir } from "../runner/workspace";
 import { addWorktree, fetchBranch, hasCheckout } from "../runner/worktrees";
 import { sessionStores } from "../sessions/instance";
 import { publishSessionEvent } from "../sessions/publish";
@@ -240,8 +240,8 @@ async function finishTurn(
 ): Promise<void> {
   const publish = (text: string) => task.sessionId && publishSessionEvent(userId, task.sessionId, { kind: "activity", text });
   try {
-    await git(dir, ["add", "-A"]);
-    if ((await git(dir, ["diff", "--cached", "--name-only"])).trim()) {
+    await gitAddAll(dir);
+    if ((await git(dir, ["diff", "--cached", "--ignore-submodules=all", "--name-only"])).trim()) {
       publish("Committing…");
       const message = task.issue ? `${task.title} (#${task.issue.number})` : task.title;
       await git(dir, ["-c", `user.name=${COMMIT_NAME}`, "-c", `user.email=${COMMIT_EMAIL}`, "commit", "-q", "-m", message, "--author", `${COMMIT_NAME} <${COMMIT_EMAIL}>`]);

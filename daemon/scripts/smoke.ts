@@ -1117,8 +1117,15 @@ async function main(): Promise<void> {
 	});
 	ok("sessionBranch: celiador/<slug>-<id>", sessionBranch("Fix the login bug!", "AbC123-xyz") === "celiador/fix-the-login-bug-abc123", sessionBranch("Fix the login bug!", "AbC123-xyz"));
 	ok("parsePorcelain: modified, added, untracked, renamed", JSON.stringify(parsePorcelain(" M a.ts\0A  b.ts\0?? c.ts\0R  new.ts\0old.ts\0")) === JSON.stringify([{ path: "a.ts", status: "M" }, { path: "b.ts", status: "A" }, { path: "c.ts", status: "U" }, { path: "new.ts", status: "R" }]));
-	const dargs2 = dockerRunArgs({ name: "n", workspaceDir: "/w", gatewayDir: "/g", uid: 1, gid: 1, token: "t", prompt: "p", homeDir: "/h", gitCommonDir: "/m.git", continueConversation: true });
-	ok("docker run: persistent home, the worktree's mirror at its own path, --continue", dargs2.includes("/h:/home/runner") && dargs2.includes("/m.git:/m.git") && dargs2[dargs2.length - 1] === "--continue" && !dargs2.includes("/home/runner:rw,mode=1777,size=256m"), dargs2.join(" "));
+	const dargs2 = dockerRunArgs({ name: "n", workspaceDir: "/w", gatewayDir: "/g", uid: 1, gid: 1, token: "t", prompt: "p", homeDir: "/h", git: { gitDir: "/m.git/worktrees/repo", commonDir: "/m.git" }, continueConversation: true });
+	ok("docker run: persistent home, --continue", dargs2.includes("/h:/home/runner") && dargs2[dargs2.length - 1] === "--continue" && !dargs2.includes("/home/runner:rw,mode=1777,size=256m"), dargs2.join(" "));
+	const vols2 = dargs2.filter((_, i) => dargs2[i - 1] === "-v");
+	ok("docker run (#78): the mirror read-only at its own path; only objects, refs, logs and this worktree's metadata writable", JSON.stringify(vols2) === JSON.stringify([
+		"/h:/home/runner", "/w:/workspace", "/g:/run/celiador", "/w:/w",
+		"/m.git:/m.git:ro", "/m.git/objects:/m.git/objects", "/m.git/refs:/m.git/refs", "/m.git/logs:/m.git/logs", "/m.git/worktrees/repo:/m.git/worktrees/repo",
+	]), JSON.stringify(vols2));
+	ok("…no read-write mount of the mirror root, its config, hooks or worktrees/", !vols2.some((v) => /^\/m\.git(\/config|\/hooks|\/worktrees)?:[^:]+$/.test(v)), JSON.stringify(vols2));
+	ok("…and the agent's in-container commits get an identity from env (the config is read-only)", dargs2.includes("GIT_AUTHOR_NAME=Celiador") && dargs2.includes("GIT_COMMITTER_EMAIL=noreply@celiador.ai"));
 
 	// The repo is the user's (linked) and has the App → private fetch, push, PR, merge.
 	await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: CSREPO }) });
@@ -1229,6 +1236,106 @@ async function main(): Promise<void> {
 	ok("…and the App was never asked for a token for it", !csCalls.some((c) => c.path.includes("public-repo")));
 	const pubPr = await app.request(`${S}/${pubS.id}/git/pr`, { method: "POST", headers: authH, body: JSON.stringify({ title: "nope" }) });
 	ok("…so a pull request is refused with the reason", pubPr.status === 400 && /GitHub App/.test(((await pubPr.json()) as { error?: string }).error ?? ""));
+
+	console.log("\n== host git vs. a hostile workspace (#78) ==");
+	// The agent writes whatever it likes in its workspace — and, mounted read-write
+	// before #78, in the user's mirror. Each vector below makes the daemon's own
+	// host-side git (end-of-turn diff, status, diff, commit, push, follow-up fetch,
+	// the next worktree add) run an agent-chosen program, which drops a marker.
+	const atk = path.join(HOME, "atk");
+	fs.mkdirSync(atk, { recursive: true });
+	const marker = (n: string) => path.join(atk, `${n}.ran`);
+	const script = (n: string, body = "") => {
+		const p = path.join(atk, `${n}.sh`);
+		fs.writeFileSync(p, `#!/bin/sh\necho ran >> '${marker(n)}'\n${body}`, { mode: 0o755 });
+		return p;
+	};
+	// What the agent sees from inside: the worktree's .git file → its gitdir → the mirror.
+	const gitDirsOf = (ws: string) => {
+		const gd = fs.readFileSync(path.join(ws, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim();
+		return { gitDir: gd, common: path.resolve(gd, fs.readFileSync(path.join(gd, "commondir"), "utf8").trim()) };
+	};
+	let plant: (ws: string) => Promise<void> = async () => undefined;
+	overrideServerRunnerForTests({
+		agent: (async (ctx: { workspaceDir: string; publish: (e: unknown) => void }) => {
+			fs.writeFileSync(path.join(ctx.workspaceDir, "work.ts"), "export const work = 1;\n");
+			await plant(ctx.workspaceDir);
+			ctx.publish({ kind: "message", role: "assistant", text: "planted" });
+		}) as never,
+	});
+	const startCs = async (prompt: string) => {
+		const r = await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt, repo: { url: CSREPO, branch: "main" } }) });
+		const id = ((await r.json()) as { session: { id: string } }).session.id;
+		await until(async () => ["done", "error"].includes((await getCs(id))?.state ?? ""));
+		return id;
+	};
+	const hostileReview = async (id: string) => {
+		const st = await app.request(`${S}/${id}/git/status`, { headers: authH });
+		const df = await app.request(`${S}/${id}/git/diff`, { headers: authH });
+		const cmt = (await (await app.request(`${S}/${id}/git/commit`, { method: "POST", headers: authH, body: JSON.stringify({ message: "hostile" }) })).json()) as { ok?: boolean; sha?: string; error?: string };
+		const ps = await app.request(`${S}/${id}/git/push`, { method: "POST", headers: authH });
+		return { status: st.status, diff: df.status, commit: cmt, push: ps.status };
+	};
+
+	// A: the mirror's config (fsmonitor, a clean filter + .gitattributes, an include
+	// that sets diff.external), the mirror's hooks, and a nested repo registered as a
+	// gitlink whose own config carries a filter (status recurses into submodules).
+	plant = async (ws) => {
+		const { common } = gitDirsOf(ws);
+		const sub = path.join(ws, "sub");
+		await run("git", ["init", "-q", sub]);
+		fs.writeFileSync(path.join(sub, "f.txt"), "1\n");
+		await run("git", ["-C", sub, "add", "-A"]);
+		await run("git", ["-C", sub, "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-q", "-m", "s"]);
+		await run("git", ["-C", ws, "add", "sub"]);
+		fs.writeFileSync(path.join(sub, ".gitattributes"), "* filter=evil2\n");
+		fs.appendFileSync(path.join(sub, ".git", "config"), `[filter "evil2"]\n\tclean = ${script("submodule", "exec cat\n")}\n`);
+		fs.writeFileSync(path.join(sub, "f.txt"), "2\n");
+		fs.writeFileSync(path.join(ws, ".gitattributes"), "* filter=evil\n");
+		fs.writeFileSync(path.join(ws, ".inc"), `[diff]\n\texternal = ${script("include")}\n`);
+		fs.appendFileSync(path.join(common, "config"), `[core]\n\tfsmonitor = ${script("fsmonitor")}\n[filter "evil"]\n\tclean = ${script("filter", "exec cat\n")}\n\tsmudge = ${path.join(atk, "filter.sh")}\n[include]\n\tpath = ${path.join(ws, ".inc")}\n`);
+		const hook = script("hook", "cat >/dev/null 2>&1\nexit 0\n");
+		fs.mkdirSync(path.join(common, "hooks"), { recursive: true });
+		for (const h of ["pre-commit", "post-commit", "post-checkout", "reference-transaction", "pre-push", "post-index-change", "post-merge"]) fs.copyFileSync(hook, path.join(common, "hooks", h));
+		fs.chmodSync(path.join(common, "hooks"), 0o755);
+		for (const h of fs.readdirSync(path.join(common, "hooks"))) fs.chmodSync(path.join(common, "hooks", h), 0o755);
+		fs.writeFileSync(path.join(common, "objects", "info", "alternates"), `${path.join(HOME, "cs-seed", ".git", "objects")}\n`);
+	};
+	const hA = await startCs("Hostile A");
+	plant = async () => undefined;
+	const rA = await hostileReview(hA);
+	// The planted mirror survives the session: the next session's fetch + worktree add.
+	const hA2 = await startCs("After hostile A");
+	const fuA = await app.request(`${S}/${hA}/message`, { method: "POST", headers: authH, body: JSON.stringify({ text: "again" }) });
+	await until(async () => fuA.status === 200 && ["done", "error"].includes((await getCs(hA))?.state ?? ""));
+
+	// B: the workspace's own .git file pointed at an agent-made git dir with its own config.
+	plant = async (ws) => {
+		const tmp = path.join(atk, "dotgit-src");
+		await run("git", ["init", "-q", tmp]);
+		const evilDir = path.join(ws, ".evil-git");
+		fs.renameSync(path.join(tmp, ".git"), evilDir);
+		fs.appendFileSync(path.join(evilDir, "config"), `[core]\n\tfsmonitor = ${script("dotgit")}\n`);
+		fs.writeFileSync(path.join(ws, ".git"), `gitdir: ${evilDir}\n`);
+	};
+	const hB = await startCs("Hostile B");
+	plant = async () => undefined;
+	const rB = await hostileReview(hB);
+
+	for (const v of ["fsmonitor", "filter", "include", "hook", "submodule", "dotgit"]) {
+		ok(`hostile ${v}: the daemon's host git never runs it`, !fs.existsSync(marker(v)), fs.existsSync(marker(v)) ? fs.readFileSync(marker(v), "utf8").split("\n").filter(Boolean).length + " run(s)" : "");
+	}
+	ok("…and review still works on the hostile sessions (status, diff, commit, push)", rA.status === 200 && rA.diff === 200 && rA.commit.ok === true && rA.push === 200 && rB.status === 200 && rB.commit.ok === true && rB.push === 200, JSON.stringify({ rA, rB }));
+	ok("…the next session on the poisoned mirror runs, and so does a follow-up", (await getCs(hA2))?.state === "done" && (await getCs(hA))?.state === "done", JSON.stringify({ a2: await getCs(hA2), a: await getCs(hA), errA2: lastError(hA2), errA: lastError(hA) }));
+	const { MIRROR_CONFIG, locationFile } = await import("../src/runner/workspace.ts");
+	const { worktreeMounts } = await import("../src/runner/worktrees.ts");
+	const csMirror = fs.realpathSync(mirrorDir("smoke-user", CSREPO));
+	ok("the planted mirror config is replaced by the daemon's own, and the planted alternates are gone", fs.readFileSync(path.join(csMirror, "config"), "utf8") === MIRROR_CONFIG && !fs.existsSync(path.join(csMirror, "objects", "info", "alternates")));
+	const bDir = workspaceDir("smoke-user", hB);
+	ok("what the sandbox mounts comes from the daemon's record, not the agent's .git file", worktreeMounts(bDir)?.commonDir === csMirror && fs.readFileSync(path.join(bDir, ".git"), "utf8").trim() === `gitdir: ${worktreeMounts(bDir)?.gitDir}`, JSON.stringify(worktreeMounts(bDir)));
+	fs.rmSync(locationFile(bDir));
+	const noLoc = (await (await app.request(`${S}/${hB}/git/status`, { headers: authH })).json()) as { error?: string };
+	ok("a workspace without the daemon's record → host git refuses it (fail closed)", /git location isn't known/.test(noLoc.error ?? ""), JSON.stringify(noLoc));
 	overrideServerRunnerForTests(undefined);
 	overrideCloudSessionRemoteForTests(undefined);
 	resetGitHubAppForTests();

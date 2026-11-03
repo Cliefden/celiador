@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { installationToken, openPullRequest, appRequest } from "../github/app";
 import { hasActiveServerRun, runServerRun } from "../runner/manager";
-import { git, removeWorkspace, workspaceDir } from "../runner/workspace";
+import { git, gitAddAll, gitlinkExcludes, removeWorkspace, workspaceDir } from "../runner/workspace";
 import { addWorktree, fetchBranch, hasCheckout, isAncestor, removeWorktree } from "../runner/worktrees";
 import { cloudFollowUp } from "../tasks/cloud";
 import { taskStores } from "../tasks/dispatch";
@@ -335,20 +335,22 @@ export async function cloudGit(userId: string, session: Session, command: GitCom
   try {
     switch (command.kind) {
       case "git.status": {
-        const out = await git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+        // Never recurse into nested repos: a gitlink's own .git/config is the agent's (#78).
+        const out = await git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all"]);
         return { ok: true, branch: repo.branch, files: parsePorcelain(out) };
       }
       case "git.diff": {
         // Intent-to-add makes new files show up in a diff against HEAD without staging their content.
-        await git(dir, ["add", "-A", "-N"]);
-        const patch = await git(dir, ["diff", "HEAD", ...(command.path ? ["--", command.path] : [])]);
+        await gitAddAll(dir, { intentToAdd: true });
+        const patch = await git(dir, ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "HEAD", ...(command.path ? ["--", command.path] : [])]);
         return { ok: true, patch };
       }
       case "git.commit": {
         if (busy) return { ok: false, error: "the agent is still working; commit when it's done" };
-        await git(dir, ["add", "-A", ...(command.paths?.length ? ["--", ...command.paths] : [])]);
-        if (!(await git(dir, ["diff", "--cached", "--name-only"])).trim()) return { ok: false, error: "nothing to commit" };
-        await git(dir, ["-c", `user.name=${COMMIT_NAME}`, "-c", `user.email=${COMMIT_EMAIL}`, "commit", "-q", "-m", command.message, ...(command.paths?.length ? ["--", ...command.paths] : [])]);
+        await gitAddAll(dir, { paths: command.paths });
+        if (!(await git(dir, ["diff", "--cached", "--ignore-submodules=all", "--name-only"])).trim()) return { ok: false, error: "nothing to commit" };
+        const only = command.paths?.length ? ["--", ...command.paths.map((p) => `:(top,literal)${p}`), ...(await gitlinkExcludes(dir))] : [];
+        await git(dir, ["-c", `user.name=${COMMIT_NAME}`, "-c", `user.email=${COMMIT_EMAIL}`, "commit", "-q", "-m", command.message, ...only]);
         return { ok: true, sha: await headSha(dir) };
       }
       case "git.revert": {
