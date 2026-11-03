@@ -1,6 +1,6 @@
 # Celiador cloud runner — one container per server run (daemon/src/runner/sandbox.ts).
 # Claude Code headless + the tools an agent needs in a repo. The daemon starts it
-# with --network none, a read-only root, tmpfs /tmp and $HOME, all capabilities
+# with --network none, a read-only root, tmpfs /tmp, the run's own $HOME, all capabilities
 # dropped and its own non-root uid; the only way out is the gateway socket.
 FROM node:22-bookworm-slim
 

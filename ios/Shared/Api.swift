@@ -428,25 +428,40 @@ final class Api {
         ).session
     }
 
-    /// Start a server-side (cloud) run: the daemon clones `repoURL` and runs the agent
-    /// itself — no desktop needed. Returns the created session to watch.
+    /// Start a cloud session: the daemon checks `repoURL` out as a git worktree and
+    /// runs the agent itself — no desktop needed. `branch` is where a new branch
+    /// starts from (default: the repo's default branch), or — with
+    /// `existingBranch` — the branch to work on directly. Returns the session to watch.
     @discardableResult
-    func startServerRun(repoURL: String, branch: String?, prompt: String) async throws -> Session {
+    func startServerRun(repoURL: String, branch: String?, existingBranch: Bool = false, prompt: String) async throws -> Session {
         struct Body: Encodable {
             let origin = "phone"
             let runner = "server"
             let title: String
             let prompt: String
             let repo: Repo
-            struct Repo: Encodable { let url: String; let branch: String? }
+            struct Repo: Encodable { let url: String; let branch: String?; let existingBranch: Bool }
         }
         let title = String(prompt.prefix(80))
         return try await request(
             SessionEnvelope.self,
             path: "api/sessions",
             method: "POST",
-            body: Body(title: title, prompt: prompt, repo: .init(url: repoURL, branch: branch))
+            body: Body(title: title, prompt: prompt, repo: .init(url: repoURL, branch: branch, existingBranch: existingBranch))
         ).session
+    }
+
+    /// Your repos the cloud can run on (linked in the queue), with whether the
+    /// Celiador GitHub App is installed on each.
+    func cloudRepos() async throws -> [CloudRepo] {
+        struct Resp: Decodable { let repos: [CloudRepo] }
+        return try await request(Resp.self, path: "api/sessions/cloud/repos").repos
+    }
+
+    /// One of your repos' branches, default branch first (needs the GitHub App).
+    func cloudBranches(remoteUrl: String) async throws -> [String] {
+        struct Resp: Decodable { let branches: [String] }
+        return try await request(Resp.self, path: "api/sessions/cloud/branches", query: [URLQueryItem(name: "remoteUrl", value: remoteUrl)]).branches
     }
 
     /// Ask the user's editor to run an agent on a repo it already has open — on the

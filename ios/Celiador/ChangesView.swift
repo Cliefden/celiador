@@ -12,13 +12,18 @@ import UIKit
 ///   fresh from the editor's git over the relay, and you can COMMIT the run or
 ///   REVERT individual files from the phone — and once the tree is clean, PUSH the
 ///   branch and OPEN ITS PULL REQUEST.
+///   A cloud session (`cloud` set) gets the same review, served by the daemon from
+///   the session's git worktree, pushing and opening the pull request with the
+///   Celiador GitHub App.
 /// - **Transcript** (fallback): the diff events the run streamed, read-only — used
-///   for cloud runs and when the editor is offline.
+///   for cloud task runs and when the editor is offline.
 struct ChangesView: View {
     let title: String
     let diffs: [DiffFile]
     /// Set for editor runs: enables live git status + commit/revert via the relay.
     var liveSessionId: String?
+    /// Set for cloud sessions: the worktree's branch, base and whether it can push.
+    var cloud: SessionRepo? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var toast: String?
@@ -37,11 +42,15 @@ struct ChangesView: View {
     @State private var pullRequest: GitPullRequest?
 
     /// A pull request from the integration branch itself makes no sense — the
-    /// editor has to be on a feature branch first.
+    /// editor has to be on a feature branch first (a cloud session: not on its base).
     private var onIntegrationBranch: Bool {
         guard let branch = live?.branch?.lowercased() else { return true }
+        if let cloud { return branch == cloud.base.lowercased() }
         return ["main", "master", "develop", "trunk"].contains(branch)
     }
+
+    /// Where commits come from and where the pull request is opened, for the copy.
+    private var commitIdentity: String { cloud != nil ? "as Celiador, in the cloud" : "with your git identity from the Mac" }
 
     /// Live file list projected into the shared DiffFile shape (stable index ids).
     private var shownDiffs: [DiffFile] {
@@ -133,6 +142,8 @@ struct ChangesView: View {
                 .padding(.horizontal, 12).padding(.bottom, 8)
             }
             .task {
+                // A cloud session that already opened its pull request shows it, not "Open PR…".
+                if pullRequest == nil, let pr = cloud?.pr { pullRequest = GitPullRequest(url: pr.url, created: false) }
                 await loadLive()
                 let mode = liveSessionId == nil ? "transcript" : (isLive ? "live" : "liveUnavailable")
                 Telemetry.signal(.changesViewed, ["mode": mode, "files": Telemetry.bucket(shownDiffs.count)])
@@ -219,7 +230,7 @@ struct ChangesView: View {
                 }
                 .listRowBackground(Theme.panel)
                 Section {
-                    Text("Commits all \(shownDiffs.count) changed file\(shownDiffs.count == 1 ? "" : "s") on \(live?.branch.map { "“\($0)”" } ?? "the current branch"), with your git identity from the Mac.")
+                    Text("Commits all \(shownDiffs.count) changed file\(shownDiffs.count == 1 ? "" : "s") on \(live?.branch.map { "“\($0)”" } ?? "the current branch"), \(commitIdentity).")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Theme.panel)
@@ -278,9 +289,15 @@ struct ChangesView: View {
                     .font(.footnote.weight(.semibold))
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
+            } else if let cloud, !cloud.pushable {
+                Image(systemName: "lock").foregroundStyle(Theme.dim)
+                Text("Install the Celiador GitHub App on this repo and add it to your repos to push and open pull requests from the cloud.")
+                    .font(.footnote).foregroundStyle(Theme.dim)
             } else if onIntegrationBranch {
                 Image(systemName: "arrow.triangle.branch").foregroundStyle(Theme.dim)
-                Text("On \(live?.branch ?? "the default branch") — switch the editor to a feature branch to open a pull request.")
+                Text(cloud != nil
+                     ? "Working directly on \(live?.branch ?? "the base branch") — there's no pull request to open."
+                     : "On \(live?.branch ?? "the default branch") — switch the editor to a feature branch to open a pull request.")
                     .font(.footnote).foregroundStyle(Theme.dim)
             } else {
                 Image(systemName: "arrow.triangle.pull").foregroundStyle(Theme.accentBright)
@@ -316,7 +333,9 @@ struct ChangesView: View {
                 }
                 .listRowBackground(Theme.panel)
                 Section {
-                    Text("Pushes \(live?.branch.map { "“\($0)”" } ?? "the branch") from your Mac and opens the pull request with the editor's GitHub sign-in. Without one, you get a link to finish it in the browser.")
+                    Text(cloud != nil
+                         ? "Pushes \(live?.branch.map { "“\($0)”" } ?? "the branch") from the cloud and opens the pull request against “\(cloud?.base ?? "the default branch")” as the Celiador GitHub App."
+                         : "Pushes \(live?.branch.map { "“\($0)”" } ?? "the branch") from your Mac and opens the pull request with the editor's GitHub sign-in. Without one, you get a link to finish it in the browser.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Theme.panel)

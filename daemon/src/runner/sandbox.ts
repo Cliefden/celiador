@@ -8,6 +8,7 @@ import { mintRunnerToken } from "../auth";
 import { HOST, PORT } from "../config";
 import type { SessionEventInput } from "../sessions/types";
 import type { RunnerAgent } from "./agent";
+import { worktreeCommonDir } from "./worktrees";
 
 const execFileP = promisify(execFile);
 
@@ -28,8 +29,11 @@ const execFileP = promisify(execFile);
  * - Read-only root filesystem, tmpfs for /tmp and $HOME, all capabilities
  *   dropped, no-new-privileges, the daemon's own non-root uid, CPU / memory /
  *   pid caps, a wall-clock limit, and `docker kill` on cancel.
- * - Only the run's own workspace is writable; it's the daemon-owned clone the
- *   diff is computed from afterwards, exactly as with the placeholder agent.
+ * - Only the run's own workspace is writable, plus its $HOME (the agent's
+ *   conversation, kept for follow-ups) and — when the workspace is a git
+ *   worktree (worktrees.ts) — the user's mirror of that repo, mounted at its
+ *   own path so git in the container finds the worktree's history. The mirror
+ *   holds only that one repo, of that one user, with no credentials in it.
  *
  * Opt-in: the daemon uses this agent only when CELIADOR_RUNNER_AGENT=sandbox
  * (manager.ts). The image is built from runner-image/ (see its README).
@@ -102,13 +106,34 @@ async function openGatewaySocket(socketPath: string): Promise<net.Server> {
 }
 
 /** The `docker run` argv for one run. Pure; exported so tests can pin the isolation flags. */
-export function dockerRunArgs(p: { name: string; workspaceDir: string; gatewayDir: string; uid: number; gid: number; token: string; prompt: string }): string[] {
+export function dockerRunArgs(p: {
+  name: string;
+  workspaceDir: string;
+  gatewayDir: string;
+  uid: number;
+  gid: number;
+  token: string;
+  prompt: string;
+  /**
+   * The run's persistent $HOME (Claude Code keeps its conversation there, so a
+   * follow-up can `--continue` it). Without it $HOME is a throwaway tmpfs.
+   */
+  homeDir?: string;
+  /**
+   * A worktree's shared git dir (its mirror), mounted at the same absolute path
+   * the worktree's `.git` file points to. Without it git in the container can't
+   * see the checkout's history.
+   */
+  gitCommonDir?: string;
+  /** Continue the previous conversation in `homeDir`. */
+  continueConversation?: boolean;
+}): string[] {
   return [
     "run", "--rm", "--name", p.name,
     "--network", "none",
     "--read-only",
     "--tmpfs", "/tmp:rw,size=512m",
-    "--tmpfs", "/home/runner:rw,mode=1777,size=256m",
+    ...(p.homeDir ? ["-v", `${p.homeDir}:/home/runner`] : ["--tmpfs", "/home/runner:rw,mode=1777,size=256m"]),
     "--cap-drop", "ALL",
     "--security-opt", "no-new-privileges",
     "--pids-limit", "512",
@@ -122,6 +147,7 @@ export function dockerRunArgs(p: { name: string; workspaceDir: string; gatewayDi
     "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
     "-v", `${p.workspaceDir}:/workspace`,
     "-v", `${p.gatewayDir}:/run/celiador`,
+    ...(p.gitCommonDir ? ["-v", `${p.gitCommonDir}:${p.gitCommonDir}`] : []),
     "-w", "/workspace",
     SANDBOX_IMAGE,
     "-p", p.prompt,
@@ -130,6 +156,7 @@ export function dockerRunArgs(p: { name: string; workspaceDir: string; gatewayDi
     // The container IS the permission boundary: no network, nothing writable but the workspace.
     "--dangerously-skip-permissions",
     "--max-turns", String(MAX_TURNS),
+    ...(p.continueConversation ? ["--continue"] : []),
   ];
 }
 
@@ -153,6 +180,12 @@ export const sandboxAgent: RunnerAgent = async (ctx) => {
   const gatewayDir = path.join(runDir, "gw");
   await fs.promises.mkdir(gatewayDir, { recursive: true, mode: 0o700 });
   const server = await openGatewaySocket(path.join(gatewayDir, "gw.sock"));
+  // $HOME survives the container (sibling of the workspace, never browsable from
+  // the phone), so a follow-up turn continues the same conversation.
+  const homeDir = path.join(runDir, "home");
+  await fs.promises.mkdir(homeDir, { recursive: true, mode: 0o700 });
+  const hasConversation = fs.existsSync(path.join(homeDir, ".claude", "projects"));
+  const gitCommonDir = await worktreeCommonDir(ctx.workspaceDir).catch(() => undefined);
   const name = `celiador-run-${ctx.runId}`.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 60);
   const kill = () => { execFile("docker", ["kill", name], () => undefined); };
 
@@ -165,6 +198,9 @@ export const sandboxAgent: RunnerAgent = async (ctx) => {
       gid: process.getgid?.() ?? 1000,
       token,
       prompt: ctx.prompt,
+      homeDir,
+      gitCommonDir,
+      continueConversation: !!ctx.continueConversation && hasConversation,
     }), { stdio: ["ignore", "pipe", "pipe"] });
 
     const timer = setTimeout(kill, TIMEOUT_MS);

@@ -6,6 +6,18 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+- **Cloud sessions on GitHub repos, from the phone.** New Run → pick one of
+  your repos (or paste any public one) and a branch, and the agent works on it on
+  Celiador's servers, no computer needed: on a new `celiador/…` branch off the
+  branch you picked, or directly on an existing branch. Send follow-ups (the agent
+  continues the same conversation), then review the changes, commit, push, open
+  the pull request and merge from the phone. Private repos, push and pull requests
+  need the repo in your repos with the Celiador GitHub App installed.
+- Daemon: every cloud checkout (cloud sessions and cloud tasks) is a **git
+  worktree** of a per-user cached mirror of the repo instead of a fresh clone, so
+  a repo is fetched once and then incrementally, and no two runs share a branch.
+- iPhone app: cloud sessions no longer show "editor offline" in the list.
+
 ## [0.2.5] - 2026-10-30
 
 - iPhone app: the test channel is its own app, **Celiador Test**

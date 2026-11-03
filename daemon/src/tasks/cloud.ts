@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { installationToken, openPullRequest, updatePullRequestBody, type PullRequestInfo } from "../github/app";
 import { cloudRunnerAvailable, cloudRunsEnabled, hasActiveServerRun, runServerRun } from "../runner/manager";
 import type { IServerRunOutcome } from "../runner/run";
-import { cloneRepo, git, workspaceDir } from "../runner/workspace";
+import { git, workspaceDir } from "../runner/workspace";
+import { addWorktree, fetchBranch, hasCheckout } from "../runner/worktrees";
 import { sessionStores } from "../sessions/instance";
 import { publishSessionEvent } from "../sessions/publish";
 import { postFailedComment } from "./comments";
@@ -20,8 +19,8 @@ import { ACTIVE_STATES, repoKey, type Task, type TaskRepo, type TaskStore } from
  * happens here, outside the container, before and after the agent runs:
  *
  *   dispatch → relay session (origin "phone", runner "server") linked to the task
- *   → clone the default branch, `git switch -c <task.branch>` (fetching the branch
- *     first if an earlier attempt already pushed it)
+ *   → a git worktree of the user's mirror of the repo on <task.branch>: new from
+ *     the default branch, or from the branch's tip if an earlier attempt pushed it
  *   → the agent works in the checkout
  *   → commit what it left uncommitted (author Celiador <noreply@celiador.ai>)
  *   → push with the GitHub App's installation token in the URL, --force-with-lease
@@ -168,7 +167,7 @@ async function runTurn(userId: string, taskId: string, sessionId: string, prompt
   const remote = remoteFor(task.repo, token);
   let prepared: { expected: string; baseSha: string };
   try {
-    prepared = await prepareWorkspace(task, remote, token, dir);
+    prepared = await prepareWorkspace(userId, task, remote, token, dir);
   } catch (err) {
     const message = `Couldn't prepare the workspace: ${err instanceof Error ? err.message : String(err)}`;
     publishSessionEvent(userId, sessionId, { kind: "error", message });
@@ -197,33 +196,24 @@ async function runTurn(userId: string, taskId: string, sessionId: string, prompt
 }
 
 /**
- * The checkout the agent works in. First turn: clone the default branch (shallow)
- * and start the task branch from it — or from the branch's remote tip when an
- * earlier attempt already pushed one. Follow-up: fast-forward the retained
- * workspace onto whatever landed on the branch meanwhile (a reviewer's commit),
- * if that is possible. Returns the remote sha the push will lease against ("" =
- * the branch must not exist yet) and the base sha (to tell "no changes" later).
+ * The checkout the agent works in: a git worktree of the user's mirror of the
+ * repo (runner/worktrees.ts). First turn: a worktree on the task branch — from
+ * the branch's remote tip when an earlier attempt already pushed it, else new
+ * from the default branch. Follow-up: fast-forward the retained worktree onto
+ * whatever landed on the branch meanwhile (a reviewer's commit), if that is
+ * possible. Returns the remote sha the push will lease against ("" = the branch
+ * must not exist yet) and the base sha (to tell "no changes" later).
  */
-async function prepareWorkspace(task: Task, remote: string, token: string, dir: string): Promise<{ expected: string; baseSha: string }> {
-  await fs.promises.mkdir(path.dirname(dir), { recursive: true });
-  const parent = path.dirname(dir);
-  const ref = `refs/heads/${task.branch}`;
-  const expected = (await git(parent, ["ls-remote", remote, ref], { timeout: NETWORK_TIMEOUT_MS, secret: token })).split(/\s+/)[0] ?? "";
-  if (!fs.existsSync(path.join(dir, ".git"))) {
-    await fs.promises.rm(dir, { recursive: true, force: true });
-    await cloneRepo(remote, undefined, dir, token);
-    if (expected) {
-      await git(dir, ["fetch", "--depth=1", remote, ref], { timeout: NETWORK_TIMEOUT_MS, secret: token });
-      await git(dir, ["switch", "-c", task.branch, "FETCH_HEAD"]);
-    } else {
-      await git(dir, ["switch", "-c", task.branch]);
-    }
-  } else if (expected && expected !== (await git(dir, ["rev-parse", "HEAD"])).trim()) {
-    try {
-      await git(dir, ["fetch", remote, ref], { timeout: NETWORK_TIMEOUT_MS, secret: token });
-      await git(dir, ["merge", "--ff-only", "FETCH_HEAD"]);
-    } catch {
-      /* diverged: keep the workspace; the lease at push time decides */
+async function prepareWorkspace(userId: string, task: Task, remote: string, token: string, dir: string): Promise<{ expected: string; baseSha: string }> {
+  let expected: string;
+  if (!hasCheckout(dir)) {
+    expected = (await addWorktree({ userId, url: task.repo.url, remote, token, dir, branch: task.branch })).remoteSha;
+  } else {
+    expected = await fetchBranch({ userId, url: task.repo.url, remote, token, branch: task.branch });
+    if (expected && expected !== (await git(dir, ["rev-parse", "HEAD"])).trim()) {
+      await git(dir, ["merge", "--ff-only", "-q", `refs/remotes/origin/${task.branch}`]).catch(() => {
+        /* diverged: keep the workspace; the lease at push time decides */
+      });
     }
   }
   const baseSha = (await git(dir, ["rev-parse", "origin/HEAD"]).catch(() => "")).trim();

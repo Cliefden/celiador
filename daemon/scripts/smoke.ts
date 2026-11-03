@@ -1001,6 +1001,119 @@ async function main(): Promise<void> {
 	ok("cancel on a server session without an active run → 409 (unchanged)", (await app.request(`http://localhost/api/sessions/${cDone.sessionId}/cancel`, { method: "POST", headers: authH })).status === 409);
 	overrideServerRunnerForTests(undefined);
 	overrideCloudRemoteForTests(undefined);
+	ghHandler = () => ({ status: 404, json: { message: "Not Found" } });
+
+	// ── Cloud sessions: phone → GitHub repo → worktree → agent → follow-up → review → PR → merge ──
+	console.log("\n== cloud sessions ==");
+	const { overrideCloudSessionRemoteForTests, parsePorcelain, sessionBranch } = await import("../src/sessions/cloudSession.ts");
+	const { mirrorDir } = await import("../src/runner/worktrees.ts");
+	const { workspaceDir } = await import("../src/runner/workspace.ts");
+	const S = "http://localhost/api/sessions";
+	const csSeed = path.join(HOME, "cs-seed");
+	fs.mkdirSync(csSeed, { recursive: true });
+	await run("git", ["init", "-q", "-b", "main", csSeed]);
+	await run("git", ["-C", csSeed, "config", "user.email", "s@smoke"]);
+	await run("git", ["-C", csSeed, "config", "user.name", "smoke"]);
+	fs.writeFileSync(path.join(csSeed, "README.md"), "# cloud session\n");
+	await run("git", ["-C", csSeed, "add", "-A"]);
+	await run("git", ["-C", csSeed, "commit", "-q", "-m", "init"]);
+	await run("git", ["-C", csSeed, "branch", "feature"]);
+	const csBare = path.join(HOME, "cs-remote.git");
+	await run("git", ["clone", "-q", "--bare", csSeed, csBare]);
+	overrideCloudSessionRemoteForTests(() => `file://${csBare}`);
+	const CSREPO = "https://github.com/Cliefden/cs-repo.git";
+	const csBase = "/repos/Cliefden/cs-repo";
+	const csCalls: GhCall[] = [];
+	ghHandler = (call) => {
+		csCalls.push(call);
+		if (call.path === `${csBase}/installation`) return { status: 200, json: { id: 11 } };
+		if (call.path === "/app/installations/11/access_tokens") return { status: 201, json: { token: "ghs_cs" } };
+		if (call.path === csBase) return { status: 200, json: { default_branch: "main", private: true } };
+		if (call.path.startsWith(`${csBase}/branches`)) return { status: 200, json: [{ name: "feature" }, { name: "main" }] };
+		if (call.path === `${csBase}/pulls` && call.method === "POST") return { status: 201, json: { number: 7, html_url: "https://github.com/Cliefden/cs-repo/pull/7" } };
+		if (call.path === `${csBase}/pulls/7/merge` && call.method === "PUT") return { status: 200, json: { merged: true, sha: "m3rg3" } };
+		return { status: 404, json: { message: "Not Found" } };
+	};
+	const csTurns: Array<{ continueConversation?: boolean; prompt: string }> = [];
+	overrideServerRunnerForTests({
+		agent: (async (ctx: { workspaceDir: string; prompt: string; continueConversation?: boolean; publish: (e: unknown) => void }) => {
+			csTurns.push({ continueConversation: ctx.continueConversation, prompt: ctx.prompt });
+			fs.writeFileSync(path.join(ctx.workspaceDir, `turn-${csTurns.length}.ts`), `export const turn = ${csTurns.length};\n`);
+			ctx.publish({ kind: "message", role: "assistant", text: `Turn ${csTurns.length} done.` });
+		}) as never,
+	});
+	ok("sessionBranch: celiador/<slug>-<id>", sessionBranch("Fix the login bug!", "AbC123-xyz") === "celiador/fix-the-login-bug-abc123", sessionBranch("Fix the login bug!", "AbC123-xyz"));
+	ok("parsePorcelain: modified, added, untracked, renamed", JSON.stringify(parsePorcelain(" M a.ts\0A  b.ts\0?? c.ts\0R  new.ts\0old.ts\0")) === JSON.stringify([{ path: "a.ts", status: "M" }, { path: "b.ts", status: "A" }, { path: "c.ts", status: "U" }, { path: "new.ts", status: "R" }]));
+	const dargs2 = dockerRunArgs({ name: "n", workspaceDir: "/w", gatewayDir: "/g", uid: 1, gid: 1, token: "t", prompt: "p", homeDir: "/h", gitCommonDir: "/m.git", continueConversation: true });
+	ok("docker run: persistent home, the worktree's mirror at its own path, --continue", dargs2.includes("/h:/home/runner") && dargs2.includes("/m.git:/m.git") && dargs2[dargs2.length - 1] === "--continue" && !dargs2.includes("/home/runner:rw,mode=1777,size=256m"), dargs2.join(" "));
+
+	// The repo is the user's (linked) and has the App → private fetch, push, PR, merge.
+	await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: CSREPO }) });
+	const repos = (await (await app.request(`${S}/cloud/repos`, { headers: authH })).json()) as { repos: Array<{ url: string; app: boolean; defaultBranch?: string }> };
+	ok("GET /api/sessions/cloud/repos → the linked repo, App installed, default branch", repos.repos.some((r) => r.url === CSREPO && r.app && r.defaultBranch === "main"), JSON.stringify(repos));
+	const branches = (await (await app.request(`${S}/cloud/branches?remoteUrl=${encodeURIComponent(CSREPO)}`, { headers: authH })).json()) as { branches?: string[] };
+	ok("GET /api/sessions/cloud/branches → default branch first", JSON.stringify(branches.branches) === JSON.stringify(["main", "feature"]), JSON.stringify(branches));
+	const csRes = await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ origin: "phone", runner: "server", title: "Add turn files", prompt: "Add turn files", repo: { url: CSREPO, branch: "main" } }) });
+	const cs = ((await csRes.json()) as { session: { id: string } }).session;
+	type CSess = { state: string; runner: string; repo?: { branch: string; base: string; pushable: boolean; existingBranch: boolean; remoteSha: string; pr?: { number: number; url: string } } };
+	const getCs = async (id: string) => ((await (await app.request(`${S}/${id}`, { headers: authH })).json()) as { session?: CSess }).session;
+	ok("start a cloud session → 200 and the first turn finishes", csRes.status === 200 && await until(async () => (await getCs(cs.id))?.state === "done"), JSON.stringify(await getCs(cs.id)));
+	const cs1 = await getCs(cs.id);
+	ok("…on a new celiador/ branch off main, pushable (linked + App)", !!cs1?.repo?.branch.startsWith("celiador/add-turn-files-") && cs1.repo.base === "main" && cs1.repo.pushable && !cs1.repo.existingBranch && cs1.repo.remoteSha === "", JSON.stringify(cs1?.repo));
+	const csDir = workspaceDir("smoke-user", cs.id);
+	ok("the workspace is a git worktree of the user's mirror", fs.statSync(path.join(csDir, ".git")).isFile() && fs.existsSync(path.join(mirrorDir("smoke-user", CSREPO), "HEAD")) && (await run("git", ["-C", mirrorDir("smoke-user", CSREPO), "worktree", "list"])).stdout.includes(csDir));
+	ok("the agent ran fresh on the first turn", csTurns.length === 1 && !csTurns[0]!.continueConversation);
+	const st1 = (await (await app.request(`${S}/${cs.id}/git/status`, { headers: authH })).json()) as { branch?: string; files?: Array<{ path: string; status: string }> };
+	ok("git/status → the run's branch and its new file", st1.branch === cs1?.repo?.branch && JSON.stringify(st1.files) === JSON.stringify([{ path: "turn-1.ts", status: "A" }]), JSON.stringify(st1));
+	const df1 = (await (await app.request(`${S}/${cs.id}/git/diff?path=turn-1.ts`, { headers: authH })).json()) as { patch?: string };
+	ok("git/diff?path → the file's patch", !!df1.patch?.includes("+export const turn = 1;"), JSON.stringify(df1));
+	// Follow-up: another turn in the same worktree, continuing the conversation.
+	const csFu = await app.request(`${S}/${cs.id}/message`, { method: "POST", headers: authH, body: JSON.stringify({ text: "now a second file" }) });
+	ok("follow-up message on a cloud session → 200 (no editor needed)", csFu.status === 200, `got ${csFu.status}`);
+	ok("…runs a second turn, continuing the conversation, with the message as the prompt", await until(() => csTurns.length === 2) && await until(async () => (await getCs(cs.id))?.state === "done") && csTurns[1]!.continueConversation === true && csTurns[1]!.prompt === "now a second file", JSON.stringify(csTurns));
+	ok("…in the same worktree (both files there)", fs.existsSync(path.join(csDir, "turn-1.ts")) && fs.existsSync(path.join(csDir, "turn-2.ts")));
+	// Review: revert one file, commit the rest, open the PR (pushes), merge.
+	const rv = await app.request(`${S}/${cs.id}/git/revert`, { method: "POST", headers: authH, body: JSON.stringify({ paths: ["turn-2.ts"] }) });
+	ok("git/revert a new file → gone from the worktree", rv.status === 200 && !fs.existsSync(path.join(csDir, "turn-2.ts")), `got ${rv.status}`);
+	const cm = (await (await app.request(`${S}/${cs.id}/git/commit`, { method: "POST", headers: authH, body: JSON.stringify({ message: "Add turn files" }) })).json()) as { ok?: boolean; sha?: string };
+	const st2 = (await (await app.request(`${S}/${cs.id}/git/status`, { headers: authH })).json()) as { files?: unknown[] };
+	ok("git/commit → a sha, and the tree is clean", cm.ok === true && typeof cm.sha === "string" && st2.files?.length === 0, JSON.stringify({ cm, st2 }));
+	const authorLine = (await run("git", ["-C", csDir, "log", "-1", "--format=%an <%ae>|%s"])).stdout.trim();
+	ok("…committed as Celiador with the given message", authorLine === "Celiador <noreply@celiador.ai>|Add turn files", authorLine);
+	const csPr = await app.request(`${S}/${cs.id}/git/pr`, { method: "POST", headers: authH, body: JSON.stringify({ title: "Add turn files", body: "From the phone." }) });
+	const prJ = (await csPr.json()) as { url?: string; created?: boolean };
+	const branch = cs1?.repo?.branch ?? "";
+	ok("git/pr → pushed the branch and opened the PR as the App", csPr.status === 200 && prJ.created === true && prJ.url === "https://github.com/Cliefden/cs-repo/pull/7" && (await run("git", ["-C", csBare, "ls-tree", "--name-only", branch])).stdout.includes("turn-1.ts"), JSON.stringify(prJ));
+	const prPost2 = csCalls.find((c) => c.method === "POST" && c.path === `${csBase}/pulls`);
+	ok("…head = the session branch, base = main", prPost2?.body?.head === branch && prPost2.body.base === "main" && prPost2.body.title === "Add turn files", JSON.stringify(prPost2?.body));
+	ok("…the session remembers the PR and the pushed sha", (await getCs(cs.id))?.repo?.pr?.number === 7 && (await getCs(cs.id))?.repo?.remoteSha === cm.sha, JSON.stringify((await getCs(cs.id))?.repo));
+	const mg = (await (await app.request(`${S}/${cs.id}/git/merge`, { method: "POST", headers: authH, body: JSON.stringify({ method: "squash" }) })).json()) as { merged?: boolean };
+	ok("git/merge → merged via the App (squash)", mg.merged === true && csCalls.some((c) => c.method === "PUT" && c.path === `${csBase}/pulls/7/merge` && c.body?.merge_method === "squash"), JSON.stringify(mg));
+	// An existing branch: work on it directly; a second session can't take the same branch.
+	const exRes = await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt: "Continue feature", repo: { url: CSREPO, branch: "feature", existingBranch: true } }) });
+	const ex = ((await exRes.json()) as { session: { id: string } }).session;
+	ok("existingBranch → works directly on it (remote sha known, base = default branch)", await until(async () => (await getCs(ex.id))?.state === "done") && (await getCs(ex.id))?.repo?.branch === "feature" && (await getCs(ex.id))?.repo?.existingBranch === true && (await getCs(ex.id))?.repo?.base === "main" && !!(await getCs(ex.id))?.repo?.remoteSha, JSON.stringify(await getCs(ex.id)));
+	const ex2 = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt: "Same branch", repo: { url: CSREPO, branch: "feature", existingBranch: true } }) })).json()) as { session: { id: string } }).session;
+	ok("…a second session on that branch while the first has it → error, not a shared checkout", await until(async () => (await getCs(ex2.id))?.state === "error"));
+	ok("existingBranch without a branch → 400", (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "x", repo: { url: CSREPO, existingBranch: true } }) })).status === 400);
+	ok("a bad branch name → 400", (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "x", repo: { url: CSREPO, branch: "--upload-pack=evil" } }) })).status === 400);
+	// Deleting the session detaches its worktree and drops its local branch from the mirror.
+	await app.request(`${S}/${ex.id}`, { method: "DELETE", headers: authH });
+	ok("delete → worktree gone from the mirror", await until(async () => !(await run("git", ["-C", mirrorDir("smoke-user", CSREPO), "worktree", "list"])).stdout.includes(workspaceDir("smoke-user", ex.id))));
+	// Someone else's repo: refused. An unlinked repo: runs without the App, can't push.
+	const otherH = { "content-type": "application/json", authorization: `Bearer ${mintRunnerToken("other-user", "other-run", 300)!}` };
+	const OTHER = "https://github.com/Cliefden/other-repo.git";
+	await app.request(`${T}/repos`, { method: "POST", headers: otherH, body: JSON.stringify({ remoteUrl: OTHER }) });
+	ok("a repo linked to another account → 403", (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "x", repo: { url: OTHER } }) })).status === 403);
+	ok("…and its branches aren't listed → 403", (await app.request(`${S}/cloud/branches?remoteUrl=${encodeURIComponent(OTHER)}`, { headers: authH })).status === 403);
+	const PUB = "https://github.com/Cliefden/public-repo.git";
+	const pubS = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "Public one", repo: { url: PUB } }) })).json()) as { session: { id: string } }).session;
+	ok("an unlinked repo runs without the App (not pushable)", await until(async () => (await getCs(pubS.id))?.state === "done") && (await getCs(pubS.id))?.repo?.pushable === false, JSON.stringify(await getCs(pubS.id)));
+	ok("…and the App was never asked for a token for it", !csCalls.some((c) => c.path.includes("public-repo")));
+	const pubPr = await app.request(`${S}/${pubS.id}/git/pr`, { method: "POST", headers: authH, body: JSON.stringify({ title: "nope" }) });
+	ok("…so a pull request is refused with the reason", pubPr.status === 400 && /GitHub App/.test(((await pubPr.json()) as { error?: string }).error ?? ""));
+	overrideServerRunnerForTests(undefined);
+	overrideCloudSessionRemoteForTests(undefined);
 	resetGitHubAppForTests();
 	ghHandler = () => ({ status: 404, json: { message: "Not Found" } });
 

@@ -5,8 +5,10 @@ import { sandboxAgent, sandboxAvailable } from "./sandbox";
 export interface IStartServerRunParams {
   readonly userId: string;
   readonly sessionId: string;
-  readonly repo: { readonly url: string; readonly branch?: string };
+  readonly repo: { readonly url: string; readonly branch?: string; readonly workBranch?: string };
   readonly prompt: string;
+  /** Continue the agent's previous conversation (a follow-up turn in the same workspace). */
+  readonly continueConversation?: boolean;
   /** See IServerRunOptions.workspaceReady. */
   readonly workspaceReady?: boolean;
 }
@@ -64,14 +66,6 @@ export function runServerRun(params: IStartServerRunParams): Promise<IServerRunO
   const run = executeServerRun({ ...params, agent: serverRunAgent(), signal: abort.signal }).finally(() => active.delete(params.sessionId));
   active.set(params.sessionId, { run, abort });
   return run;
-}
-
-/**
- * Start a server run for a session and return once it's launched (not finished).
- * Deduped per session. The run narrates itself to the relay; callers don't await it.
- */
-export async function startServerRun(params: IStartServerRunParams): Promise<void> {
-  void runServerRun(params);
 }
 
 /** Whether a server run is currently executing for this session. */

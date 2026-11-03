@@ -1,20 +1,17 @@
 import { publishSessionEvent } from "../sessions/publish";
 import type { SessionEventInput } from "../sessions/types";
-import { cloneRepo, computeDiffs, workspaceDir } from "./workspace";
+import { computeDiffs, workspaceDir } from "./workspace";
+import { addWorktree } from "./worktrees";
 import { placeholderAgent, type RunnerAgent } from "./agent";
-import { installationToken } from "../github/app";
-
-/** `owner` + `name` of a github.com https URL, else undefined. */
-function parseGitHubUrl(url: string): { owner: string; name: string } | undefined {
-  const m = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(url);
-  return m?.[1] && m[2] ? { owner: m[1], name: m[2] } : undefined;
-}
 
 export interface IServerRunOptions {
   readonly userId: string;
   readonly sessionId: string;
-  readonly repo: { readonly url: string; readonly branch?: string };
+  /** `branch`: what to start from (default: the remote's default branch); `workBranch`: the worktree's own branch. */
+  readonly repo: { readonly url: string; readonly branch?: string; readonly workBranch?: string };
   readonly prompt: string;
+  /** Continue the agent's previous conversation in this run (a follow-up turn). */
+  readonly continueConversation?: boolean;
   /** The agent to run (defaults to the Phase 3a placeholder). Injected for tests / 3b. */
   readonly agent?: RunnerAgent;
   /** Aborted when the user cancels the run. */
@@ -58,16 +55,21 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<IServer
   try {
     publish({ kind: "state", state: "running" });
     if (!opts.workspaceReady) {
-      publish({ kind: "activity", text: `Cloning ${opts.repo.url}…` });
-      // A GitHub App installation token (when the app is set up and installed on
-      // the repo) lets private repositories clone; public ones work without it.
-      const gh = parseGitHubUrl(opts.repo.url);
-      const token = gh ? await installationToken(gh).catch(() => null) : null;
-      await cloneRepo(opts.repo.url, opts.repo.branch, dir, token ?? undefined);
+      publish({ kind: "activity", text: `Checking out ${opts.repo.url}…` });
+      // Anonymous (public repos): callers that may use the GitHub App's token —
+      // cloud sessions on a linked repo, cloud tasks — prepare the worktree
+      // themselves (workspaceReady) after checking the user may use it.
+      await addWorktree({
+        userId: opts.userId,
+        url: opts.repo.url,
+        dir,
+        branch: opts.repo.workBranch ?? `celiador/run-${opts.sessionId.slice(0, 8)}`,
+        base: opts.repo.branch,
+      });
     }
 
     publish({ kind: "activity", text: "Running the agent…" });
-    await agent({ workspaceDir: dir, prompt: opts.prompt, publish, userId: opts.userId, runId: opts.sessionId, signal: opts.signal ?? new AbortController().signal });
+    await agent({ workspaceDir: dir, prompt: opts.prompt, publish, userId: opts.userId, runId: opts.sessionId, continueConversation: opts.continueConversation, signal: opts.signal ?? new AbortController().signal });
 
     const diffs = await computeDiffs(dir);
     for (const d of diffs) {
@@ -90,7 +92,7 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<IServer
     const raw = err instanceof Error ? err.message : String(err);
     // An anonymous clone of a private repo makes git try to prompt for credentials.
     const message = /could not read Username/i.test(raw)
-      ? "Cloning failed — this repo looks private. Cloud runs can only clone public repos for now."
+      ? "Cloning failed — this repo looks private. Private repos need the Celiador GitHub App installed and the repo added to your repos."
       : raw;
     publish({ kind: "error", message });
     publish({ kind: "state", state: "error" });

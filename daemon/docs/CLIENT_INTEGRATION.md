@@ -107,6 +107,39 @@ workspace (`running` → `pr-open` again, PR body refreshed); `POST
 slots like editor runs. Clients never need to do anything to get a cloud run — it
 is the daemon's dispatch decision.
 
+### Cloud sessions (start a run on a GitHub repo from the phone)
+
+`POST /api/sessions` with `runner: "server"` starts a **cloud session**: the
+daemon checks the repo out as a git worktree of the user's cached mirror of it
+and runs the agent in the sandboxed runner (no editor, no computer).
+
+```json
+{ "runner": "server", "origin": "phone", "title": "…", "prompt": "…",
+  "repo": { "url": "https://github.com/owner/name.git", "branch": "main", "existingBranch": false } }
+```
+
+- `repo.branch` — where a new `celiador/<slug>-<id>` branch starts (default: the
+  repo's default branch); with `existingBranch: true`, the branch to work on
+  directly (it must exist on GitHub, and only one session can have it at a time).
+- The session carries `repo: { url, owner, name, branch, base, existingBranch,
+  pushable, remoteSha, pr? }` once its worktree exists. `pushable` is true when
+  the repo is linked to the user (`POST /api/tasks/repos`) **and** the Celiador
+  GitHub App is installed on it; then private repos work and push / pull request
+  / merge are available. A repo linked to another account → 403. Any other
+  public repo runs anonymously, without push.
+- `POST /api/sessions/:id/message` is a follow-up: another turn in the same
+  worktree that continues the agent's conversation (409 while a turn runs).
+- The review API (`GET git/status`, `GET git/diff`, `POST git/commit|revert|push|pr|merge`)
+  works on cloud sessions with the same request and response shapes as for editor
+  runs, executed by the daemon in the worktree: commits are authored
+  `Celiador <noreply@celiador.ai>`, push leases against the last known remote sha,
+  and the PR (base = `repo.base`) and merge go through the App.
+- `GET /api/sessions/cloud/repos` → `{ repos: [{ url, owner, name, app, defaultBranch?, private? }] }`
+  (the user's linked repos); `GET /api/sessions/cloud/branches?remoteUrl=` →
+  `{ branches, defaultBranch }` (App repos only, default branch first).
+- `DELETE /api/sessions/:id` removes the worktree and its local branch (a pushed
+  branch stays on GitHub).
+
 ### The pull request body (`summary`)
 
 The task prompt asks the agent to start with a `Plan:` block and end with a
