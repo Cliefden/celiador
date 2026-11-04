@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { hasProvenLink } from "../github/access";
 import { installationToken, openPullRequest, appRequest } from "../github/app";
 import { hasActiveServerRun, runServerRun } from "../runner/manager";
 import { git, removeWorkspace, workspaceDir } from "../runner/workspace";
@@ -20,8 +21,10 @@ import type { FsResult, GitCommand, GitFileStatus, Session, SessionRepo } from "
  * GitHub App, since the sandbox itself has no network.
  *
  * Access: the App's installation token (private clone, push, PR, merge) is used
- * only for a repo linked to this user (the queue's "your repos", RepoLinks).
- * Any other public repo still runs — anonymously, without push.
+ * only for a repo linked to this user (the queue's "your repos", RepoLinks) with
+ * a proof that their own GitHub account can write to it (github/access.ts, #79),
+ * re-checked on every use. Any other public repo still runs — anonymously,
+ * without push.
  */
 
 const COMMIT_NAME = "Celiador";
@@ -46,23 +49,30 @@ export function sessionBranch(prompt: string, sessionId: string): string {
 }
 
 export type RepoAccess =
-  | { ok: true; gh?: { owner: string; name: string }; linked: boolean }
+  | { ok: true; gh?: { owner: string; name: string }; linked: boolean; proven: boolean }
   | { ok: false; status: 403; error: string };
 
-/** Whether this user may run on `url`, and whether with the App (linked to them). */
+/**
+ * Whether this user may run on `url`, and whether with the App: `linked` = in
+ * their repos, `proven` = that link carries a proof of their GitHub access
+ * (github/access.ts) — the only case the App's token is ever used for them.
+ */
 export function repoAccess(userId: string, url: string): RepoAccess {
   const gh = parseGitHub(url);
   const owner = gh ? taskStores.links.owner(url) : undefined;
   if (owner && owner !== userId) return { ok: false, status: 403, error: "this repo is linked to another Celiador account" };
-  return { ok: true, gh, linked: !!gh && owner === userId };
+  const linked = !!gh && owner === userId;
+  return { ok: true, gh, linked, proven: linked && hasProvenLink(userId, url) };
 }
 
-/** The App's token for a session's repo, when it may use one (linked + installed). */
+/** The App's token for a session's repo, when it may use one (proven link + installed; re-checked on every use). */
 async function tokenFor(userId: string, url: string): Promise<string | undefined> {
   const access = repoAccess(userId, url);
-  if (!access.ok || !access.linked || !access.gh) return undefined;
-  return (await installationToken(access.gh).catch(() => null)) ?? undefined;
+  if (!access.ok || !access.proven || !access.gh) return undefined;
+  return (await installationToken({ userId }, access.gh).catch(() => null)) ?? undefined;
 }
+
+const NEEDS_PROOF = "needs the Celiador GitHub App on this repo, and the repo in your repos verified with your GitHub account (connect GitHub in Celiador)";
 
 /** Test seam: the remote git talks to for a repo URL (the smoke test serves a local bare repo). */
 let remoteOverride: ((url: string) => string) | undefined;
@@ -109,7 +119,7 @@ export async function startCloudSession(userId: string, session: Session, p: ICl
       if (/could not read Username|Authentication failed|Repository not found/i.test(raw)) {
         throw new Error(token || !parseGitHub(p.url)
           ? "Couldn't fetch the repo."
-          : "Couldn't fetch the repo — it looks private. Add it to your repos (with the Celiador GitHub App installed on it) to run on it in the cloud.");
+          : "Couldn't fetch the repo — it looks private. Add it to your repos, verified with your GitHub account (connect GitHub in Celiador) and with the Celiador GitHub App installed on it, to run on it in the cloud.");
       }
       throw err;
     });
@@ -283,7 +293,7 @@ async function headSha(dir: string): Promise<string> {
  */
 async function push(userId: string, session: Session, repo: SessionRepo, dir: string): Promise<SessionRepo> {
   const token = await tokenFor(userId, repo.url);
-  if (!token) throw new Error("pushing needs the Celiador GitHub App on this repo, and the repo in your repos");
+  if (!token) throw new Error(`pushing ${NEEDS_PROOF}`);
   const head = await headSha(dir);
   const remote = remoteFor(repo.url, token);
   const store = sessionStores.for(userId);
@@ -372,22 +382,22 @@ export async function cloudGit(userId: string, session: Session, command: GitCom
       case "git.pr": {
         if (busy) return { ok: false, error: "the agent is still working; open the pull request when it's done" };
         const gh = parseGitHub(repo.url);
-        if (!gh || !repo.pushable) return { ok: false, error: "pull requests need the Celiador GitHub App on this repo, and the repo in your repos" };
+        if (!gh || !repo.pushable) return { ok: false, error: `a pull request ${NEEDS_PROOF}` };
         const base = command.base ?? repo.base;
         if (repo.branch === base) return { ok: false, error: `the session works directly on ${base}; there's nothing to open a pull request against` };
         if (repo.pr) return { ok: true, url: repo.pr.url, created: false };
         const pushed = await push(userId, session, repo, dir);
-        const pr = await openPullRequest(gh, { title: command.title, head: repo.branch, base, body: command.body ?? "" });
-        if (!pr) return { ok: false, error: "the Celiador GitHub App isn't installed on this repo any more" };
+        const pr = await openPullRequest({ userId }, gh, { title: command.title, head: repo.branch, base, body: command.body ?? "" });
+        if (!pr) return { ok: false, error: "the Celiador GitHub App can't act on this repo for you any more (not installed, or your GitHub access changed)" };
         sessionStores.for(userId).setRepo(session.id, { ...pushed, pr: { number: pr.number, url: pr.url } });
         return { ok: true, url: pr.url, created: true };
       }
       case "git.merge": {
         const gh = parseGitHub(repo.url);
-        if (!gh || !repo.pushable) return { ok: false, error: "merging needs the Celiador GitHub App on this repo" };
+        if (!gh || !repo.pushable) return { ok: false, error: `merging ${NEEDS_PROOF}` };
         if (!repo.pr) return { ok: false, error: "open the pull request first" };
-        const res = await appRequest(gh, "PUT", `/pulls/${repo.pr.number}/merge`, command.method ? { merge_method: command.method } : {});
-        if (!res) return { ok: false, error: "the Celiador GitHub App isn't installed on this repo any more" };
+        const res = await appRequest({ userId }, gh, "PUT", `/pulls/${repo.pr.number}/merge`, command.method ? { merge_method: command.method } : {});
+        if (!res) return { ok: false, error: "the Celiador GitHub App can't act on this repo for you any more (not installed, or your GitHub access changed)" };
         if (res.status === 200 && res.json?.merged === true) {
           return { ok: true, merged: true, sha: typeof res.json.sha === "string" ? res.json.sha : undefined, url: repo.pr.url };
         }
@@ -401,19 +411,24 @@ export async function cloudGit(userId: string, session: Session, command: GitCom
   return { ok: false, error: "unsupported" };
 }
 
-/** The user's repos for the phone's cloud picker: linked repos, with whether the App can act on each. */
-export async function cloudRepos(userId: string): Promise<Array<{ url: string; owner: string; name: string; app: boolean; defaultBranch?: string; private?: boolean }>> {
+/**
+ * The user's repos for the phone's cloud picker: linked repos, with whether the
+ * App can act on each for them (`app`: proven link + installed) and whether the
+ * link carries a proof at all (`verified`; false → connect GitHub to verify).
+ */
+export async function cloudRepos(userId: string): Promise<Array<{ url: string; owner: string; name: string; app: boolean; verified: boolean; defaultBranch?: string; private?: boolean }>> {
   const urls = taskStores.links.forUser(userId);
   const out = await Promise.all(urls.map(async (url) => {
     const gh = parseGitHub(url);
     if (!gh) return undefined;
-    const res = await appRequest(gh, "GET", "").catch(() => null);
+    const res = await appRequest({ userId }, gh, "GET", "").catch(() => null);
     const ok = res?.status === 200;
     return {
       url,
       owner: gh.owner,
       name: gh.name,
       app: ok,
+      verified: hasProvenLink(userId, url),
       ...(ok && typeof res.json?.default_branch === "string" ? { defaultBranch: res.json.default_branch as string } : {}),
       ...(ok && typeof res.json?.private === "boolean" ? { private: res.json.private as boolean } : {}),
     };
@@ -427,11 +442,12 @@ export async function cloudBranches(userId: string, url: string): Promise<{ bran
   if (!access.ok) return { error: access.error, status: access.status };
   if (!access.gh) return { error: "not a github.com repo", status: 404 };
   if (!access.linked) return { error: "add the repo to your repos to list its branches", status: 409 };
+  if (!access.proven) return { error: "verify the repo with your GitHub account (connect GitHub in Celiador) to list its branches", status: 409 };
   const [repoRes, res] = await Promise.all([
-    appRequest(access.gh, "GET", "").catch(() => null),
-    appRequest(access.gh, "GET", "/branches?per_page=100").catch(() => null),
+    appRequest({ userId }, access.gh, "GET", "").catch(() => null),
+    appRequest({ userId }, access.gh, "GET", "/branches?per_page=100").catch(() => null),
   ]);
-  if (!res || res.status !== 200 || !Array.isArray(res.json)) return { error: "the Celiador GitHub App isn't installed on this repo", status: 409 };
+  if (!res || res.status !== 200 || !Array.isArray(res.json)) return { error: "the Celiador GitHub App can't act on this repo for you (not installed, or your GitHub access changed)", status: 409 };
   const def = typeof repoRes?.json?.default_branch === "string" ? (repoRes.json.default_branch as string) : undefined;
   const names = (res.json as Array<{ name?: unknown }>).map((b) => b.name).filter((n): n is string => typeof n === "string");
   return { branches: def ? [def, ...names.filter((n) => n !== def)] : names, defaultBranch: def };

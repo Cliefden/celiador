@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Context } from "hono";
 import type { AppEnv } from "../auth";
+import { hasProvenLink } from "../github/access";
 import { appRequest, githubApp, reactToComment } from "../github/app";
 import { sessionBus } from "../sessions/bus";
 import { checksFailed, type CiFailure } from "./ci";
@@ -43,7 +44,7 @@ export function validSignature(secret: string, body: string, header: string | un
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-interface GhRepository { name?: string; owner?: { login?: string }; clone_url?: string }
+interface GhRepository { name?: string; owner?: { login?: string }; clone_url?: string; private?: boolean }
 interface GhIssue { number?: number; title?: string; body?: string | null; html_url?: string; pull_request?: unknown }
 interface GhPayload {
   action?: string;
@@ -72,6 +73,16 @@ const PR_REFRESH_ACTIONS = new Set(["opened", "synchronize", "reopened", "edited
 function repoOf(r: GhRepository | undefined): TaskRepo | undefined {
   if (!r?.name || !r.owner?.login || !r.clone_url || !/^https:\/\//.test(r.clone_url)) return undefined;
   return { owner: r.owner.login, name: r.name, url: r.clone_url };
+}
+
+/**
+ * Whether the link owner may be handed this repo's issue content (a new task's
+ * title and body, or a reply relayed to their run). For a private repo (or one
+ * whose payload doesn't say) only with a proven link: a first-come link without
+ * proof would otherwise read another org's private issues (#79).
+ */
+function mayReceive(userId: string, repo: TaskRepo, repository: GhRepository | undefined): boolean {
+  return repository?.private === false || hasProvenLink(userId, repo.url);
 }
 
 /** What a webhook delivery asks for: a task source, or why it is ignored. Pure; exported for tests. */
@@ -123,6 +134,7 @@ export async function githubWebhook(c: Context<AppEnv>): Promise<Response> {
   }
   const userId = taskStores.links.owner(repo.url);
   if (!userId) return c.json({ ok: true, ignored: "repo is not linked to a Celiador account" });
+  if (!mayReceive(userId, repo, payload.repository)) return c.json({ ok: true, ignored: "private repo linked without proof of access" });
 
   const store = taskStores.for(userId);
   const existing = store.openForIssue(repo, issue.number);
@@ -178,7 +190,7 @@ function answerFromIssue(p: GhPayload): Record<string, unknown> | undefined {
   const number = p.issue?.number;
   if (!repo || typeof number !== "number") return undefined;
   const userId = taskStores.links.owner(repo.url);
-  if (!userId) return undefined;
+  if (!userId || !mayReceive(userId, repo, p.repository)) return undefined;
   const task = taskStores.for(userId).openForIssue(repo, number);
   const awaiting = task?.awaiting;
   if (!task || !awaiting || !task.sessionId) return undefined;
@@ -203,7 +215,7 @@ function answerFromIssue(p: GhPayload): Record<string, unknown> | undefined {
     sessionBus.sendCommand(task.sessionId, { kind: "answer", requestId: awaiting.requestId, text });
   }
   // The ack is a reaction, not another comment (the run's own state change follows on the queue).
-  if (typeof p.comment?.id === "number") void reactToComment(repo, p.comment.id).catch(() => undefined);
+  if (typeof p.comment?.id === "number") void reactToComment({ userId }, repo, p.comment.id).catch(() => undefined);
   return { ok: true, taskId: task.id, answered: answer, requestId: awaiting.requestId };
 }
 
@@ -228,7 +240,7 @@ function ciEvent(c: Context<AppEnv>, event: string, p: GhPayload): Response {
     for (const t of tasks) {
       if (t.state !== "pr-open") continue;
       fixing.push(t.id);
-      void ciFailureDetails(t, event, p, sha).then((f) => checksFailed(userId, t.id, f)).catch((err) => console.error("[tasks] ci fix failed:", err instanceof Error ? err.message : err));
+      void ciFailureDetails(userId, t, event, p, sha).then((f) => checksFailed(userId, t.id, f)).catch((err) => console.error("[tasks] ci fix failed:", err instanceof Error ? err.message : err));
     }
   }
   return c.json({ ok: true, refreshed: tasks.map((t) => t.id), ...(fixing.length ? { fixing } : {}) });
@@ -239,7 +251,7 @@ function ciEvent(c: Context<AppEnv>, event: string, p: GhPayload): Response {
  * itself; a `check_suite` only has an id, so its failed runs are listed via the
  * App (best-effort — without it the fix text names "checks" and the PR).
  */
-async function ciFailureDetails(task: Task, event: string, p: GhPayload, sha: string): Promise<CiFailure> {
+async function ciFailureDetails(userId: string, task: Task, event: string, p: GhPayload, sha: string): Promise<CiFailure> {
   const prNumber = (event === "check_suite" ? p.check_suite?.pull_requests : p.check_run?.pull_requests)?.find((pr) => typeof pr.number === "number")?.number ?? task.pr?.number;
   if (event === "check_run") {
     const url = p.check_run?.details_url ?? p.check_run?.html_url;
@@ -248,7 +260,7 @@ async function ciFailureDetails(task: Task, event: string, p: GhPayload, sha: st
   const names: string[] = [];
   const urls: string[] = [];
   if (typeof p.check_suite?.id === "number") {
-    const res = await appRequest(task.repo, "GET", `/check-suites/${p.check_suite.id}/check-runs?per_page=50`).catch(() => null);
+    const res = await appRequest({ userId }, task.repo, "GET", `/check-suites/${p.check_suite.id}/check-runs?per_page=50`).catch(() => null);
     const runs = res?.status === 200 && Array.isArray(res.json?.check_runs) ? (res.json.check_runs as Array<{ name?: string; conclusion?: string | null; details_url?: string | null; html_url?: string | null }>) : [];
     for (const run of runs) {
       if (!FIXABLE.has(String(run.conclusion))) continue;

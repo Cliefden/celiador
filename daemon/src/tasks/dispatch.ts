@@ -1,9 +1,10 @@
 import { ROOT } from "../config";
+import { hasProvenLink } from "../github/access";
 import { githubApp } from "../github/app";
 import { editorControl } from "../presence/control";
 import { workspacePresence } from "../presence/workspaces";
 import { retryPendingCiFixes } from "./ci";
-import { cloudEligible, recoverOrphanedCloudTasks, startCloudRun } from "./cloud";
+import { cloudEligible, cloudWaitingReason, recoverOrphanedCloudTasks, startCloudRun } from "./cloud";
 import { postFailedComment } from "./comments";
 import { publishTaskChange } from "./events";
 import { ACTIVE_STATES, repoKey, TaskStores, type Task, type TaskStore } from "./store";
@@ -72,7 +73,8 @@ export function dispatchTasks(userId: string): Task[] {
       // With the GitHub App set up, the daemon itself posts the "picked up"
       // comment as Celiador — when the editor reports `running` (tasks/pulls.ts),
       // so it can name the machine; the editor then skips its own (gh-token) comment.
-      const commented = !!githubApp() && !!task.issue;
+      // Only for a proven link: without one the App doesn't act on the repo for this user.
+      const commented = !!githubApp() && !!task.issue && hasProvenLink(userId, task.repo.url);
       const delivered = editorControl.request(userId, {
         kind: "start-task",
         taskId: task.id,
@@ -92,13 +94,21 @@ export function dispatchTasks(userId: string): Task[] {
         dispatchedAt: new Date().toISOString(),
         dispatches: (task.dispatches ?? 0) + 1,
       });
-    } else if (cloudEligible(task)) {
+    } else if (cloudEligible(userId, task)) {
       // Marked synchronously so a second dispatch can't start it twice; the
       // network checks (sandbox, App on the repo) happen in startCloudRun, which
       // re-queues the task with the reason when one fails.
       store.update(task.id, { state: "dispatched", runner: "cloud" });
       void startCloudRun(userId, task.id);
-    } else continue;
+    } else {
+      // Cloud runs are on but this repo has no proven link: say why it waits.
+      const why = cloudWaitingReason(userId, task);
+      if (why && task.error !== why) {
+        const updated = store.update(task.id, { error: why });
+        if (updated) publishTaskChange(userId, updated);
+      }
+      continue;
+    }
     publishTaskChange(userId, task);
     sent.push(task);
     active++;

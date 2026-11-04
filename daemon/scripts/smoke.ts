@@ -36,7 +36,36 @@ async function main(): Promise<void> {
 	// GitHub's REST API, stubbed per section (never the real network): 404 unless a test installs a handler.
 	type GhCall = { method: string; path: string; body?: Record<string, unknown> };
 	let ghHandler: (call: GhCall) => { status: number; json?: unknown } = () => ({ status: 404, json: { message: "Not Found" } });
-	globalThis.fetch = (async (url: unknown, init: { body?: string; method?: string } = {}) => {
+	// GitHub as each connected user sees it (user-to-server tokens `ghu_*`): who they are and
+	// their permission on each repo the App's installations let them reach. Missing = 404.
+	type GhUser = { id: number; login: string; repos: Record<string, { id: number; permissions: Record<string, boolean> }> };
+	const ghUsers = new Map<string, GhUser>();
+	const ghUserCalls: Array<{ token: string; path: string }> = [];
+	// The App's OAuth token endpoint: `code-<token>` redeems to that token; a refresh hands out `<token>-r`.
+	const oauthCalls: Array<Record<string, unknown>> = [];
+	const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+	globalThis.fetch = (async (url: unknown, init: { body?: string; method?: string; headers?: Record<string, string> } = {}) => {
+		if (String(url) === "https://github.com/login/oauth/access_token") {
+			const body = JSON.parse(init.body ?? "{}") as Record<string, string>;
+			oauthCalls.push(body);
+			if (body.client_id !== "cid" || body.client_secret !== "cs") return json(200, { error: "incorrect_client_credentials" });
+			const tok = body.grant_type === "refresh_token" ? `${body.refresh_token?.replace(/^ghr_/, "")}-r` : body.code?.startsWith("code-") ? body.code.slice(5) : undefined;
+			if (!tok) return json(200, { error: "bad_verification_code" });
+			if (body.grant_type === "refresh_token" && ghUsers.has(tok.replace(/-r$/, ""))) ghUsers.set(tok, ghUsers.get(tok.replace(/-r$/, ""))!);
+			return json(200, { access_token: tok, expires_in: 28800, refresh_token: `ghr_${tok}`, refresh_token_expires_in: 15_811_200, token_type: "bearer" });
+		}
+		const auth = init.headers?.authorization ?? "";
+		if (String(url).startsWith("https://api.github.com/") && auth.startsWith("Bearer ghu_")) {
+			const tok = auth.slice("Bearer ".length);
+			const p = String(url).slice("https://api.github.com".length);
+			ghUserCalls.push({ token: tok, path: p });
+			const u = ghUsers.get(tok);
+			if (!u) return json(401, { message: "Bad credentials" });
+			if (p === "/user") return json(200, { id: u.id, login: u.login });
+			const m = /^\/repos\/([^/]+)\/([^/]+)$/.exec(p);
+			const r = m ? u.repos[`${m[1]}/${m[2]}`.toLowerCase()] : undefined;
+			return r ? json(200, { id: r.id, full_name: `${m![1]}/${m![2]}`, private: true, permissions: r.permissions }) : json(404, { message: "Not Found" });
+		}
 		if (String(url).startsWith("https://api.github.com/")) {
 			const call: GhCall = { method: init.method ?? "GET", path: String(url).slice("https://api.github.com".length), body: init.body ? JSON.parse(init.body) : undefined };
 			const r = ghHandler(call);
@@ -362,7 +391,8 @@ async function main(): Promise<void> {
 	const T = "http://localhost/api/tasks";
 	const WH = "http://localhost/api/github/webhook";
 	const REPO = "https://github.com/Cliefden/smoke-repo.git";
-	const ghRepo = { name: "smoke-repo", owner: { login: "Cliefden" }, clone_url: REPO };
+	// A public repo with a per-repo webhook, linked without proof (no App, no GitHub connection): issues still route.
+	const ghRepo = { name: "smoke-repo", owner: { login: "Cliefden" }, clone_url: REPO, private: false };
 	const hook = (event: string, payload: unknown, secret = "whsec") => {
 		const body = JSON.stringify(payload);
 		const sig = `sha256=${crypto.createHmac("sha256", secret).update(body).digest("hex")}`;
@@ -378,7 +408,11 @@ async function main(): Promise<void> {
 	const unlinked = (await (await hook("issues", labeled(41))).json()) as { ignored?: string };
 	ok("label on an unlinked repo is ignored", /not linked/.test(unlinked.ignored ?? ""), JSON.stringify(unlinked));
 	const link = await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: "https://github.com/Cliefden/smoke-repo" }) });
-	ok("link a repo", link.status === 200 && ((await link.json()) as { repos: string[] }).repos.includes(REPO));
+	const linkBody = (await link.json()) as { repos: string[]; verified?: boolean; repoLinks?: Array<{ url: string; verified: boolean }> };
+	ok("link a repo", link.status === 200 && linkBody.repos.includes(REPO));
+	ok("…without the App or a GitHub connection: linked without proof (verified false)", linkBody.verified === false && linkBody.repoLinks?.find((l) => l.url === REPO)?.verified === false, JSON.stringify(linkBody));
+	const privHook = (await (await hook("issues", { ...labeled(49), repository: { ...ghRepo, private: true } })).json()) as { ignored?: string };
+	ok("a private repo's issue on a link without proof → ignored (its content isn't handed out)", /without proof/.test(privHook.ignored ?? ""), JSON.stringify(privHook));
 	ok("another label is ignored", /another label/.test(((await (await hook("issues", labeled(42, "bug"))).json()) as { ignored?: string }).ignored ?? ""));
 	const created = await hook("issues", labeled(42));
 	const createdBody = (await created.json()) as { taskId?: string; state?: string };
@@ -495,6 +529,141 @@ async function main(): Promise<void> {
 	ok("setup page renders the manifest form when no app is stored", newPage.status === 200 && /organizations\/Cliefden\/settings\/apps\/new\?state=/.test(await newPage.text()));
 	ok("setup callback without a known state → 400", (await app.request("http://localhost/api/github/app/setup?code=x&state=unknown")).status === 400);
 	ok("manifest: checks + statuses read, check_suite + status events", manifest.default_permissions.checks === "read" && manifest.default_permissions.statuses === "read" && manifest.default_events.includes("check_suite") && manifest.default_events.includes("status"), JSON.stringify(manifest.default_permissions));
+	const m2 = manifest as unknown as { callback_urls?: string[]; request_oauth_on_install?: boolean };
+	ok("manifest: user-authorization callback on the public URL, asked at install", m2.callback_urls?.[0] === "https://smoke.test/api/github/callback" && m2.request_oauth_on_install === true, JSON.stringify(m2));
+
+	// ── Proof of access before the App's token is used (#79) ──
+	console.log("\n== repo link proof ==");
+	const { installationToken } = await import("../src/github/app.ts");
+	const { setGitHubIdentityForTests, resetGitHubAccessForTests } = await import("../src/github/access.ts");
+	const { taskStores: linkStores } = await import("../src/tasks/dispatch.ts");
+	resetGitHubAppForTests(smokeApp);
+	const VICTIM = "https://github.com/victimorg/private.git";
+	const VGH = { owner: "victimorg", name: "private" };
+	const pCalls: GhCall[] = [];
+	ghHandler = (call) => {
+		pCalls.push(call);
+		if (call.path === "/repos/victimorg/private/installation" || call.path === "/repos/victimorg/legacy/installation") return { status: 200, json: { id: 77 } };
+		if (call.path === "/app/installations/77/access_tokens") return { status: 201, json: { token: "ghs_victim" } };
+		if (call.path === "/repos/victimorg/private/pulls/5/merge") return { status: 200, json: { merged: true, sha: "stolen" } };
+		return { status: 404, json: { message: "Not Found" } };
+	};
+	const tokenCalls = () => pCalls.filter((c) => c.path.endsWith("/access_tokens")).length;
+	const attackerH = { "content-type": "application/json", authorization: `Bearer ${userToken("attacker-user")}` };
+	const victimH = { "content-type": "application/json", authorization: `Bearer ${userToken("victim-user")}` };
+	const linkAs = (h: Record<string, string>, remoteUrl: string) => app.request(`${T}/repos`, { method: "POST", headers: h, body: JSON.stringify({ remoteUrl }) });
+	// GitHub: the victim administers victimorg's repos; the attacker is a GitHub user with no access there.
+	ghUsers.set("ghu_victim", { id: 501, login: "victim", repos: { "victimorg/private": { id: 9001, permissions: { admin: true, push: true, pull: true } }, "victimorg/legacy": { id: 9002, permissions: { admin: true, push: true, pull: true } } } });
+	ghUsers.set("ghu_attacker", { id: 666, login: "attacker", repos: {} });
+	ghUsers.set("ghu_reader", { id: 667, login: "reader", repos: { "victimorg/private": { id: 9001, permissions: { admin: false, push: false, pull: true } } } });
+
+	// Not connected: linking an App-installed repo is refused, and no token is minted.
+	const notConnected = await linkAs(attackerH, VICTIM);
+	const ncBody = (await notConnected.json()) as { error?: string; needs?: string };
+	ok("A (no GitHub connection) links another org's App-installed repo → 403, needs github-connect", notConnected.status === 403 && ncBody.needs === "github-connect" && !linkStores.links.get(VICTIM), JSON.stringify(ncBody));
+
+	// The connect flow (the App's user authorization) for the attacker's own GitHub account.
+	ok("connect needs a signed-in user → 401", (await app.request("http://localhost/api/github/account/connect", { method: "POST" })).status === 401);
+	const connect = async (h: Record<string, string>, ghToken: string): Promise<{ page: string; status: number; headers: Headers }> => {
+		const start = (await (await app.request("http://localhost/api/github/account/connect", { method: "POST", headers: h })).json()) as { authorizeUrl: string; installUrl: string };
+		const state = new URL(start.authorizeUrl).searchParams.get("state")!;
+		const cb = await app.request(`http://localhost/api/github/callback?code=code-${ghToken}&state=${state}`);
+		const confirm = /name="confirm" value="([^"]+)"/.exec(await cb.text())?.[1] ?? "";
+		const res = await app.request("http://localhost/api/github/callback/confirm", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `confirm=${encodeURIComponent(confirm)}&action=connect` });
+		return { page: await res.text(), status: res.status, headers: res.headers };
+	};
+	const start = (await (await app.request("http://localhost/api/github/account/connect", { method: "POST", headers: attackerH })).json()) as { authorizeUrl?: string; installUrl?: string };
+	const startUrl = new URL(start.authorizeUrl ?? "https://x");
+	ok("connect → GitHub's authorize URL (App client id, callback, one-time state) + the install URL with the same state", startUrl.origin === "https://github.com" && startUrl.searchParams.get("client_id") === "cid" && startUrl.searchParams.get("redirect_uri") === "https://smoke.test/api/github/callback" && !!startUrl.searchParams.get("state") && start.installUrl === `https://github.com/apps/celiador-smoke/installations/new?state=${startUrl.searchParams.get("state")}`, JSON.stringify(start));
+	const oauthBefore = oauthCalls.length;
+	const forged = await app.request("http://localhost/api/github/callback?code=code-ghu_victim&state=forged");
+	ok("callback with a state the daemon didn't hand out → 400, the code isn't redeemed", forged.status === 400 && oauthCalls.length === oauthBefore);
+	const cb = await app.request(`http://localhost/api/github/callback?code=code-ghu_attacker&state=${startUrl.searchParams.get("state")}`);
+	const cbHtml = await cb.text();
+	ok("callback → a confirm page naming the GitHub account, not framable, not cached", cb.status === 200 && cbHtml.includes("@attacker") && cbHtml.includes('name="confirm"') && cb.headers.get("x-frame-options") === "DENY" && cb.headers.get("cache-control") === "no-store");
+	ok("…and nothing is connected before the click", ((await (await app.request("http://localhost/api/github/account", { headers: attackerH })).json()) as { connected?: boolean }).connected === false);
+	ok("the same state can't be used twice", (await app.request(`http://localhost/api/github/callback?code=code-ghu_attacker&state=${startUrl.searchParams.get("state")}`)).status === 400);
+	const cancelId = /name="confirm" value="([^"]+)"/.exec(cbHtml)?.[1] ?? "";
+	await app.request("http://localhost/api/github/callback/confirm", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `confirm=${encodeURIComponent(cancelId)}&action=cancel` });
+	ok("cancel → still not connected", ((await (await app.request("http://localhost/api/github/account", { headers: attackerH })).json()) as { connected?: boolean }).connected === false);
+	const attackerConnect = await connect(attackerH, "ghu_attacker");
+	const acct = (await (await app.request("http://localhost/api/github/account", { headers: attackerH })).json()) as { connected?: boolean; login?: string };
+	ok("connect → confirmed, GET /api/github/account says @attacker", attackerConnect.status === 200 && acct.connected === true && acct.login === "attacker", JSON.stringify(acct));
+	ok("one GitHub account, one Celiador account: @attacker can't also be connected to another user → 409", (await connect({ "content-type": "application/json", authorization: `Bearer ${userToken("third-user")}` }, "ghu_attacker")).status === 409);
+
+	// Connected, but GitHub says no write access: still refused, still no token.
+	const noAccess = await linkAs(attackerH, VICTIM);
+	const naBody = (await noAccess.json()) as { error?: string; needs?: string };
+	ok("A (connected, no access on GitHub) links victimorg/private → 403, needs write-access, not linked", noAccess.status === 403 && naBody.needs === "write-access" && /@attacker can't write/.test(naBody.error ?? "") && !linkStores.links.get(VICTIM), JSON.stringify(naBody));
+	ok("…and A gets no installation token for it", (await installationToken({ userId: "attacker-user" }, VGH)) === null && tokenCalls() === 0);
+	// Read access isn't write access (the token can push and merge).
+	setGitHubIdentityForTests("reader-user", { githubId: 667, login: "reader", accessToken: "ghu_reader", connectedAt: new Date().toISOString() });
+	const readerH = { "content-type": "application/json", authorization: `Bearer ${userToken("reader-user")}` };
+	ok("a read-only collaborator → 403 write-access", (await linkAs(readerH, VICTIM)).status === 403);
+
+	// The installer (admin on GitHub) links it with a proof and gets the token.
+	setGitHubIdentityForTests("victim-user", { githubId: 501, login: "victim", accessToken: "ghu_victim", connectedAt: new Date().toISOString() });
+	const vLink = await linkAs(victimH, VICTIM);
+	const vBody = (await vLink.json()) as { verified?: boolean; repoLinks?: Array<{ url: string; verified: boolean; login?: string }> };
+	ok("the installer (admin on GitHub) links it → 200, verified as @victim", vLink.status === 200 && vBody.verified === true && vBody.repoLinks?.[0]?.verified === true && vBody.repoLinks[0].login === "victim", JSON.stringify(vBody));
+	ok("…and gets the installation token", (await installationToken({ userId: "victim-user" }, VGH)) === "ghs_victim");
+	ok("A still gets none (not A's link) and can't link it now → 409", (await installationToken({ userId: "attacker-user" }, VGH)) === null && (await linkAs(attackerH, VICTIM)).status === 409);
+
+	// A manual task on the victim's repo: no App merge, PR body or comment for A, whatever A reports.
+	const aTaskRes = await app.request(T, { method: "POST", headers: attackerH, body: JSON.stringify({ remoteUrl: VICTIM, title: "Steal it" }) });
+	const aTask = ((await aTaskRes.json()) as { task: { id: string } }).task;
+	await app.request(`${T}/${aTask.id}/status`, { method: "POST", headers: attackerH, body: JSON.stringify({ state: "pr-open", prUrl: "https://github.com/victimorg/private/pull/5", summary: "x" }) });
+	const aMerge = await app.request(`${T}/${aTask.id}/merge`, { method: "POST", headers: attackerH, body: "{}" });
+	ok("A's task on the victim's repo: merge refused (no App, no editor) and nothing was sent to GitHub as the App", aMerge.status === 409 && !pCalls.some((c) => c.path.includes("/pulls/5")) && tokenCalls() === 1, `${aMerge.status} ${JSON.stringify(pCalls.map((c) => c.path))}`);
+
+	// A legacy link (made before proofs existed) on an App-installed repo: no token until its owner connects GitHub.
+	const LEGACY = "https://github.com/victimorg/legacy.git";
+	linkStores.links.link("legacy-user", LEGACY);
+	ok("a legacy link without proof gets no token", (await installationToken({ userId: "legacy-user" }, { owner: "victimorg", name: "legacy" })) === null && tokenCalls() === 1);
+	const legacyH = { "content-type": "application/json", authorization: `Bearer ${userToken("legacy-user")}` };
+	const legacyList = (await (await app.request(T, { headers: legacyH })).json()) as { repoLinks?: Array<{ url: string; verified: boolean }> };
+	ok("…and the queue lists it as not verified", legacyList.repoLinks?.[0]?.url === LEGACY && legacyList.repoLinks[0].verified === false, JSON.stringify(legacyList.repoLinks));
+	ghUsers.set("ghu_legacy", { id: 503, login: "legacy", repos: {} });
+	const legacyConnect = await connect(legacyH, "ghu_legacy");
+	ok("connecting a GitHub account without access leaves it unverified", /0 of your 1 linked repository is verified/.test(legacyConnect.page) && (await installationToken({ userId: "legacy-user" }, { owner: "victimorg", name: "legacy" })) === null, legacyConnect.page.slice(-300));
+	// The real owner (a proven writer) takes a first-come link without proof over.
+	const takeover = await linkAs(victimH, LEGACY);
+	ok("a proven writer takes over another user's unproven link", takeover.status === 200 && linkStores.links.owner(LEGACY) === "victim-user" && (await installationToken({ userId: "victim-user" }, { owner: "victimorg", name: "legacy" })) === "ghs_victim", `${takeover.status} ${linkStores.links.owner(LEGACY)}`);
+	ok("…and the old claimant gets nothing", (await installationToken({ userId: "legacy-user" }, { owner: "victimorg", name: "legacy" })) === null);
+
+	// Connecting verifies the links a user already has (the migration path for pre-#79 links).
+	linkStores.links.unlink("victim-user", LEGACY);
+	linkStores.links.link("migrating-user", LEGACY);
+	ghUsers.set("ghu_migrator", { id: 502, login: "migrator", repos: { "victimorg/legacy": { id: 9002, permissions: { push: true } } } });
+	const migH = { "content-type": "application/json", authorization: `Bearer ${userToken("migrating-user")}` };
+	const migrated = await connect(migH, "ghu_migrator");
+	ok("connecting GitHub re-verifies existing links: 1 of 1 verified, token works", /1 of your 1 linked repository is verified/.test(migrated.page) && (await installationToken({ userId: "migrating-user" }, { owner: "victimorg", name: "legacy" })) === "ghs_victim", migrated.page.slice(-300));
+
+	// The proof is re-checked with GitHub at the TTL: lost access drops it.
+	process.env.CELIADOR_GITHUB_VERIFY_TTL_MS = "0";
+	ghUsers.get("ghu_victim")!.repos["victimorg/private"] = { id: 9001, permissions: { push: false, pull: true } };
+	ok("after the TTL, access lost on GitHub → no token, the proof is dropped", (await installationToken({ userId: "victim-user" }, VGH)) === null && !linkStores.links.get(VICTIM)?.verified);
+	ghUsers.get("ghu_victim")!.repos["victimorg/private"] = { id: 4242, permissions: { admin: true, push: true } };
+	await linkAs(victimH, VICTIM);
+	ghUsers.get("ghu_victim")!.repos["victimorg/private"] = { id: 31337, permissions: { admin: true, push: true } };
+	ok("a different repo behind the same name (new GitHub id) → proof dropped", (await installationToken({ userId: "victim-user" }, VGH)) === null && !linkStores.links.get(VICTIM)?.verified);
+	// An expired user token is refreshed (once) before the check.
+	ghUsers.get("ghu_victim")!.repos["victimorg/private"] = { id: 4242, permissions: { admin: true, push: true } };
+	setGitHubIdentityForTests("victim-user", { githubId: 501, login: "victim", accessToken: "ghu_victim", accessExpiresAt: Date.now() - 1000, refreshToken: "ghr_ghu_victim", refreshExpiresAt: Date.now() + 86_400_000, connectedAt: new Date().toISOString() });
+	const refreshes = oauthCalls.filter((c) => c.grant_type === "refresh_token").length;
+	const relinked = (await (await linkAs(victimH, VICTIM)).json()) as { verified?: boolean };
+	ok("an expired user token is refreshed before the check", relinked.verified === true && oauthCalls.filter((c) => c.grant_type === "refresh_token").length === refreshes + 1 && ghUserCalls.some((c) => c.token === "ghu_victim-r"), JSON.stringify(relinked));
+	delete process.env.CELIADOR_GITHUB_VERIFY_TTL_MS;
+	// Disconnecting drops every proof.
+	const disc = await app.request("http://localhost/api/github/account", { method: "DELETE", headers: victimH });
+	ok("disconnect → proofs gone, no token", disc.status === 200 && !linkStores.links.get(VICTIM)?.verified && (await installationToken({ userId: "victim-user" }, VGH)) === null);
+
+	// The smoke user (the rest of the suite) connects as @smoke, with write on the repos the later sections use.
+	ghUsers.set("ghu_smoke", { id: 1001, login: "smoke", repos: Object.fromEntries(["agents-repo", "narrate-repo", "cloud-repo", "noapp-repo", "cs-repo"].map((n, i) => [`cliefden/${n}`, { id: 2000 + i, permissions: { push: true } }])) });
+	setGitHubIdentityForTests("smoke-user", { githubId: 1001, login: "smoke", accessToken: "ghu_smoke", connectedAt: new Date().toISOString() });
+	resetGitHubAccessForTests();
+	resetGitHubAppForTests();
+	ghHandler = () => ({ status: 404, json: { message: "Not Found" } });
 
 	// ── Agents UI: task fields, live session state, merge / follow-up, deep-link pages ──
 	console.log("\n== agents ui ==");
@@ -649,7 +818,10 @@ async function main(): Promise<void> {
 		return { status: 404, json: { message: "Not Found" } };
 	};
 	resetGitHubAppForTests(smokeApp);
-	const appTask = ((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO, issue: { number: 12, title: "Queue shows stale checks", url: issueUrl(12) } }) })).json()) as { task: ATask }).task;
+	// Linked earlier without the App (no proof); linking again with @smoke connected adds the proof.
+	const reLink = (await (await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO }) })).json()) as { verified?: boolean };
+	ok("re-linking with GitHub connected verifies the existing link", reLink.verified === true, JSON.stringify(reLink));
+	const appTask =((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: AREPO, issue: { number: 12, title: "Queue shows stale checks", url: issueUrl(12) } }) })).json()) as { task: ATask }).task;
 	await tick();
 	ok("with the App, dispatch tells the editor the daemon will comment", aCmds.find((c) => c.kind === "start-task" && c.taskId === appTask.id)?.commented === true, JSON.stringify(aCmds));
 	ok("no comment at dispatch any more", !ghCalls.some((c) => c.path.includes("/issues/12/comments")));
@@ -788,7 +960,7 @@ async function main(): Promise<void> {
 	const { parseSelfReview, extractPlan, composePrBody, formatUsage } = await import("../src/tasks/prBody.ts");
 	const { costUsd } = await import("../src/agent/pricing.ts");
 	const { overrideServerRunnerForTests } = await import("../src/runner/manager.ts");
-	const { overrideCloudRemoteForTests, WAITING_FOR_APP } = await import("../src/tasks/cloud.ts");
+	const { overrideCloudRemoteForTests, WAITING_FOR_APP, WAITING_FOR_LINK } = await import("../src/tasks/cloud.ts");
 	// A plain user token (no run id) — what the editor sends.
 	const userH = { "content-type": "application/json", authorization: `Bearer ${userToken("smoke-user")}` };
 	const gwBodyPlain = JSON.stringify({ model: AGENT_MODEL, max_tokens: 10, stream: true, messages: [{ role: "user", content: "hi" }] });
@@ -1065,8 +1237,16 @@ async function main(): Promise<void> {
 	await tick();
 	ok("…and the issue is told", cIssueComments(42).some((c) => c.startsWith("**Failed.** The agent finished without changing anything.")), JSON.stringify(cIssueComments(42)));
 	// No App on the repo → stays queued with the waiting-for-an-editor reason, published once.
+	// A repo with no proven link (a manual task on any repo): never sent to the cloud, no App lookup at all.
+	const UNPROVEN = "https://github.com/Cliefden/unproven-repo.git";
+	const unproven = ((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: UNPROVEN, title: "Someone else's repo" }) })).json()) as { task: ATask & { error?: string } }).task;
+	await tick(30);
+	ok("manual task on a repo without a proven link → stays queued with the reason, the App never asked", (await getTask(unproven.id))?.state === "queued" && (await getTask(unproven.id) as ATask & { error?: string })?.error === WAITING_FOR_LINK && !cCalls.some((c) => c.path.includes("unproven-repo")), JSON.stringify(await getTask(unproven.id)));
+	await app.request(`${T}/${unproven.id}/cancel`, { method: "POST", headers: authH });
+	// No App on the repo (proven link, but no installation) → waits for an editor.
 	const NOAPP = "https://github.com/Cliefden/noapp-repo.git";
-	const noApp = ((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: NOAPP, title: "Private, no app" }) })).json()) as { task: ATask }).task;
+	await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: NOAPP }) });
+	const noApp =((await (await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: NOAPP, title: "Private, no app" }) })).json()) as { task: ATask }).task;
 	ok("repo without the App → back to queued with the reason", await until(async () => { const t = await getTask(noApp.id) as ATask & { error?: string }; return t?.state === "queued" && t.error === WAITING_FOR_APP; }), JSON.stringify(await getTask(noApp.id)));
 	await app.request(T, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: NOAPP, title: "Another, same repo" }) });
 	await tick(60);
@@ -1229,6 +1409,16 @@ async function main(): Promise<void> {
 	ok("…and the App was never asked for a token for it", !csCalls.some((c) => c.path.includes("public-repo")));
 	const pubPr = await app.request(`${S}/${pubS.id}/git/pr`, { method: "POST", headers: authH, body: JSON.stringify({ title: "nope" }) });
 	ok("…so a pull request is refused with the reason", pubPr.status === 400 && /GitHub App/.test(((await pubPr.json()) as { error?: string }).error ?? ""));
+	// The user's own link without a proof (a pre-#79 link): the session runs, but never with the App's token.
+	linkStores.links.setProof("smoke-user", CSREPO, undefined);
+	const reposUnproven = (await (await app.request(`${S}/cloud/repos`, { headers: authH })).json()) as { repos: Array<{ url: string; app: boolean; verified: boolean }> };
+	ok("an own link without proof: cloud/repos says verified false, app false", reposUnproven.repos.some((r) => r.url === CSREPO && !r.verified && !r.app), JSON.stringify(reposUnproven));
+	ok("…its branches aren't listed (409, verify first)", (await app.request(`${S}/cloud/branches?remoteUrl=${encodeURIComponent(CSREPO)}`, { headers: authH })).status === 409);
+	const tokensBefore = csCalls.filter((c) => c.path.endsWith("/access_tokens")).length;
+	const legacyS = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "Legacy link", repo: { url: CSREPO, branch: "main" } }) })).json()) as { session: { id: string } }).session;
+	ok("…a cloud session on it runs without the App (not pushable), and no token is minted", await until(async () => (await getCs(legacyS.id))?.state === "done") && (await getCs(legacyS.id))?.repo?.pushable === false && csCalls.filter((c) => c.path.endsWith("/access_tokens")).length === tokensBefore, JSON.stringify(await getCs(legacyS.id)));
+	const legacyPush = await app.request(`${S}/${legacyS.id}/git/push`, { method: "POST", headers: authH });
+	ok("…and a push is refused with the reason (connect GitHub)", legacyPush.status === 400 && /verified with your GitHub account/.test(((await legacyPush.json()) as { error?: string }).error ?? ""), `got ${legacyPush.status}`);
 	overrideServerRunnerForTests(undefined);
 	overrideCloudSessionRemoteForTests(undefined);
 	resetGitHubAppForTests();

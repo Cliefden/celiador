@@ -1,4 +1,5 @@
 import { installationToken, openPullRequest, updatePullRequestBody, type PullRequestInfo } from "../github/app";
+import { hasProvenLink } from "../github/access";
 import { cloudRunnerAvailable, cloudRunsEnabled, hasActiveServerRun, runServerRun } from "../runner/manager";
 import type { IServerRunOutcome } from "../runner/run";
 import { git, workspaceDir } from "../runner/workspace";
@@ -59,12 +60,26 @@ export function overrideCloudRemoteForTests(fn?: (repo: TaskRepo) => string): vo
   unavailableUntil = 0;
 }
 
-/** Whether dispatch may send this queued task to the cloud right now (sync; the real checks run in {@link startCloudRun}). */
-export function cloudEligible(task: Task): boolean {
+/** Why a queued task waits instead of running in the cloud: no proven link (the App's token is never used without one). */
+export const WAITING_FOR_LINK = "waiting for an editor: cloud runs need this repo in your repos, verified with your GitHub account (connect GitHub in Celiador)";
+
+/**
+ * Whether dispatch may send this queued task to the cloud right now (sync; the
+ * real checks run in {@link startCloudRun}). Only for a repo the user has a
+ * proven link to: the cloud run clones, pushes and opens the PR with the App's
+ * installation token, which is never used for anyone else (#79).
+ */
+export function cloudEligible(userId: string, task: Task): boolean {
   if (!cloudRunsEnabled()) return false;
+  if (!hasProvenLink(userId, task.repo.url)) return false;
   const now = Date.now();
   if (unavailableUntil > now) return false;
   return (noAppUntil.get(repoKey(task.repo.url)) ?? 0) <= now;
+}
+
+/** The reason a task that dispatch skipped is waiting, when it's the missing proof (else undefined). */
+export function cloudWaitingReason(userId: string, task: Task): string | undefined {
+  return cloudRunsEnabled() && !hasProvenLink(userId, task.repo.url) ? WAITING_FOR_LINK : undefined;
 }
 
 /**
@@ -114,8 +129,13 @@ export async function startCloudRun(userId: string, taskId: string): Promise<voi
       requeue(userId, store, task, unavailable);
       return;
     }
-    const token = await installationToken(task.repo).catch(() => null);
+    const token = await installationToken({ userId }, task.repo).catch(() => null);
     if (!token) {
+      // The re-check with GitHub dropped the proof (access lost): wait for an editor, no back-off needed.
+      if (!hasProvenLink(userId, task.repo.url)) {
+        requeue(userId, store, task, WAITING_FOR_LINK);
+        return;
+      }
       noAppUntil.set(repoKey(task.repo.url), Date.now() + NO_APP_TTL_MS);
       requeue(userId, store, task, WAITING_FOR_APP);
       return;
@@ -144,8 +164,15 @@ export async function cloudFollowUp(userId: string, taskId: string, text: string
   if (hasActiveServerRun(task.sessionId) || inFlight.has(taskId)) return { error: "the cloud run is still working; wait for it to finish", status: 409 };
   const unavailable = await cloudRunnerAvailable();
   if (unavailable) return { error: unavailable, status: 503 };
-  const token = await installationToken(task.repo).catch(() => null);
-  if (!token) return { error: "cloud runs need the Celiador GitHub App on this repo", status: 409 };
+  const token = await installationToken({ userId }, task.repo).catch(() => null);
+  if (!token) {
+    return {
+      error: hasProvenLink(userId, task.repo.url)
+        ? "cloud runs need the Celiador GitHub App on this repo"
+        : "cloud runs need this repo in your repos, verified with your GitHub account (connect GitHub in Celiador)",
+      status: 409,
+    };
+  }
   publishSessionEvent(userId, task.sessionId, { kind: "message", role: "user", text });
   const prompt = `${task.prompt}\n\nThe work so far is already in this checkout, on branch \`${task.branch}\`. Follow-up from the reviewer:\n${text}`;
   inFlight.add(taskId);
@@ -190,8 +217,13 @@ async function runTurn(userId: string, taskId: string, sessionId: string, prompt
     return;
   }
   if (task.state === "cancelled") return;
-  // A long run may outlive the token (1 h); the cache hands back a fresh one.
-  const pushToken = (await installationToken(task.repo).catch(() => null)) ?? token;
+  // A long run may outlive the token (1 h); the cache hands back a fresh one. The
+  // user's access is checked again here too: no push for someone who lost it mid-run.
+  const pushToken = await installationToken({ userId }, task.repo).catch(() => null);
+  if (!pushToken) {
+    fail(userId, store, taskId, "The work wasn't pushed: the Celiador GitHub App can no longer act on this repo for you (your GitHub access, the App installation, or your GitHub connection changed during the run).");
+    return;
+  }
   await finishTurn(userId, store, task, dir, remoteFor(task.repo, pushToken), pushToken, prepared, outcome);
 }
 
@@ -221,10 +253,10 @@ async function prepareWorkspace(userId: string, task: Task, remote: string, toke
 }
 
 /** `origin/HEAD` → the default branch name, else what GitHub says, else "main". */
-async function baseBranch(task: Task, dir: string): Promise<string> {
+async function baseBranch(userId: string, task: Task, dir: string): Promise<string> {
   const sym = (await git(dir, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).catch(() => "")).trim();
   if (sym.startsWith("origin/")) return sym.slice("origin/".length);
-  return defaultBranch(task);
+  return defaultBranch(userId, task);
 }
 
 /** Commit the agent's leftovers, push the branch, open (or refresh) the pull request, report pr-open. */
@@ -270,10 +302,10 @@ async function finishTurn(
     let pr: PullRequestInfo | null;
     if (current.pr) {
       pr = current.pr;
-      await updatePullRequestBody(task.repo, pr.number, body).catch(() => false);
+      await updatePullRequestBody({ userId }, task.repo, pr.number, body).catch(() => false);
     } else {
       publish("Opening the pull request…");
-      pr = await openPullRequest(task.repo, { title: task.title, head: task.branch, base: await baseBranch(task, dir), body });
+      pr = await openPullRequest({ userId }, task.repo, { title: task.title, head: task.branch, base: await baseBranch(userId, task, dir), body });
       if (!pr) {
         fail(userId, store, task.id, "The pull request couldn't be opened: the Celiador GitHub App isn't installed on this repo any more.");
         return;

@@ -22,6 +22,7 @@ import { releaseRoutes, updateFeed } from "./releases/routes";
 import { extensionControl } from "./extensions/control";
 import { taskRoutes } from "./tasks/routes";
 import { githubWebhook } from "./tasks/github";
+import { githubAccountRoutes, githubCallbackRoutes } from "./github/access";
 import { githubAppRoutes } from "./github/app";
 import { openRoutes } from "./open/routes";
 
@@ -145,6 +146,10 @@ export function createApp(): Hono<AppEnv> {
   app.post("/api/github/webhook", githubWebhook);
   // The Celiador GitHub App's one-time setup (manifest flow); see github/app.ts.
   app.route("/api/github/app", githubAppRoutes());
+  // A user's GitHub connection (the App's user authorization): the proof of access
+  // a repo link needs before the App's token is used for them; see github/access.ts.
+  app.route("/api/github/account", githubAccountRoutes());
+  app.route("/api/github/callback", githubCallbackRoutes());
   // Deep-link bounce pages for the GitHub comment's links (no auth, no task data).
   app.route("/api/open", openRoutes());
 

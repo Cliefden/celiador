@@ -5,7 +5,7 @@ The daemon's own GitHub identity. With it installed on an organization:
 - one webhook for every repository the app is installed on (no more per-repo webhooks and shared secrets);
 - the daemon narrates each run on its issue as **Celiador** — picked up, the agent's plan, its questions and approvals, the pull request, failing checks, failures — instead of the editor commenting as the signed-in developer, and writes the pull request body (what the agent did, its self-review, where / how long / how much);
 - questions and approvals can be **answered by replying to the issue** (below);
-- cloud (sandbox) runs can clone **private** repositories, push their branch and open the pull request with a short-lived installation token — the App is required for cloud runs;
+- cloud (sandbox) runs can clone **private** repositories, push their branch and open the pull request with a short-lived installation token — the App is required for cloud runs, and is only used for users who proved their own write access to the repo (§ Proof of access);
 - a pull request merged anywhere (GitHub's UI, a teammate) moves its task to `merged`, so the merged-PR count is right however the PR was merged.
 
 ## Create it (once, about a minute)
@@ -23,6 +23,64 @@ The queue's "Ready to merge" cards show a pull request's CI state, which needs *
 
 1. Open the app's settings (`https://github.com/organizations/<org>/settings/apps/<slug>/permissions`), add *Checks: Read-only* and *Commit statuses: Read-only*, subscribe to *Check suite* and *Status*, and save.
 2. GitHub then asks the **organization owner to approve the new permissions on the installation** (a banner under the org's *Settings → GitHub Apps → Celiador*). Until they approve, everything else keeps working: the daemon asks for an installation token with checks/statuses, gets a 422, retries without them, and the checks badge reads `unknown`.
+
+## Proof of access (added 2026-11, #79)
+
+The installation token can read, push, open and merge on every repository the
+installation covers. So the daemon only uses it **for a Celiador user who has
+proved, with their own GitHub account, that they can write to the repository**:
+
+- **Connect GitHub.** The client calls `POST /api/github/account/connect` and
+  opens the returned github.com URL (the App's user authorization, OAuth for
+  GitHub Apps). GitHub redirects to `/api/github/callback`; the daemon redeems
+  the code, then asks the browser to confirm "connect @login to <Celiador
+  email>?" so a connect link someone else sent can't bind the victim's GitHub
+  account to the sender's Celiador account. One GitHub account belongs to one
+  Celiador account. The user-to-server token and refresh token are kept in
+  `data/github-identities.json` (mode 0600).
+- **Link with proof.** `POST /api/tasks/repos` asks GitHub, as the user, for the
+  repo (`GET /repos/{owner}/{repo}` with the user-to-server token, which only sees
+  repos the App's installations cover and the user can reach). Write access
+  (`push`, `maintain` or `admin`) is the proof; it is stored on the link with the
+  GitHub user and repo ids. A repo the App is installed on can't be linked without
+  it. A proven writer takes the repo over from another user's link that has no
+  proof (a first-come claim can't block the real owner); a proven link is never
+  taken over.
+- **Every token use is gated** (`installationToken` / `appRequest` take the acting
+  user): cloud tasks, cloud sessions (clone, push, PR, merge, branches), the App
+  merge, PR refresh and body, issue comments and reactions. The proof is re-checked
+  with GitHub when it is older than `CELIADOR_GITHUB_VERIFY_TTL_MS` (default 1 h);
+  lost access, a revoked authorization, a different GitHub account or a different
+  repo behind the same name drop it. A GitHub outage refuses for now and keeps it.
+- **Issue content.** A webhook for a private repo (or one whose payload doesn't
+  say) only becomes a task, or a reply relayed to a run, for a proven link.
+
+**Links made before this change** have no proof. They keep working for what needs
+no App (public-repo issue routing, editor runs, anonymous clones of public repos),
+but the App does nothing for them — no cloud runs, push, PR, merge, comments —
+until the owner connects GitHub, which re-verifies all their links at once
+(re-adding a repo also re-verifies it).
+
+### GitHub App settings this needs (once per app: prod, and test/dev if they have their own)
+
+A new app made from `/api/github/app/new` gets these from the manifest. An app
+created before 2026-11 needs them set by hand, by an owner of the org, under
+`https://github.com/organizations/<org>/settings/apps/<slug>` → **General**:
+
+1. **Callback URL**: add `https://celiador.ai/api/github/callback` (each
+   environment's own `CELIADOR_PUBLIC_URL` + `/api/github/callback` for that
+   environment's app).
+2. **Request user authorization (OAuth) during installation**: tick it, so installing
+   the App from Celiador's `installUrl` also connects the installer. (GitHub then
+   ignores the Setup URL; the daemon has none.)
+3. **Expire user authorization tokens**: leave ticked (the default). The daemon
+   refreshes the 8-hour tokens with the refresh token.
+4. Leave **Enable Device Flow** off. No permission changes are needed: user
+   authorization needs no extra permissions, and GitHub doesn't ask installations
+   to re-approve anything.
+5. Check that `data/github-app.json` on the box has `clientId` and `clientSecret`
+   (the manifest flow stored them). If the client secret was ever regenerated,
+   put the new one there and restart.
 
 ## Reply to the issue to answer the agent
 
