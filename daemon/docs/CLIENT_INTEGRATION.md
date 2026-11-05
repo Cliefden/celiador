@@ -48,7 +48,7 @@ A task already `merged` answers 409 to anything but `merged`.
 Other calls:
 
 - `POST /api/tasks` with `issue: { number, title, url }` (url = `https://github.com/<same owner>/<same repo>/issues/<number>`) — the editor's "Run an issue…" picker; `details` = the issue body. An open task for that issue comes back as `200 { task, deduped: true }`.
-- `POST /api/tasks/:id/merge` `{ method?: "merge" | "squash" | "rebase" }` → `{ ok, merged: true, sha?, url }` or 409 `{ error }`. Needs `pr-open`. The daemon merges as the GitHub App when it is installed on the repo; otherwise it relays `git.merge` with `head: <task branch>` to the run's editor session (the editor merges the open PR for that branch); with neither: 409 "editor offline and the GitHub App isn't installed on this repo".
+- `POST /api/tasks/:id/merge` `{ method?: "merge" | "squash" | "rebase" }` → `{ ok, merged: true, sha?, url }` or 409 `{ error }`. Needs `pr-open`. The daemon merges as the GitHub App when it is installed on the repo and the user's link to it is proven (see "Connecting GitHub"); otherwise it relays `git.merge` with `head: <task branch>` to the run's editor session (the editor merges the open PR for that branch); with neither: 409 "editor offline and the GitHub App isn't installed on this repo".
 - `POST /api/tasks/:id/followup` `{ text }` → `{ ok: true }`: logged as the user's turn and relayed as `instruct` to the task's linked session; 409 when the task has no session or the editor is offline.
 
 With the GitHub App on the repo the daemon posts the issue comments itself — the
@@ -125,10 +125,11 @@ and runs the agent in the sandboxed runner (no editor, no computer).
   directly (it must exist on GitHub, and only one session can have it at a time).
 - The session carries `repo: { url, owner, name, branch, base, existingBranch,
   pushable, remoteSha, pr? }` once its worktree exists. `pushable` is true when
-  the repo is linked to the user (`POST /api/tasks/repos`) **and** the Celiador
+  the repo is linked to the user (`POST /api/tasks/repos`) **with a proof** of
+  their GitHub access (see "Connecting GitHub" below) **and** the Celiador
   GitHub App is installed on it; then private repos work and push / pull request
   / merge are available. A repo linked to another account → 403. Any other
-  public repo runs anonymously, without push.
+  public repo (or the user's own link without a proof) runs anonymously, without push.
 - `POST /api/sessions/:id/message` is a follow-up: another turn in the same
   worktree that continues the agent's conversation (409 while a turn runs).
 - The review API (`GET git/status`, `GET git/diff`, `POST git/commit|revert|push|pr|merge`)
@@ -136,11 +137,39 @@ and runs the agent in the sandboxed runner (no editor, no computer).
   runs, executed by the daemon in the worktree: commits are authored
   `Celiador <noreply@celiador.ai>`, push leases against the last known remote sha,
   and the PR (base = `repo.base`) and merge go through the App.
-- `GET /api/sessions/cloud/repos` → `{ repos: [{ url, owner, name, app, defaultBranch?, private? }] }`
-  (the user's linked repos); `GET /api/sessions/cloud/branches?remoteUrl=` →
-  `{ branches, defaultBranch }` (App repos only, default branch first).
+- `GET /api/sessions/cloud/repos` → `{ repos: [{ url, owner, name, app, verified, defaultBranch?, private? }] }`
+  (the user's linked repos; `verified: false` → offer "Connect GitHub");
+  `GET /api/sessions/cloud/branches?remoteUrl=` →
+  `{ branches, defaultBranch }` (proven App repos only, default branch first; 409 otherwise).
 - `DELETE /api/sessions/:id` removes the worktree and its local branch (a pushed
   branch stays on GitHub).
+
+### Connecting GitHub (proof of access, #79)
+
+The GitHub App's token can clone, push, open and merge on every repo its
+installation covers, so the daemon uses it for a user only on repos that user's
+own GitHub account can write to. Clients connect the account once:
+
+1. `POST /api/github/account/connect` → `{ authorizeUrl, installUrl, expiresIn }`.
+   Open `authorizeUrl` in the system browser (`ASWebAuthenticationSession` /
+   `vscode.env.openExternal`); or `installUrl` when the App still has to be
+   installed on the user's org (installing asks for the authorization in the same go).
+2. GitHub sends the browser to the daemon's `/api/github/callback`, which shows
+   "Connect @login to <your Celiador email>?"; the user confirms there. The page
+   then says how many of their linked repos are verified. Nothing comes back to
+   the app over a URL scheme: poll `GET /api/github/account` (`{ app, connected,
+   login? }`) or re-fetch `GET /api/tasks` when the app returns to the foreground.
+3. `POST /api/tasks/repos` now answers `{ repos, repoLinks: [{ url, verified, login? }], verified, message? }`.
+   A repo the App is installed on can't be linked without a proof:
+   403 `{ error, needs: "github-connect" }` (connect first) or
+   `{ error, needs: "write-access" }` (GitHub says this account can't write to it).
+   Other repos still link without one (`verified: false`, with `message`).
+   `GET /api/tasks` also carries `repoLinks`.
+4. `DELETE /api/github/account` disconnects (every proof goes).
+
+A queued task on a repo without a proven link stays queued for an editor with
+`error: "waiting for an editor: cloud runs need this repo in your repos, verified
+with your GitHub account (connect GitHub in Celiador)"`.
 
 ### The pull request body (`summary`)
 

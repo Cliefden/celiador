@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
+import { linkRepo } from "../github/access";
 import { cancelServerRun } from "../runner/manager";
 import { sessionBus } from "../sessions/bus";
 import { sessionStores } from "../sessions/instance";
@@ -38,6 +39,11 @@ function parseIssue(raw: unknown, repo: TaskRepo): TaskIssue | undefined {
     return undefined;
   }
   return { number, title: title.trim(), url: url.trim().replace(/\/$/, "") };
+}
+
+/** The user's links with whether each carries a proof (`verified`: the App may act on it for them). */
+function repoLinks(userId: string): Array<{ url: string; verified: boolean; login?: string }> {
+  return taskStores.links.detailedForUser(userId).map((l) => ({ url: l.url, verified: !!l.verified, ...(l.verified ? { login: l.verified.login } : {}) }));
 }
 
 /** A non-negative integer count, or undefined. */
@@ -92,7 +98,7 @@ export function taskRoutes(): Hono<AppEnv> {
     const tasks = taskStores.for(userId).list();
     // Ready-to-merge cards show checks and size: refresh stale ones in the background.
     refreshStalePullRequests(userId, tasks);
-    return c.json({ tasks: tasks.map(publicTask), concurrency: taskConcurrency(), repos: taskStores.links.forUser(userId) });
+    return c.json({ tasks: tasks.map(publicTask), concurrency: taskConcurrency(), repos: taskStores.links.forUser(userId), repoLinks: repoLinks(userId) });
   });
 
   // Live changes for the phone's queue.
@@ -252,14 +258,17 @@ export function taskRoutes(): Hono<AppEnv> {
     return c.json({ ok: true });
   });
 
-  // Repos whose GitHub issues become tasks for this user.
+  // Repos whose GitHub issues become tasks for this user. Linked with a proof
+  // when the user's connected GitHub account can write to the repo — only then
+  // does the Celiador GitHub App act on it for them (github/access.ts, #79).
   app.post("/repos", async (c) => {
     const userId = c.get("user").userId;
     const body = (await c.req.json().catch(() => null)) as { remoteUrl?: unknown } | null;
     const repo = parseRepo(body?.remoteUrl);
     if (!repo) return c.json({ error: "remoteUrl (a github.com https URL) is required" }, 400);
-    if (!taskStores.links.link(userId, repo.url)) return c.json({ error: "this repo is linked to another account" }, 409);
-    return c.json({ repos: taskStores.links.forUser(userId) });
+    const linked = await linkRepo(userId, repo);
+    if (!linked.ok) return c.json({ error: linked.error, ...(linked.needs ? { needs: linked.needs } : {}) }, linked.status);
+    return c.json({ repos: taskStores.links.forUser(userId), repoLinks: repoLinks(userId), verified: linked.verified, ...(linked.message ? { message: linked.message } : {}) });
   });
 
   app.delete("/repos", async (c) => {
@@ -268,7 +277,7 @@ export function taskRoutes(): Hono<AppEnv> {
     const repo = parseRepo(body?.remoteUrl);
     if (!repo) return c.json({ error: "remoteUrl is required" }, 400);
     taskStores.links.unlink(userId, repo.url);
-    return c.json({ repos: taskStores.links.forUser(userId) });
+    return c.json({ repos: taskStores.links.forUser(userId), repoLinks: repoLinks(userId) });
   });
 
   return app;

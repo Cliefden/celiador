@@ -98,8 +98,9 @@ export function verifySupabaseJwt(token: string): AuthResult | null {
   if (payload.aud !== undefined && !tokenAud.includes(aud)) return null;
   if (typeof payload.sub !== "string" || !payload.sub) return null;
   // Only end-user tokens grant access — not anon/service keys. Daemon-minted
-  // runner tokens (mintRunnerToken) also carry role "authenticated", so they
-  // authorize as their user on every relay/data route with no special-casing.
+  // runner tokens (mintRunnerToken) also carry role "authenticated" but come
+  // back marked `runner`, and only the agent gateway accepts those (requireUser
+  // and authorizeAgent refuse them everywhere else).
   if (payload.role !== "authenticated") return null;
 
   return {
@@ -112,12 +113,17 @@ export function verifySupabaseJwt(token: string): AuthResult | null {
 
 /**
  * Mint a short-lived, user-scoped JWT for a server-side runner (see src/runner).
- * It is an ordinary Supabase-shaped access token — role "authenticated", `sub` =
- * the owning user — so it passes verifySupabaseJwt and authorizes on every
- * relay/data route as that user. Two extra claims mark it: `celiador_runner`
- * (lets the agent gateway grant passthrough/"gateway" mode even when the global
- * opt-in is off) and `celiador_run` (the run it belongs to). Signed with the same
- * SUPABASE_JWT_SECRET; returns null when that secret isn't configured.
+ * It is Supabase-shaped — role "authenticated", `sub` = the owning user — so it
+ * passes verifySupabaseJwt, but two extra claims mark it: `celiador_runner` and
+ * `celiador_run` (the run it belongs to, for cost attribution).
+ *
+ * Celiador edit (cloud-session hardening): a runner token is good for the
+ * Anthropic gateway (/api/anthropic/*) ONLY. It sits inside the sandbox, in
+ * reach of a possibly prompt-injected agent, so it must not be able to start
+ * sessions, drive the git review API (which pushes/merges with the GitHub App),
+ * touch profile/chats or delete the account. requireUser refuses it with 403;
+ * authorizeAgent accepts it only when the route opts in (the gateway). Signed
+ * with the same SUPABASE_JWT_SECRET; returns null when that isn't configured.
  */
 export function mintRunnerToken(userId: string, runId: string, ttlSeconds = 7200): string | null {
   const secret = process.env.SUPABASE_JWT_SECRET;
@@ -163,10 +169,18 @@ export function authenticateToken(token: string | null): AuthResult | null {
   }
 }
 
-/** Middleware: require a valid user; stashes it as c.get("user"). */
+/** The refusal for a runner token on a route other than the gateway. */
+export const RUNNER_TOKEN_REFUSED = "runner tokens are only valid on the agent gateway";
+
+/**
+ * Middleware: require a valid end user; stashes it as c.get("user"). Runner
+ * tokens are refused (403): no route behind requireUser is one the sandboxed
+ * agent needs — its events reach the relay through the daemon process, not HTTP.
+ */
 export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   const user = authenticateToken(bearerFrom(c));
   if (!user) return c.json({ error: "unauthorized" }, 401);
+  if (user.runner) return c.json({ error: RUNNER_TOKEN_REFUSED }, 403);
   // Block deleted users even if their JWT is still valid
   if (deletedUsers.isDeleted(user.userId)) {
     return c.json({ error: "unauthorized" }, 401);

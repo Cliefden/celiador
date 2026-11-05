@@ -58,7 +58,10 @@ curl -s localhost:4661/api/config
 | POST | `/api/tasks/:id/merge` | user | Merge the task's PR `{method?}`: as the GitHub App when installed, else relayed to the run's editor (`git.merge` with `head` = the task branch); 409 `{error}` otherwise |
 | POST | `/api/tasks/:id/followup` | user | `{text}` → an `instruct` to an editor run's session (409 when there is none or the editor is offline); on a cloud run, another sandbox turn in the retained workspace (409 while it is still working, 503 when the sandbox is unavailable) |
 | GET | `/api/open/task/:id`, `/api/open/queue` | none | Data-free pages that bounce to `celiador://task/<id>` / `celiador://queue` (the GitHub comment's links; scheme via `CELIADOR_APP_SCHEME`) |
-| POST/DELETE | `/api/tasks/repos` | user | Link / unlink a repo whose GitHub issues become tasks (one owner per repo) |
+| POST/DELETE | `/api/tasks/repos` | user | Link / unlink a repo whose GitHub issues become tasks (one owner per repo). Linked **with a proof** when the user's connected GitHub account can write to it — the only case the GitHub App acts on the repo for them; a repo the App is installed on can't be linked without one (403, `needs: "github-connect" \| "write-access"`). Responses carry `repoLinks: [{url, verified, login?}]` (`docs/GITHUB_APP.md` § Proof of access) |
+| GET/DELETE | `/api/github/account` | user | The user's GitHub connection (`{app, connected, login?}`) / disconnect (drops every proof) |
+| POST | `/api/github/account/connect` | user | `{authorizeUrl, installUrl, expiresIn}`: open one in a browser to connect GitHub (the App's user authorization) |
+| GET/POST | `/api/github/callback`, `/api/github/callback/confirm` | none (browser) | GitHub's redirect back; a confirm page ("connect @login to <email>?"), then the proof check of the user's existing links |
 | POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET` or the GitHub App's secret) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) or, when no online editor has the repo and `CELIADOR_RUNNER_AGENT=sandbox`, run in the cloud (needs the App on the repo) — within `CELIADOR_TASK_CONCURRENCY` (default 3); a collaborator's comment on an issue whose task is `awaiting` → the answer / approve / deny, relayed to the run and acknowledged with a 👍; a merged `pull_request` on a task's branch → the task is `merged`; `pull_request` opened/synchronize/reopened, `check_suite`/`check_run` completed and `status` → the task's `pr` is refreshed; a `check_suite`/`check_run` that failed on a pr-open task → a fix follow-up (once per head sha, at most `CELIADOR_TASK_CI_FIX_ATTEMPTS` (default 2) per task) |
 | GET | `/api/github/app/new`, `/api/github/app/setup` | none (GitHub enforces org ownership) | One-time creation of the Celiador GitHub App via GitHub's manifest flow; credentials land in `data/github-app.json`. With the app installed the daemon narrates runs on the issue (picked up, plan, questions / approvals, PR opened, checks failed, failed), writes the PR body, pushes and opens PRs for cloud runs, and clones private repos |
 | POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Locked Claude proxy, daemon-owned 3-tool set (SSE). `X-Celiador-Mirror: <mirrorKey>` attributes the request's tokens to that relay session's `usage` |
@@ -104,7 +107,7 @@ src/
                  live (session → task fields), comments + pulls (the App's issue comments, PR refresh/merge/body),
                  prBody (pure: plan + self-review parsing, PR body composition)
   runner/        cloud runs: manager, run, sandbox (Docker, no network), workspace (clone / git helper), agent
-  github/        the Celiador GitHub App (manifest setup, installation tokens)
+  github/        the Celiador GitHub App (manifest setup, installation tokens) + access.ts (users' GitHub connection, proof of access per linked repo)
   open/          /api/open/* deep-link bounce pages
   waitlist/      the site's double-opt-in waitlist: store (data/waitlist/list.json), mailer (SMTP), routes + admin export
 ```

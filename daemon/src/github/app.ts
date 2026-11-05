@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../auth";
 import { ROOT } from "../config";
 import type { TaskRepo } from "../tasks/store";
+import { appMayActFor } from "./access";
 
 /**
  * The Celiador GitHub App: the daemon's own GitHub identity.
@@ -21,6 +22,10 @@ import type { TaskRepo } from "../tasks/store";
  * - the daemon comments on issues as "Celiador" (picked up / failed), so the
  *   editor's own gh-token comment is only a fallback;
  * - the sandbox runner clones private repos with a short-lived installation token.
+ *
+ * Every installation-token use is for a Celiador user with a proven link to the
+ * repo (github/access.ts): their own GitHub account, connected through the App's
+ * user authorization, has write access there.
  */
 
 export interface GitHubAppCredentials {
@@ -104,14 +109,40 @@ const BASE_PERMISSIONS = { contents: "write", issues: "write", pull_requests: "w
 const CI_PERMISSIONS = { checks: "read", statuses: "read" };
 
 /**
- * A short-lived installation token for `repo`, or null when the app is not set
- * up or not installed on that repo. The token can read contents and write
- * issues / pull requests on the repos the installation covers, plus read
- * checks and commit statuses when the installation has approved those (an
- * installation that hasn't answers 422 to asking — then the token goes without,
- * and the checks badge reads "unknown").
+ * Who the App is acting for. Every use of an installation token is on behalf of
+ * a Celiador user, and only goes through when that user holds a *proven* link to
+ * the repo (github/access.ts: their own GitHub identity has write access). The
+ * installation alone is not enough: anyone could otherwise link another org's
+ * repo that has the App installed and borrow its token (#79).
  */
-export async function installationToken(repo: Pick<TaskRepo, "owner" | "name">): Promise<string | null> {
+export interface AppActor {
+  readonly userId: string;
+}
+
+/**
+ * A short-lived installation token for `repo`, acting for `actor`. Null when the
+ * app is not set up, not installed on that repo, or the actor has no proven link
+ * to it. The token can read contents and write issues / pull requests on the
+ * repo, plus read checks and commit statuses when the installation has approved
+ * those (an installation that hasn't answers 422 to asking — then the token goes
+ * without, and the checks badge reads "unknown").
+ */
+export async function installationToken(actor: AppActor, repo: Pick<TaskRepo, "owner" | "name">): Promise<string | null> {
+  if (!githubApp()) return null;
+  if (!(await appMayActFor(actor.userId, repo))) return null;
+  return rawInstallationToken(repo);
+}
+
+/** Whether the App is installed on `repo` (an app-JWT lookup; no token is minted). */
+export async function appInstalledOn(repo: Pick<TaskRepo, "owner" | "name">): Promise<boolean> {
+  const app = githubApp();
+  if (!app) return false;
+  const inst = await api(appJwt(app), "GET", `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/installation`).catch(() => null);
+  return inst?.status === 200 && typeof inst.json?.id === "number";
+}
+
+/** The installation token itself, with no check of who it is for. Only {@link installationToken} may call it. */
+async function rawInstallationToken(repo: Pick<TaskRepo, "owner" | "name">): Promise<string | null> {
   const app = githubApp();
   if (!app) return null;
   const key = `${repo.owner}/${repo.name}`.toLowerCase();
@@ -130,29 +161,31 @@ export async function installationToken(repo: Pick<TaskRepo, "owner" | "name">):
 }
 
 /**
- * One REST call on `repo` as the app (installation token). Null when the app
- * isn't set up or isn't installed there — callers fall back to the editor.
+ * One REST call on `repo` as the app (installation token), acting for `actor`.
+ * Null when the app isn't set up, isn't installed there, or the actor has no
+ * proven link to the repo — callers fall back to the editor.
  */
 export async function appRequest(
+  actor: AppActor,
   repo: Pick<TaskRepo, "owner" | "name">,
   method: string,
   pathname: string,
   body?: unknown,
 ): Promise<{ status: number; json: any } | null> {
-  const token = await installationToken(repo);
+  const token = await installationToken(actor, repo);
   if (!token) return null;
   return api(token, method, `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${pathname}`, body);
 }
 
-/** Comment on an issue as the app. False when the app is absent or not installed there. */
-export async function commentOnIssue(repo: Pick<TaskRepo, "owner" | "name">, issueNumber: number, body: string): Promise<boolean> {
-  const res = await appRequest(repo, "POST", `/issues/${issueNumber}/comments`, { body });
+/** Comment on an issue as the app. False when the app can't act on the repo for `actor`. */
+export async function commentOnIssue(actor: AppActor, repo: Pick<TaskRepo, "owner" | "name">, issueNumber: number, body: string): Promise<boolean> {
+  const res = await appRequest(actor, repo, "POST", `/issues/${issueNumber}/comments`, { body });
   return res?.status === 201;
 }
 
 /** Acknowledge an issue comment with a 👍 reaction (the answer-from-the-issue ack) instead of another comment. */
-export async function reactToComment(repo: Pick<TaskRepo, "owner" | "name">, commentId: number, content = "+1"): Promise<boolean> {
-  const res = await appRequest(repo, "POST", `/issues/comments/${commentId}/reactions`, { content });
+export async function reactToComment(actor: AppActor, repo: Pick<TaskRepo, "owner" | "name">, commentId: number, content = "+1"): Promise<boolean> {
+  const res = await appRequest(actor, repo, "POST", `/issues/comments/${commentId}/reactions`, { content });
   return res?.status === 201 || res?.status === 200;
 }
 
@@ -176,12 +209,12 @@ function pullInfo(json: any): PullRequestInfo | null {
  * (GitHub answers 422), return that one. Null when the app can't act on the
  * repo; throws with GitHub's message on any other refusal.
  */
-export async function openPullRequest(repo: Pick<TaskRepo, "owner" | "name">, p: { title: string; head: string; base: string; body: string }): Promise<PullRequestInfo | null> {
-  const res = await appRequest(repo, "POST", "/pulls", p);
+export async function openPullRequest(actor: AppActor, repo: Pick<TaskRepo, "owner" | "name">, p: { title: string; head: string; base: string; body: string }): Promise<PullRequestInfo | null> {
+  const res = await appRequest(actor, repo, "POST", "/pulls", p);
   if (!res) return null;
   if (res.status === 201) return pullInfo(res.json);
   if (res.status === 422) {
-    const open = await appRequest(repo, "GET", `/pulls?head=${encodeURIComponent(`${repo.owner}:${p.head}`)}&state=open&per_page=1`);
+    const open = await appRequest(actor, repo, "GET", `/pulls?head=${encodeURIComponent(`${repo.owner}:${p.head}`)}&state=open&per_page=1`);
     const existing = open?.status === 200 && Array.isArray(open.json) ? pullInfo(open.json[0]) : null;
     if (existing) return existing;
   }
@@ -190,8 +223,8 @@ export async function openPullRequest(repo: Pick<TaskRepo, "owner" | "name">, p:
 }
 
 /** Replace a pull request's body as the app. False when the app can't (absent / not installed / refused). */
-export async function updatePullRequestBody(repo: Pick<TaskRepo, "owner" | "name">, number: number, body: string): Promise<boolean> {
-  const res = await appRequest(repo, "PATCH", `/pulls/${number}`, { body });
+export async function updatePullRequestBody(actor: AppActor, repo: Pick<TaskRepo, "owner" | "name">, number: number, body: string): Promise<boolean> {
+  const res = await appRequest(actor, repo, "PATCH", `/pulls/${number}`, { body });
   return res?.status === 200;
 }
 
@@ -216,6 +249,12 @@ export function appManifest(): Record<string, unknown> {
     description: "Issue in, pull request out. Label an issue `celiador` and an agent runs it in its own worktree and opens a pull request you review from your phone.",
     hook_attributes: { url: `${PUBLIC_URL}/api/github/webhook`, active: true },
     redirect_url: `${PUBLIC_URL}/api/github/app/setup`,
+    // The App's user authorization: how a Celiador user proves which GitHub account
+    // they are, so the daemon can check their access to a repo before linking it
+    // (github/access.ts). Installing with the authorization asked at the same time
+    // lands on the same callback.
+    callback_urls: [`${PUBLIC_URL}/api/github/callback`],
+    request_oauth_on_install: true,
     public: false,
     default_permissions: { issues: "write", pull_requests: "write", contents: "write", metadata: "read", checks: "read", statuses: "read" },
     default_events: ["issues", "issue_comment", "pull_request", "check_suite", "status"],

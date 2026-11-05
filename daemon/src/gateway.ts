@@ -86,7 +86,8 @@ export async function anthropicGateway(c: Context) {
   const invalid = validateGatewayRequest(body);
   if (invalid) return c.json({ error: invalid }, 400);
 
-  const auth = await authorizeAgent(c);
+  // The sandboxed cloud agent's runner token is accepted here (and on /models) only.
+  const auth = await authorizeAgent(c, { allowRunner: true });
   if (!auth.ok) return refuse(c, auth);
   const { quotaKey, isRunner, user, release } = auth;
   // Which run this request belongs to (cost attribution): the runner token's run id,
@@ -178,7 +179,7 @@ export async function anthropicGateway(c: Context) {
 
 /** GET /api/anthropic/v1/models — let SDK clients enumerate models via the daemon. */
 export async function anthropicModels(c: Context) {
-  const auth = await authorizeAgent(c);
+  const auth = await authorizeAgent(c, { allowRunner: true });
   if (!auth.ok) return refuse(c, auth);
   // models listing is not a billable turn — return the slot immediately.
   auth.release();
