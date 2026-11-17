@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import CryptoKit
 import os
 
 /// Client of the Celiador daemon + its Supabase (GoTrue) auth — hand-rolled,
@@ -167,9 +168,17 @@ final class Api {
     /// app was suspended or killed.
     private static let pendingSignInKey = "pendingSignInAt"
     private static let pendingSignInWindow: TimeInterval = 30 * 60
+    /// The PKCE code verifier of the pending sign-in. Only its hash (the
+    /// challenge) ever leaves the device; the auth code GoTrue returns is
+    /// useless without it.
+    private static let codeVerifierKey = "pendingSignInCodeVerifier"
 
-    private func markSignInPending() {
+    /// Start a pending sign-in: returns the PKCE challenge to send to GoTrue.
+    private func markSignInPending() -> String {
+        let verifier = PKCE.makeVerifier()
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.pendingSignInKey)
+        UserDefaults.standard.set(verifier, forKey: Self.codeVerifierKey)
+        return PKCE.challenge(for: verifier)
     }
 
     private func consumePendingSignIn() -> Bool {
@@ -178,25 +187,40 @@ final class Api {
         return started > 0 && Date().timeIntervalSince1970 - started < Self.pendingSignInWindow
     }
 
+    /// The pending sign-in's code verifier, removed as it's read (single use).
+    private func takeCodeVerifier() -> String? {
+        defer { UserDefaults.standard.removeObject(forKey: Self.codeVerifierKey) }
+        return UserDefaults.standard.string(forKey: Self.codeVerifierKey)
+    }
+
     // MARK: - Magic link & GitHub OAuth (deep-link callback)
 
-    /// The deep link the magic-link + OAuth flows return to. Tokens arrive in the
-    /// URL fragment (implicit flow); completed by `handleAuthCallback`. Must be in
-    /// GoTrue's `GOTRUE_URI_ALLOW_LIST`. Channel-aware (see `AppScheme`) so a Dev
-    /// build returns to its own app, not the prod `celiador://`.
+    /// The deep link the magic-link + OAuth flows return to. With PKCE it carries
+    /// a one-time `?code=` that `completeSignIn(from:)` exchanges, with this
+    /// device's code verifier, for the session — tokens never travel in a URL.
+    /// Must be in GoTrue's `GOTRUE_URI_ALLOW_LIST`. Channel-aware (see
+    /// `AppScheme`) so a Dev build returns to its own app, not the prod `celiador://`.
     static var authRedirect: String { AppScheme.authCallback }
 
-    /// Email a one-tap magic link. Opening it returns to `authRedirect` with tokens.
+    /// Email a one-tap magic link (PKCE). Opening it on this device returns to
+    /// `authRedirect` with an auth code.
     func sendMagicLink(email: String) async throws {
-        struct OtpBody: Encodable { let email: String; let create_user: Bool }
+        struct OtpBody: Encodable {
+            let email: String
+            let create_user: Bool
+            let code_challenge: String
+            let code_challenge_method: String
+        }
         let config = try await loadConfig()
         guard let anon = config.supabaseAnonKey else { throw ApiError(message: "Server has no auth configured.") }
         var request = URLRequest(url: try authURL(config, "otp", items: [URLQueryItem(name: "redirect_to", value: Self.authRedirect)]))
         request.httpMethod = "POST"
         request.setValue(anon, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(OtpBody(email: email, create_user: true))
-        markSignInPending()
+        let challenge = markSignInPending()
+        request.httpBody = try JSONEncoder().encode(OtpBody(
+            email: email, create_user: true, code_challenge: challenge, code_challenge_method: PKCE.method
+        ))
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
         if http.statusCode >= 400 {
@@ -204,20 +228,47 @@ final class Api {
         }
     }
 
-    /// The GoTrue GitHub authorization URL to open in a browser. After the user
-    /// authorizes, GoTrue redirects to `authRedirect` with tokens in the fragment.
+    /// The GoTrue GitHub authorization URL to open in a browser (PKCE). After the
+    /// user authorizes, GoTrue redirects to `authRedirect` with an auth code.
     func githubAuthorizeURL() async throws -> URL {
         let config = try await loadConfig()
-        let url = try authURL(config, "authorize", items: [
+        let challenge = markSignInPending()
+        return try authURL(config, "authorize", items: [
             URLQueryItem(name: "provider", value: "github"),
             URLQueryItem(name: "redirect_to", value: Self.authRedirect),
+            URLQueryItem(name: "code_challenge", value: challenge),
+            URLQueryItem(name: "code_challenge_method", value: PKCE.method),
         ])
-        markSignInPending()
-        return url
     }
 
-    /// Complete a magic-link / OAuth sign-in from the `celiador://auth-callback`
-    /// deep link (tokens in the fragment). Returns true if a session was stored.
+    /// Complete a magic-link / OAuth sign-in from the `…://auth-callback` deep
+    /// link. Returns true if a session was stored.
+    ///
+    /// - PKCE (`?code=`): exchanged at `/token?grant_type=pkce` with the code
+    ///   verifier this device kept. Accepted only while the sign-in started
+    ///   here is pending; the verifier makes a forged or stolen code useless anyway.
+    /// - Otherwise falls back to `handleAuthCallback` (implicit flow, tokens in
+    ///   the fragment) for a link requested by an older build.
+    func completeSignIn(from url: URL) async -> Bool {
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        guard let code = query.first(where: { $0.name == "code" })?.value, !code.isEmpty else {
+            return handleAuthCallback(url)
+        }
+        guard consumePendingSignIn(), let verifier = takeCodeVerifier() else { return false }
+        do {
+            _ = try await authRequest(
+                path: "token",
+                query: "grant_type=pkce",
+                body: ["auth_code": code, "code_verifier": verifier]
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// The implicit-flow callback (tokens in the fragment). Kept for magic links
+    /// sent before PKCE; `completeSignIn(from:)` is the entry point.
     @discardableResult
     func handleAuthCallback(_ url: URL) -> Bool {
         var parser = URLComponents()
@@ -786,6 +837,29 @@ final class Api {
             method: "POST",
             body: ["activityId": sessionId, "token": token, "env": pushEnv]
         )
+    }
+}
+
+/// PKCE (RFC 7636) for the GoTrue sign-in flows: a random verifier stays on the
+/// device, its S256 hash goes out as the challenge.
+enum PKCE {
+    /// GoTrue's spelling of S256.
+    static let method = "s256"
+
+    /// 64 characters from the RFC 7636 unreserved set (43–128 allowed).
+    static func makeVerifier() -> String {
+        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        var generator = SystemRandomNumberGenerator() // cryptographically secure on Apple platforms
+        return String((0..<64).map { _ in alphabet[Int.random(in: 0..<alphabet.count, using: &generator)] })
+    }
+
+    /// BASE64URL(SHA256(verifier)), unpadded.
+    static func challenge(for verifier: String) -> String {
+        Data(SHA256.hash(data: Data(verifier.utf8)))
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }
 
