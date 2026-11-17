@@ -111,6 +111,21 @@ JWT secret, the database password and the anon key are generated on the box.
    `VPS_SSH_KEY` in every Environment, swap the line in
    `authorized_keys`.
 
+   **The box's host keys.** The deploy workflows never `ssh-keyscan`; they
+   trust only the repository variable `DEPLOY_KNOWN_HOSTS` (known_hosts
+   lines for `VPS_HOST`). Collect them, compare the fingerprints with the
+   ones the box itself reports, then store them:
+
+   ```bash
+   ssh-keyscan -H cliefden.com 2>/dev/null > /tmp/kh
+   ssh-keygen -lf /tmp/kh                                   # compare with, on the box:
+   # for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done
+   gh variable set DEPLOY_KNOWN_HOSTS -R Cliefden/celiador < /tmp/kh
+   ```
+
+   Re-run after the box's host keys change (a reinstall); until then every
+   deploy fails at "Configure SSH", which is the point.
+
 3. **Mail.** Repository secrets `SMTP_USER` (`stefan@celiador.ai`) and
    `SMTP_PASS` (its Migadu password); optional repository variables
    `NOTIFY_TO` (default `stefan@celiador.ai`) and `NOTIFY_SUCCESS=false` once

@@ -27,7 +27,9 @@ name: Deploy daemon
 # generated there.
 #
 # GitHub Environments dev, test and prod each hold VPS_HOST, VPS_USER and
-# VPS_SSH_KEY; prod has a required reviewer. Results are mailed through the
+# VPS_SSH_KEY; prod has a required reviewer. The repository variable
+# DEPLOY_KNOWN_HOSTS holds the box host keys (known_hosts lines); SSH refuses
+# any other key. Results are mailed through the
 # repository secrets SMTP_USER / SMTP_PASS (Migadu) to the repository variable
 # NOTIFY_TO: failures always, successes until NOTIFY_SUCCESS is 'false'. A mail
 # problem never fails a deploy.
@@ -72,7 +74,7 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       migrate: ${{ steps.plan.outputs.migrate }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # a tag must be on main
       - id: plan
@@ -86,13 +88,13 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             env="$INPUT_ENV"; migrate="$INPUT_MIGRATE"
           elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            env=test; migrate=true
+            env="test"; migrate=true
             [[ "${GITHUB_REF_NAME#v}" == "$version" ]] ||
               { echo "::error::tag $GITHUB_REF_NAME but daemon/package.json says $version — cut releases with scripts/release.sh"; exit 1; }
             git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
               { echo "::error::$GITHUB_REF_NAME is not on main — push main first, then the tag"; exit 1; }
           else
-            env=dev; migrate=true
+            env="dev"; migrate=true
             version="$version+${GITHUB_SHA::7}"
           fi
           case "$env" in
@@ -126,20 +128,28 @@ jobs:
       run:
         working-directory: daemon
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Configure SSH
         env:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
+          # The box's host keys (`ssh-keyscan -H <host>` output, checked against
+          # the box's own /etc/ssh/ssh_host_*_key.pub fingerprints), so a
+          # deploy never trusts whatever key answers on the day.
+          KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           [[ -n "$SSH_KEY" && -n "$VPS_HOST" ]] || { echo "::error::VPS_SSH_KEY / VPS_HOST missing from the '$TARGET_ENV' Environment (RELEASING.md)"; exit 1; }
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -T 30 -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          test -s ~/.ssh/known_hosts
+          [[ -n "$KNOWN_HOSTS" ]] || { echo "::error::the DEPLOY_KNOWN_HOSTS variable is not set — add the box host keys (ssh-keyscan -H <host>, verified on the box) as a repository variable"; exit 1; }
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          printf 'Host *\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
+          ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null ||
+            { echo "::error::DEPLOY_KNOWN_HOSTS has no key for the VPS_HOST of the '$TARGET_ENV' Environment"; exit 1; }
 
       - name: Upload
         env:
