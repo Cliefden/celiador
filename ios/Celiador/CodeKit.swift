@@ -3,17 +3,21 @@ import SwiftUI
 /// Grammar-free syntax tinting shared by the diff and code viewers: string literals
 /// get a subtle accent and line comments dim out; everything else is plain ink.
 enum SyntaxHighlighter {
+    /// The SwiftUI foreground-colour attribute, set by key type: the
+    /// `.foregroundColor` dynamic-member key path is not Sendable.
+    private typealias Ink = AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute
+
     static func highlight(_ line: String) -> AttributedString {
         var attr = AttributedString(line)
-        attr.foregroundColor = Theme.ink
+        attr[Ink.self] = Theme.ink
         func offset(_ i: String.Index) -> Int { line.distance(from: line.startIndex, to: i) }
         func idx(_ n: Int) -> AttributedString.Index { attr.index(attr.startIndex, offsetByCharacters: n) }
 
         for r in line.ranges(of: /"[^"]*"|'[^']*'/) {
-            attr[idx(offset(r.lowerBound))..<idx(offset(r.upperBound))].foregroundColor = Theme.accent
+            attr[idx(offset(r.lowerBound))..<idx(offset(r.upperBound))][Ink.self] = Theme.accent
         }
         if let r = line.firstRange(of: "//") ?? line.firstRange(of: "#") {
-            attr[idx(offset(r.lowerBound))..<attr.endIndex].foregroundColor = Theme.faint
+            attr[idx(offset(r.lowerBound))..<attr.endIndex][Ink.self] = Theme.faint
         }
         return attr
     }
