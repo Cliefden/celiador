@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import Link from "next/link";
 import { Button, Container, Eyebrow, SectionHeading } from "@/components/ui";
 import { FAQ } from "@/components/FAQ";
@@ -6,10 +7,12 @@ import { CheckIcon } from "@/components/icons";
 import { tiers } from "@/lib/site";
 import { formatLimit, formatUsdLimit, publishedLimits } from "@/lib/limits";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/pricing",
   title: "Pricing",
-  description: "Free during early access, with the limits we enforce published as numbers.",
-};
+  description:
+    "Free during early access, with the limits we enforce published as numbers.",
+});
 
 export default async function PricingPage() {
   const published = await publishedLimits();

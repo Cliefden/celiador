@@ -1,6 +1,5 @@
 import type { MetadataRoute } from "next";
-
-const baseUrl = "https://celiador.ai";
+import { site } from "@/lib/site";
 
 const routes = [
   "/",
@@ -19,9 +18,9 @@ const routes = [
   "/contact",
 ];
 
+// No lastModified: the site is rebuilt on every deploy, so the build date
+// said every page changed every time, and search engines learn to ignore a
+// lastmod that is always "now". Leave it out rather than state it wrongly.
 export default function sitemap(): MetadataRoute.Sitemap {
-  return routes.map((route) => ({
-    url: `${baseUrl}${route}`,
-    lastModified: new Date(),
-  }));
+  return routes.map((route) => ({ url: `${site.url}${route}` }));
 }
