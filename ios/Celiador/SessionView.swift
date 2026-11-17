@@ -536,15 +536,18 @@ struct SessionView: View {
 struct SendButton: View {
     var enabled: Bool
     var action: () -> Void
+    /// 34 pt at the default text size; grows with Dynamic Type next to the composer's text.
+    @ScaledMetric(relativeTo: .body) private var side: CGFloat = 34
 
     var body: some View {
         Button(action: action) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 15, weight: .bold))
+                .font(.body.weight(.bold))
                 .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
+                .frame(width: side, height: side)
                 .background(enabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.gray.opacity(0.5)), in: Circle())
         }
+        .accessibilityLabel("Send")
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.5)
         .animation(Theme.snappy, value: enabled)

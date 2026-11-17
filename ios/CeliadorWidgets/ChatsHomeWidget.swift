@@ -54,6 +54,9 @@ struct ChatsWidgetView: View {
     /// The app hasn't refreshed this for a while (`ChatSnapshot.staleAfter`):
     /// say how old it is and mute the counts rather than pass it off as live.
     var stale = false
+    /// The small widget's big count: 40 pt at the default text size, scaling
+    /// with Dynamic Type like a large title (`minimumScaleFactor` keeps it in the tile).
+    @ScaledMetric(relativeTo: .largeTitle) private var countSize: CGFloat = 40
 
     var body: some View {
         switch family {
@@ -96,7 +99,9 @@ struct ChatsWidgetView: View {
             Spacer(minLength: 4)
             if let lead {
                 Text("\(lead.count)")
-                    .font(.system(size: 40, weight: .semibold))
+                    .font(.system(size: countSize, weight: .semibold))
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
                     .monospacedDigit()
                     .foregroundStyle(lead.tone.color)
                     .widgetAccentable()

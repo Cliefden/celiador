@@ -9,7 +9,9 @@ There is no API for the privacy "nutrition label"; enter these on the website on
 | Contact Info → Email Address | Yes | Yes | No | App Functionality (account sign-in) |
 | Identifiers → User ID | Yes | Yes | No | App Functionality (account) |
 | Usage Data → Product Interaction | Yes | No | No | Analytics (TelemetryDeck, anonymous; the user can switch it off in Account) |
-| Diagnostics → Crash Data | Yes | No | No | Analytics (TelemetryDeck, anonymous) |
+| Diagnostics → Other Diagnostic Data | Yes | No | No | Analytics (TelemetryDeck, anonymous: the `celiador/error` signals — which call failed and an error-type code, never a message) |
+
+Diagnostics → Crash Data is **not** collected: the app has no crash reporter (Apple's own crash reports aren't developer collection). This matches `Celiador/PrivacyInfo.xcprivacy`; until 2026-11 this table listed Crash Data instead.
 
 Not collected: name, phone, location, contacts, photos, purchases, browsing or search history, device identifiers for advertising, health, financial info, messages (agent transcripts are not stored by the app; they are relayed from the user's own computer and kept under the user's account per the privacy policy).
 

@@ -709,12 +709,14 @@ struct NeutralPill: View {
 struct SquareSendButton: View {
     var enabled: Bool
     var action: () -> Void
+    /// 44 pt at the default text size; grows with Dynamic Type.
+    @ScaledMetric(relativeTo: .body) private var side: CGFloat = 44
 
     var body: some View {
         Button(action: action) {
             Image(systemName: "arrow.right")
-                .font(.system(size: 16, weight: .semibold))
-                .frame(width: 44, height: 44)
+                .font(.body.weight(.semibold))
+                .frame(width: side, height: side)
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
                 .contentShape(Rectangle())
         }
