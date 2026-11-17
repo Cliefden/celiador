@@ -73,7 +73,7 @@ export default function AboutPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             {values.map((v) => (
               <div key={v.title} className="card rounded-2xl p-7">
-                <h3 className="text-lg font-semibold tracking-tight">{v.title}</h3>
+                <h2 className="text-lg font-semibold tracking-tight">{v.title}</h2>
                 <p className="mt-2 text-sm leading-relaxed text-fog">{v.body}</p>
               </div>
             ))}

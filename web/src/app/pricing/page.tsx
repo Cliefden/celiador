@@ -52,11 +52,11 @@ export default async function PricingPage() {
                 }
               >
                 {t.featured && (
-                  <span className="absolute right-6 top-6 rounded-full bg-brand px-2.5 py-1 text-xs font-medium text-white">
+                  <span className="absolute right-6 top-6 rounded-full bg-brand-fill px-2.5 py-1 text-xs font-medium text-white">
                     Today
                   </span>
                 )}
-                <h3 className="text-lg font-semibold">{t.name}</h3>
+                <h2 className="text-lg font-semibold">{t.name}</h2>
                 <div className="mt-3 flex items-baseline gap-1">
                   <span className="text-4xl font-semibold tracking-tight">{t.price}</span>
                   {t.cadence && <span className="text-sm text-fog-dim">{t.cadence}</span>}

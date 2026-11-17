@@ -62,7 +62,7 @@ export default async function DownloadPage() {
               {release?.dmgUrl ? (
                 <a
                   href={latestMacDmgHref}
-                  className="group inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3.5 text-sm font-medium text-white shadow-[0_10px_40px_-12px_rgba(124,107,255,0.9)] transition hover:brightness-110"
+                  className="group inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand-fill px-5 py-3.5 text-sm font-medium text-white shadow-[0_10px_40px_-12px_rgba(124,107,255,0.9)] transition hover:brightness-110"
                 >
                   <DownloadIcon className="h-4 w-4" />
                   Download .dmg

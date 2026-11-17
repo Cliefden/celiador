@@ -35,7 +35,7 @@ type ButtonProps = {
 export function Button({ href, children, variant = "primary", className, icon = "none" }: ButtonProps) {
   const styles = {
     primary:
-      "bg-brand text-white hover:brightness-110 shadow-[0_10px_40px_-12px_rgba(124,107,255,0.9)]",
+      "bg-brand-fill text-white hover:brightness-110 shadow-[0_10px_40px_-12px_rgba(124,107,255,0.9)]",
     secondary: "border border-line bg-white/[0.03] text-white hover:bg-white/[0.07]",
     ghost: "text-fog hover:text-white",
   }[variant];

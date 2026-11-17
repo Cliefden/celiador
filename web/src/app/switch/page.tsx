@@ -160,7 +160,7 @@ export default function SwitchPage() {
             <div className="mt-4 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link
                 href="/start"
-                className="inline-flex items-center justify-center rounded-xl bg-brand px-5 py-3 text-sm font-medium text-white transition hover:brightness-110"
+                className="inline-flex items-center justify-center rounded-xl bg-brand-fill px-5 py-3 text-sm font-medium text-white transition hover:brightness-110"
               >
                 Get started
               </Link>

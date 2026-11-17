@@ -105,7 +105,7 @@ export default function FeaturesPage() {
                   <div className="grid h-11 w-11 place-items-center rounded-xl border border-line bg-brand/10 text-brand">
                     {Icon ? <Icon className="h-5 w-5" /> : null}
                   </div>
-                  <h3 className="mt-5 text-lg font-semibold tracking-tight">{f.title}</h3>
+                  <h2 className="mt-5 text-lg font-semibold tracking-tight">{f.title}</h2>
                   <p className="mt-2 text-sm leading-relaxed text-fog">{f.body}</p>
                   {f.coming && (
                     <p className="mt-3 text-xs leading-relaxed text-fog-dim">
