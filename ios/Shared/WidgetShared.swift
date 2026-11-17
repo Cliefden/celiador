@@ -7,7 +7,7 @@ import Foundation
 // MARK: - URL scheme (channel-aware deep links)
 
 /// The app's custom URL scheme for this build channel — `celiador`,
-/// or `celiador-dev` (the Test build keeps `celiador`). Read from Info.plist (populated from
+/// `celiador-dev` or `celiador-test`. Read from Info.plist (populated from
 /// the xcconfig's `URL_SCHEME` via the `CELIADOR_URL_SCHEME` key) so the app and
 /// widget agree per channel and deep links open the matching installed app —
 /// otherwise a Dev build's magic link / widget tap would target the prod app.
@@ -97,7 +97,17 @@ struct ChatSnapshot: Codable {
 
 /// Read/write the widget snapshot in the shared App Group container.
 enum SharedStore {
-    static let appGroup = "group.ai.celiador.companion"
+    /// This channel's App Group — `group.ai.celiador.companion[.dev|.test]`, from
+    /// Info.plist `CELIADOR_APP_GROUP` (the xcconfig's `APP_GROUP`, also what the
+    /// entitlements grant). Per channel so Dev, Test and the App Store app, which
+    /// install side by side, don't overwrite each other's widget data.
+    static let appGroup: String = {
+        if let group = Bundle.main.object(forInfoDictionaryKey: "CELIADOR_APP_GROUP") as? String,
+           group.hasPrefix("group.") {
+            return group
+        }
+        return "group.ai.celiador.companion"
+    }()
     private static let file = "chat-snapshot.json"
 
     static var containerURL: URL? {
