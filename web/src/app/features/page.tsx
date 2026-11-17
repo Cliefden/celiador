@@ -31,9 +31,9 @@ const deepDives: {
       "Celiador editor: the loop built in, with the Agents view as the cockpit for every run",
       "VS Code or Cursor: install the Celiador Remote extension and keep your editor",
       "Both run on your Mac; your checkout is never touched",
+      "The cloud: when your Mac is off, a sandboxed run on our server picks the issue up (needs the Celiador GitHub App on the repository)",
       "One account across the runners and the phone",
     ],
-    coming: ["Cloud runs for when your Mac is off. They need the Celiador GitHub App on the repository."],
     mock: "editor",
   },
   {

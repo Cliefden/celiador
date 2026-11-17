@@ -4,9 +4,11 @@
 // Positioning: the loop is the product. A GitHub issue goes in, a pull request
 // comes out; the editor is one runner, Celiador Remote (VS Code or Cursor) is
 // another, the cloud is the third; the phone is the review surface; GitHub is
-// where the run narrates itself. Copy must not promise what is not live: cloud
-// runs, plan/question comments, CI fixes, per-run cost and the self-review
-// section are in progress and are marked "coming" wherever they appear.
+// where the run narrates itself. Copy must not promise what is not live:
+// plan/question comments, CI fixes, per-run cost and the self-review section
+// are in progress and are marked "coming" wherever they appear. Cloud runs are
+// live (they need the Celiador GitHub App on the repository and the repository
+// linked to the account); say so wherever runners are listed.
 
 export const site = {
   name: "Celiador",
@@ -21,9 +23,9 @@ export const site = {
   macVersion: "preview",
   minMacOS: "macOS 13 Ventura or later · Apple Silicon",
   // Public TestFlight link for the iPhone companion (the external "Public"
-  // group's link, ios/TESTFLIGHT.md § External testers). Paste it here once:
-  // the download page, /start, /docs and the FAQ all read it, and say "by
-  // invite" via the contact page while it is empty.
+  // group's link, ios/TESTFLIGHT.md § External testers; issue #60). Paste it
+  // here once: the download page, /start, /docs and the FAQ all read it, and
+  // offer an invite via the contact page while it is empty.
   testflightUrl: "",
   github: "https://github.com/Cliefden/celiador",
   // Celiador Remote: the loop for stock VS Code and Cursor.
@@ -63,9 +65,8 @@ export const features: Feature[] = [
   },
   {
     title: "Your runner, your choice",
-    body: "Run it in the Celiador editor, or keep VS Code or Cursor and install the Celiador Remote extension. Same loop, same account, same phone.",
+    body: "Run it in the Celiador editor, or keep VS Code or Cursor and install the Celiador Remote extension. When your Mac is off, a cloud run picks the issue up on our server instead. Same loop, same account, same phone.",
     icon: "code",
-    coming: "Cloud runs for when your Mac is off. They need the Celiador GitHub App on the repository.",
   },
   {
     title: "GitHub is the cockpit",
@@ -164,7 +165,7 @@ export const faqs: { q: string; a: string }[] = [
   },
   {
     q: "Do I have to switch editors?",
-    a: "No. The Celiador editor, a fork of VS Code, has the loop built in and is the nicest place to watch runs. If you want to keep VS Code or Cursor, install the Celiador Remote extension: same loop, same account, same phone. Cloud runs for when your Mac is off are being built and will need the Celiador GitHub App on the repository.",
+    a: "No. The Celiador editor, a fork of VS Code, has the loop built in and is the nicest place to watch runs. If you want to keep VS Code or Cursor, install the Celiador Remote extension: same loop, same account, same phone. And when no runner of yours is online, the issue runs in the cloud: a sandboxed run on our server, which needs the Celiador GitHub App on the repository.",
   },
   {
     q: "What does the agent do when it needs me?",
@@ -172,7 +173,7 @@ export const faqs: { q: string; a: string }[] = [
   },
   {
     q: "Is it available now?",
-    a: `Yes, as early access. The editor is a signed, notarized macOS download that updates itself, with Linux x64 packages too; Celiador Remote is on Open VSX; the iPhone app is on TestFlight${site.testflightUrl ? " (the link is on the download page)" : ", by invite from the contact page until the public link is on the download page"}.`,
+    a: `Yes, as early access. The editor is a signed, notarized macOS download that updates itself, with Linux x64 packages too; Celiador Remote is on Open VSX; the iPhone app is in beta on TestFlight${site.testflightUrl ? " (the link is on the download page)" : "; ask for an invite from the contact page"}.`,
   },
   {
     q: "Which platforms are supported?",
@@ -184,7 +185,7 @@ export const faqs: { q: string; a: string }[] = [
   },
   {
     q: "What happens to my code?",
-    a: "Your code stays yours. Runs happen on your machine, in a worktree of your own clone. It is never used to train models. No client holds a model key; the agent's requests go through our server, which holds the key, and nothing is indexed server-side.",
+    a: "Your code stays yours. Runs on a runner of yours happen on your machine, in a worktree of your own clone. A cloud run (when no runner of yours is online, or one you start from the phone on a GitHub repository) works in a checkout of the repository on our server, fetched with the Celiador GitHub App. Your code is never used to train models. No client holds a model key; the agent's requests go through our server, which holds the key, and nothing is indexed server-side.",
   },
 ];
 
