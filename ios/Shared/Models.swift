@@ -188,7 +188,7 @@ struct SessionEvent: Codable, Identifiable, Equatable {
         role = try? c.decodeIfPresent(String.self, forKey: .role)
         callId = try? c.decodeIfPresent(String.self, forKey: .callId)
         name = try? c.decodeIfPresent(String.self, forKey: .name)
-        input = (try? c.decodeIfPresent([String: String].self, forKey: .input)) ?? nil
+        input = Self.decodeInput(c)
         ok = try? c.decodeIfPresent(Bool.self, forKey: .ok)
         approvalKind = try? c.decodeIfPresent(String.self, forKey: .approvalKind)
         title = try? c.decodeIfPresent(String.self, forKey: .title)
@@ -203,10 +203,65 @@ struct SessionEvent: Codable, Identifiable, Equatable {
         from = try? c.decodeIfPresent(Int.self, forKey: .from)
     }
 
+    /// Tool input as display strings. Tools send any JSON (`{"limit": 50,
+    /// "replace_all": true, "edits": [...]}`); a strict `[String: String]`
+    /// decode dropped the whole input — path and command included — as soon as
+    /// one value wasn't a string. Scalars become their text, arrays/objects
+    /// compact JSON, nulls are left out.
+    private static func decodeInput(_ c: KeyedDecodingContainer<CodingKeys>) -> [String: String]? {
+        guard let raw = try? c.decodeIfPresent([String: JSONValue].self, forKey: .input) else { return nil }
+        return raw.compactMapValues(\.displayString)
+    }
+
     /// A short human label for tool calls (e.g. `write_file(src/app.ts)`).
     var toolSummary: String {
         let arg = input?["path"] ?? input?["dir"] ?? ""
         return arg.isEmpty ? (name ?? "tool") : "\(name ?? "tool")(\(arg))"
+    }
+}
+
+/// Any JSON value, for payloads whose shape the app doesn't own (tool inputs).
+enum JSONValue: Codable, Equatable {
+    case string(String), number(Double), bool(Bool), array([JSONValue]), object([String: JSONValue]), null
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let n = try? c.decode(Double.self) { self = .number(n) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
+        else { self = .object(try c.decode([String: JSONValue].self)) }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .string(let s): try c.encode(s)
+        case .number(let n): try c.encode(n)
+        case .bool(let b): try c.encode(b)
+        case .array(let a): try c.encode(a)
+        case .object(let o): try c.encode(o)
+        case .null: try c.encodeNil()
+        }
+    }
+
+    /// Text for display: strings as-is, whole numbers without ".0", arrays and
+    /// objects as compact JSON; nil for null.
+    var displayString: String? {
+        switch self {
+        case .string(let s): return s
+        case .bool(let b): return b ? "true" : "false"
+        case .number(let n):
+            if n.rounded() == n, abs(n) < 1e15 { return String(Int64(n)) }
+            return String(n)
+        case .null: return nil
+        case .array, .object:
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            guard let data = try? encoder.encode(self) else { return nil }
+            return String(decoding: data, as: UTF8.self)
+        }
     }
 }
 

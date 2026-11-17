@@ -28,9 +28,29 @@ enum AppScheme {
     /// `source` (homeWidget, liveActivity) rides along as `?src=` so the app can
     /// count which surface brought the user back; the id is still the last path
     /// component.
+    /// The id is percent-encoded (`url.lastPathComponent` decodes it again), so
+    /// an odd id from the server can't produce an unparsable URL.
     static func session(_ id: String, source: String? = nil) -> String {
-        let base = "\(scheme)://session/\(id)"
+        let base = "\(scheme)://session/\(pathComponent(id))"
         return source.map { "\(base)?src=\($0)" } ?? base
+    }
+
+    /// `session(_:source:)` as a URL; nil only if the scheme itself is unusable.
+    static func sessionURL(_ id: String, source: String? = nil) -> URL? {
+        URL(string: session(id, source: source))
+    }
+
+    /// The Queue tab as a URL.
+    static var queueURL: URL? { URL(string: queue) }
+
+    private static let pathAllowed: CharacterSet = {
+        var set = CharacterSet.urlPathAllowed
+        set.remove(charactersIn: "/?#")
+        return set
+    }()
+
+    private static func pathComponent(_ id: String) -> String {
+        id.addingPercentEncoding(withAllowedCharacters: pathAllowed) ?? ""
     }
 
     /// The `src` a deep link was tagged with, if it's one we know.
@@ -41,7 +61,7 @@ enum AppScheme {
     }
 
     /// `celiador[-channel]://task/<id>` — an agent task's run screen on the Queue tab.
-    static func task(_ id: String) -> String { "\(scheme)://task/\(id)" }
+    static func task(_ id: String) -> String { "\(scheme)://task/\(pathComponent(id))" }
 
     /// `celiador[-channel]://queue` — the Queue tab.
     static var queue: String { "\(scheme)://queue" }

@@ -1,11 +1,26 @@
 import Foundation
 import Security
+import CryptoKit
+import os
 
 /// Client of the Celiador daemon + its Supabase (GoTrue) auth — hand-rolled,
 /// dependency-free. Session lives in the Keychain; access tokens refresh
 /// automatically on expiry or 401.
+///
+/// Main-actor isolated: `session`, `config` and the in-flight refresh are only
+/// touched on the main actor, so the refresh single-flight check-then-set can't
+/// interleave (two refreshes reusing one refresh token make GoTrue revoke it).
+/// Network awaits still run off the main thread.
+@MainActor
 final class Api {
-    static let shared = Api()
+    nonisolated static let shared = Api()
+
+    nonisolated private init() {}
+
+    /// Called (on the main actor) when the server definitively rejected the
+    /// stored refresh token and the local session was cleared — the app must
+    /// show the sign-in screen instead of failing every call while "signed in".
+    var onSessionRevoked: (() -> Void)?
 
     /// Daemon base URL for this build. Resolution order:
     ///   1. `CELIADOR_URL` env var (dev override, e.g. an Xcode scheme in the simulator)
@@ -13,14 +28,30 @@ final class Api {
     ///   3. prod fallback
     /// So the Dev/Test/Release configs point the app at the matching daemon
     /// environment without a code change. See celiador-ios/Config/*.xcconfig.
-    let baseURL: URL = {
+    nonisolated let baseURL: URL = {
         let fromEnv = ProcessInfo.processInfo.environment["CELIADOR_URL"]
         let fromPlist = Bundle.main.object(forInfoDictionaryKey: "CELIADOR_DAEMON_URL") as? String
         let raw = [fromEnv, fromPlist]
             .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
-            .first { !$0.isEmpty } ?? "https://celiador.ai"
-        return URL(string: raw)!
+            .first { !$0.isEmpty } ?? ""
+        // A malformed override falls back to prod instead of crashing at launch.
+        if let url = URL(string: raw), url.scheme != nil, url.host != nil { return url }
+        return Api.prodURL
     }()
+
+    nonisolated private static let prodURL = URL(string: "https://celiador.ai")! // constant: always valid
+
+    /// A GoTrue endpoint (`<supabaseUrl>/auth/v1/<path>`). Throws, instead of
+    /// crashing, when the daemon reports a malformed `supabaseUrl`.
+    private func authURL(_ config: DaemonConfig, _ path: String, query: String? = nil, items: [URLQueryItem]? = nil) throws -> URL {
+        guard let base = URL(string: config.supabaseUrl ?? baseURL.absoluteString),
+              var components = URLComponents(url: base.appendingPathComponent("auth/v1/\(path)"), resolvingAgainstBaseURL: false)
+        else { throw ApiError(message: "The server's sign-in address is invalid.") }
+        if let query { components.query = query }
+        if let items { components.queryItems = items }
+        guard let url = components.url else { throw ApiError(message: "Could not build the sign-in URL.") }
+        return url
+    }
 
     private var config: DaemonConfig?
     /// The sign-in methods the daemon reported (nil until `loadConfig()` ran, or
@@ -45,14 +76,15 @@ final class Api {
     /// Pull the most useful message out of a GoTrue / daemon error body. The body
     /// may mix string and non-string fields (e.g. `{"code":400,"msg":"…"}`), which
     /// a strict `[String:String]` decode chokes on — hiding the real reason.
-    static func errorMessage(_ data: Data, status: Int, fallback: String) -> String {
+    nonisolated static func errorMessage(_ data: Data, status: Int, fallback: String) -> String {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             for key in ["error_description", "msg", "message", "error_code", "error"] {
                 if let value = obj[key] as? String, !value.isEmpty { return value }
             }
         }
         let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (raw?.isEmpty == false ? raw! : fallback)
+        if let raw, !raw.isEmpty { return raw }
+        return fallback
     }
 
     // MARK: - Bootstrap
@@ -79,13 +111,7 @@ final class Api {
     private func gotruePost(path: String, query: String? = nil, body: [String: String]) async throws -> Data {
         let config = try await loadConfig()
         guard let anon = config.supabaseAnonKey else { throw ApiError(message: "Server has no auth configured.") }
-        let authBase = URL(string: config.supabaseUrl ?? baseURL.absoluteString)!
-        var components = URLComponents(
-            url: authBase.appendingPathComponent("auth/v1/\(path)"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.query = query
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: try authURL(config, path, query: query))
         request.httpMethod = "POST"
         request.setValue(anon, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -142,9 +168,17 @@ final class Api {
     /// app was suspended or killed.
     private static let pendingSignInKey = "pendingSignInAt"
     private static let pendingSignInWindow: TimeInterval = 30 * 60
+    /// The PKCE code verifier of the pending sign-in. Only its hash (the
+    /// challenge) ever leaves the device; the auth code GoTrue returns is
+    /// useless without it.
+    private static let codeVerifierKey = "pendingSignInCodeVerifier"
 
-    private func markSignInPending() {
+    /// Start a pending sign-in: returns the PKCE challenge to send to GoTrue.
+    private func markSignInPending() -> String {
+        let verifier = PKCE.makeVerifier()
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.pendingSignInKey)
+        UserDefaults.standard.set(verifier, forKey: Self.codeVerifierKey)
+        return PKCE.challenge(for: verifier)
     }
 
     private func consumePendingSignIn() -> Bool {
@@ -153,31 +187,40 @@ final class Api {
         return started > 0 && Date().timeIntervalSince1970 - started < Self.pendingSignInWindow
     }
 
+    /// The pending sign-in's code verifier, removed as it's read (single use).
+    private func takeCodeVerifier() -> String? {
+        defer { UserDefaults.standard.removeObject(forKey: Self.codeVerifierKey) }
+        return UserDefaults.standard.string(forKey: Self.codeVerifierKey)
+    }
+
     // MARK: - Magic link & GitHub OAuth (deep-link callback)
 
-    /// The deep link the magic-link + OAuth flows return to. Tokens arrive in the
-    /// URL fragment (implicit flow); completed by `handleAuthCallback`. Must be in
-    /// GoTrue's `GOTRUE_URI_ALLOW_LIST`. Channel-aware (see `AppScheme`) so a Dev
-    /// build returns to its own app, not the prod `celiador://`.
+    /// The deep link the magic-link + OAuth flows return to. With PKCE it carries
+    /// a one-time `?code=` that `completeSignIn(from:)` exchanges, with this
+    /// device's code verifier, for the session — tokens never travel in a URL.
+    /// Must be in GoTrue's `GOTRUE_URI_ALLOW_LIST`. Channel-aware (see
+    /// `AppScheme`) so a Dev build returns to its own app, not the prod `celiador://`.
     static var authRedirect: String { AppScheme.authCallback }
 
-    /// Email a one-tap magic link. Opening it returns to `authRedirect` with tokens.
+    /// Email a one-tap magic link (PKCE). Opening it on this device returns to
+    /// `authRedirect` with an auth code.
     func sendMagicLink(email: String) async throws {
-        struct OtpBody: Encodable { let email: String; let create_user: Bool }
+        struct OtpBody: Encodable {
+            let email: String
+            let create_user: Bool
+            let code_challenge: String
+            let code_challenge_method: String
+        }
         let config = try await loadConfig()
         guard let anon = config.supabaseAnonKey else { throw ApiError(message: "Server has no auth configured.") }
-        let authBase = URL(string: config.supabaseUrl ?? baseURL.absoluteString)!
-        var components = URLComponents(
-            url: authBase.appendingPathComponent("auth/v1/otp"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.queryItems = [URLQueryItem(name: "redirect_to", value: Self.authRedirect)]
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: try authURL(config, "otp", items: [URLQueryItem(name: "redirect_to", value: Self.authRedirect)]))
         request.httpMethod = "POST"
         request.setValue(anon, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(OtpBody(email: email, create_user: true))
-        markSignInPending()
+        let challenge = markSignInPending()
+        request.httpBody = try JSONEncoder().encode(OtpBody(
+            email: email, create_user: true, code_challenge: challenge, code_challenge_method: PKCE.method
+        ))
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
         if http.statusCode >= 400 {
@@ -185,26 +228,47 @@ final class Api {
         }
     }
 
-    /// The GoTrue GitHub authorization URL to open in a browser. After the user
-    /// authorizes, GoTrue redirects to `authRedirect` with tokens in the fragment.
+    /// The GoTrue GitHub authorization URL to open in a browser (PKCE). After the
+    /// user authorizes, GoTrue redirects to `authRedirect` with an auth code.
     func githubAuthorizeURL() async throws -> URL {
         let config = try await loadConfig()
-        let authBase = URL(string: config.supabaseUrl ?? baseURL.absoluteString)!
-        var components = URLComponents(
-            url: authBase.appendingPathComponent("auth/v1/authorize"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.queryItems = [
+        let challenge = markSignInPending()
+        return try authURL(config, "authorize", items: [
             URLQueryItem(name: "provider", value: "github"),
             URLQueryItem(name: "redirect_to", value: Self.authRedirect),
-        ]
-        guard let url = components.url else { throw ApiError(message: "Could not build the sign-in URL.") }
-        markSignInPending()
-        return url
+            URLQueryItem(name: "code_challenge", value: challenge),
+            URLQueryItem(name: "code_challenge_method", value: PKCE.method),
+        ])
     }
 
-    /// Complete a magic-link / OAuth sign-in from the `celiador://auth-callback`
-    /// deep link (tokens in the fragment). Returns true if a session was stored.
+    /// Complete a magic-link / OAuth sign-in from the `…://auth-callback` deep
+    /// link. Returns true if a session was stored.
+    ///
+    /// - PKCE (`?code=`): exchanged at `/token?grant_type=pkce` with the code
+    ///   verifier this device kept. Accepted only while the sign-in started
+    ///   here is pending; the verifier makes a forged or stolen code useless anyway.
+    /// - Otherwise falls back to `handleAuthCallback` (implicit flow, tokens in
+    ///   the fragment) for a link requested by an older build.
+    func completeSignIn(from url: URL) async -> Bool {
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        guard let code = query.first(where: { $0.name == "code" })?.value, !code.isEmpty else {
+            return handleAuthCallback(url)
+        }
+        guard consumePendingSignIn(), let verifier = takeCodeVerifier() else { return false }
+        do {
+            _ = try await authRequest(
+                path: "token",
+                query: "grant_type=pkce",
+                body: ["auth_code": code, "code_verifier": verifier]
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// The implicit-flow callback (tokens in the fragment). Kept for magic links
+    /// sent before PKCE; `completeSignIn(from:)` is the entry point.
     @discardableResult
     func handleAuthCallback(_ url: URL) -> Bool {
         var parser = URLComponents()
@@ -250,20 +314,58 @@ final class Api {
     /// (GoTrue revokes a reused refresh token, which would sign the user out).
     private var refreshTask: Task<AuthSession, Error>?
 
+    /// Refresh the access token, single-flight: every caller that arrives while a
+    /// refresh is running awaits that same refresh. All of this runs on the main
+    /// actor, and there is no suspension between the check and the assignment of
+    /// `refreshTask`, so two refreshes can never start for one refresh token.
+    ///
+    /// `rejected`: the access token the server just turned down (a 401). When the
+    /// session already holds a different, unexpired token — another caller
+    /// refreshed meanwhile — that one is returned instead of rotating again.
+    ///
+    /// A definitive rejection of the refresh token (`isRevocation`) clears the
+    /// session and calls `onSessionRevoked`; a network failure leaves it alone.
     @discardableResult
-    private func refreshSession() async throws -> AuthSession {
+    private func refreshSession(rejected: String? = nil) async throws -> AuthSession {
         if let refreshTask { return try await refreshTask.value }
-        guard let current = session ?? Keychain.load() else { throw ApiError(message: "Not signed in.") }
-        let task = Task {
-            try await self.authRequest(
+        guard let current = session ?? Keychain.load() else { throw ApiError(message: "Not signed in.", status: 401) }
+        if let rejected, current.accessToken != rejected, current.expiresAt > Date() {
+            session = current
+            return current
+        }
+        let task = Task { () throws -> AuthSession in
+            let data = try await self.gotruePost(
                 path: "token",
                 query: "grant_type=refresh_token",
                 body: ["refresh_token": current.refreshToken]
             )
+            let token = try JSONDecoder().decode(TokenResponse.self, from: data)
+            // Signed out (or into another account) while the refresh was in flight:
+            // don't resurrect the old session.
+            guard (self.session ?? Keychain.load())?.refreshToken == current.refreshToken else {
+                throw ApiError(message: "Signed out.", status: 401)
+            }
+            return self.storeSession(token, fallbackEmail: current.email)
         }
         refreshTask = task
         defer { refreshTask = nil }
-        return try await task.value
+        do {
+            return try await task.value
+        } catch let error as ApiError where Self.isRevocation(error) {
+            // Only clear the session the failed refresh was for.
+            if (session ?? Keychain.load())?.refreshToken == current.refreshToken {
+                signOut()
+                onSessionRevoked?()
+            }
+            throw error
+        }
+    }
+
+    /// GoTrue's answer to a dead refresh token (revoked, reused, user deleted) is a
+    /// 4xx. Rate limiting (429) and request timeouts (408) are not definitive.
+    nonisolated static func isRevocation(_ error: ApiError) -> Bool {
+        guard let status = error.status else { return false }
+        return (400..<500).contains(status) && status != 408 && status != 429
     }
 
     /// Restore from Keychain; refresh if stale. Returns the signed-in email, or nil.
@@ -276,9 +378,8 @@ final class Api {
         if stored.expiresAt > Date() { return stored.email }
         do {
             return try await refreshSession().email
-        } catch let error as ApiError where (400..<500).contains(error.status ?? 0) {
-            signOut()
-            return nil
+        } catch let error as ApiError where Self.isRevocation(error) {
+            return nil // refreshSession already signed out
         } catch {
             return stored.email
         }
@@ -298,12 +399,14 @@ final class Api {
 
     /// A non-expired access token, refreshing if needed — for callers that
     /// attach it manually (the SSE stream) instead of going through `request`.
-    func validAccessToken() async throws -> String {
+    /// `rejected`: a token the server just answered 401 to — refresh even though
+    /// its local `expiresAt` says it's still good (it may have been revoked).
+    func validAccessToken(rejected: String? = nil) async throws -> String {
         if let current = session ?? Keychain.load() {
             session = current
-            if current.expiresAt > Date() { return current.accessToken }
+            if current.expiresAt > Date(), current.accessToken != rejected { return current.accessToken }
         }
-        return try await refreshSession().accessToken
+        return try await refreshSession(rejected: rejected).accessToken
     }
 
     // MARK: - Daemon API
@@ -326,8 +429,13 @@ final class Api {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        if let token = session?.accessToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // A known-expired token would only earn a 401: refresh up front instead.
+        if let current = session, current.expiresAt <= Date() {
+            _ = try? await refreshSession()
+        }
+        let sentToken = session?.accessToken
+        if let sentToken {
+            request.setValue("Bearer \(sentToken)", forHTTPHeaderField: "Authorization")
         }
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -335,8 +443,8 @@ final class Api {
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
-        if http.statusCode == 401, !retrying {
-            _ = try await refreshSession()
+        if http.statusCode == 401, !retrying, session != nil {
+            _ = try await refreshSession(rejected: sentToken)
             return try await self.request(type, path: path, method: method, query: query, body: body, retrying: true)
         }
         if http.statusCode >= 400 {
@@ -661,7 +769,7 @@ final class Api {
 
     /// APNs environment this build targets — the daemon uses it to pick the
     /// sandbox vs production APNs host.
-    var pushEnv: String {
+    nonisolated var pushEnv: String {
         #if DEBUG
         return "sandbox"
         #else
@@ -732,6 +840,29 @@ final class Api {
     }
 }
 
+/// PKCE (RFC 7636) for the GoTrue sign-in flows: a random verifier stays on the
+/// device, its S256 hash goes out as the challenge.
+enum PKCE {
+    /// GoTrue's spelling of S256.
+    static let method = "s256"
+
+    /// 64 characters from the RFC 7636 unreserved set (43–128 allowed).
+    static func makeVerifier() -> String {
+        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        var generator = SystemRandomNumberGenerator() // cryptographically secure on Apple platforms
+        return String((0..<64).map { _ in alphabet[Int.random(in: 0..<alphabet.count, using: &generator)] })
+    }
+
+    /// BASE64URL(SHA256(verifier)), unpadded.
+    static func challenge(for verifier: String) -> String {
+        Data(SHA256.hash(data: Data(verifier.utf8)))
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
 /// Type-erasing box so `request` can take any Encodable body.
 private struct AnyEncodable: Encodable {
     private let encodeFunc: (Encoder) throws -> Void
@@ -757,12 +888,29 @@ private enum Keychain {
         ]
     }
 
-    static func save(_ session: Api.AuthSession) {
-        guard let data = try? JSONEncoder().encode(session) else { return }
-        SecItemDelete(query as CFDictionary)
-        var attributes = query
-        attributes[kSecValueData as String] = data
-        SecItemAdd(attributes as CFDictionary, nil)
+    private static let log = Logger(subsystem: "ai.celiador.companion", category: "keychain")
+
+    /// Store the session. Updates the existing item in place (no delete-then-add
+    /// window where a crash would lose it), adds it when there is none. A
+    /// failure is logged and returned: the session then lives in memory only,
+    /// and the next cold start asks for a sign-in.
+    @discardableResult
+    static func save(_ session: Api.AuthSession) -> Bool {
+        guard let data = try? JSONEncoder().encode(session) else {
+            log.error("could not encode the session")
+            return false
+        }
+        var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var attributes = query
+            attributes[kSecValueData as String] = data
+            status = SecItemAdd(attributes as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else {
+            log.error("could not store the session: OSStatus \(status, privacy: .public)")
+            return false
+        }
+        return true
     }
 
     static func load() -> Api.AuthSession? {
@@ -777,6 +925,9 @@ private enum Keychain {
     }
 
     static func delete() {
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            log.error("could not delete the session: OSStatus \(status, privacy: .public)")
+        }
     }
 }
