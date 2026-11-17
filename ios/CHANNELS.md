@@ -92,9 +92,15 @@ TestFlight stays out of the production dashboard).
   registered (test: `Y7BT49HYW2` / `2A78GNMK56`, with Push + App Groups), and
   each app has an `Internal` TestFlight group with access to all builds. The
   workflow: `TESTFLIGHT.md`.
-- **App Group stays shared** (`group.ai.celiador.companion`) across channels —
-  it's hardcoded in `Shared/WidgetShared.swift`, and the auth/isolation boundary
-  is the daemon's per-env JWT secret, not widget storage.
+- **App Group per channel**: `group.ai.celiador.companion` (prod),
+  `group.ai.celiador.companion.dev` and `group.ai.celiador.companion.test`
+  (`APP_GROUP` in `Config/Base.xcconfig`, used by both entitlements files, the
+  widget entitlements and Info.plist `CELIADOR_APP_GROUP`, read by `SharedStore`).
+  The three apps install side by side; with one shared group they overwrote each
+  other's widget snapshot and signing out of one wiped the others' widgets. Each
+  group is registered in the developer portal and assigned to its channel's app
+  and `.widgets` App IDs; the CI App Store profiles must be regenerated after
+  any change to those assignments (`TESTFLIGHT.md`).
 - **Signing:** automatic in every config, driven in CI by the App Store Connect
   API key and a CI-only distribution certificate (`TESTFLIGHT.md`). The APNs
   team key serves all three apps; the push topic is the

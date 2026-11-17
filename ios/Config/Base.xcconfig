@@ -8,6 +8,11 @@ BUNDLE_ID_SUFFIX =
 APP_NAME = Celiador
 URL_SCHEME = celiador
 CELIADOR_DAEMON_URL = https:/$()/celiador.ai
+// App Group the app and its widgets share (entitlements + Info.plist
+// CELIADOR_APP_GROUP, read by SharedStore). Per channel, because the three apps
+// install side by side: a shared group let them overwrite each other's widget
+// snapshot. Prod keeps the original group.ai.celiador.companion.
+APP_GROUP = group.ai.celiador.companion$(BUNDLE_ID_SUFFIX)
 // Short commit of the build; CI passes CELIADOR_COMMIT=<sha7> to xcodebuild
 // (ios.yml), a build from Xcode leaves it empty ("local build" in Settings).
 CELIADOR_COMMIT =
