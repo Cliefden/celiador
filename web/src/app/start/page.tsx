@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 // — a GitHub sign-in for the pull request and a repository linked from the phone
 // — are called out as steps of their own, not footnotes. Keep it to one screen
 // per step and say what the person will see. Step 1 names the three runners;
-// the cloud one is in progress and must stay marked as such until it is live.
+// the cloud one needs the GitHub App on the repository, so it says so.
 const steps: { id: string; title: string; minutes: number }[] = [
   { id: "install", title: "Pick a runner and sign in", minutes: 2 },
   { id: "github", title: "Connect GitHub", minutes: 2 },
@@ -97,11 +97,13 @@ export default async function StartPage() {
             worktree, the same way; the extension uses the Claude Code CLI you have installed, or downloads it once.
             Without the Celiador editor you review in the phone app rather than an Agents view.
           </p>
-          <h3 className="mt-6 font-semibold text-white">The cloud (being built)</h3>
+          <h3 className="mt-6 font-semibold text-white">The cloud</h3>
           <p>
-            A run that starts even when your Mac is off, on a server of ours, on a clone of the repository.
-            It is being built and is not live yet. It will need the Celiador GitHub App installed on the
-            repository (step 2), since the push and the pull request happen without your machine. Until then,
+            Nothing to install. When a labelled issue comes in and no runner of yours has the repository
+            open, it runs on a server of ours instead, in a sandbox on a checkout of the repository. You can
+            also start a cloud run from the phone on any repository you have linked. It needs the Celiador
+            GitHub App installed on the repository and the repository linked with your GitHub account
+            (steps 2 and 4), since the push and the pull request happen without your machine. Without them,
             a labelled issue waits in the queue until a runner of yours is online.
           </p>
 
@@ -132,7 +134,7 @@ export default async function StartPage() {
           <h2 id="phone">3. Put the queue on your phone</h2>
           <p>
             The iPhone app is the review surface: what needs you, what is running, the pull requests
-            waiting, and a merge button. It is distributed through TestFlight.{" "}
+            waiting, and a merge button. It is in beta on TestFlight.{" "}
             {site.testflightUrl ? (
               <>
                 <a href={site.testflightUrl} className="text-brand hover:underline" target="_blank" rel="noreferrer">Join on TestFlight</a>,
@@ -140,7 +142,7 @@ export default async function StartPage() {
               </>
             ) : (
               <>
-                Until the public link is here it is by invite: ask from the{" "}
+                Ask for an invite from the{" "}
                 <Link href="/contact" className="text-brand hover:underline">contact page</Link> and mention
                 your Apple ID email. Install it,
               </>
@@ -199,7 +201,7 @@ export default async function StartPage() {
           <h2 id="after">When something goes wrong</h2>
           <ol className="space-y-2">
             <li><strong className="text-white">The pull request is a compare link.</strong> The editor had no GitHub sign-in; see step 2.</li>
-            <li><strong className="text-white">Nothing happens after the label.</strong> The app is not installed on that repository (step 2) or the repository is not watched from the phone (step 4). A runner must also be online with the folder open: the Celiador editor, or VS Code or Cursor with Celiador Remote.</li>
+            <li><strong className="text-white">Nothing happens after the label.</strong> The app is not installed on that repository (step 2) or the repository is not watched from the phone (step 4). A runner must also be online with the folder open (the Celiador editor, or VS Code or Cursor with Celiador Remote); otherwise the run goes to the cloud only when the GitHub App is installed and the repository is linked with your GitHub account, and the task on the phone says which is missing.</li>
             <li><strong className="text-white">The run failed.</strong> The task shows the error on the phone. Our limits are published and enforced per account; the current ones are on the <Link href="/pricing" className="text-brand hover:underline">pricing page</Link>.</li>
             <li><strong className="text-white">Anything else.</strong> <a href="https://github.com/Cliefden/celiador-editor/issues/new" className="text-brand hover:underline" target="_blank" rel="noreferrer">Open an issue</a> or write to the <Link href="/contact" className="text-brand hover:underline">contact page</Link>; a person answers.</li>
           </ol>
