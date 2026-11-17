@@ -10,10 +10,12 @@ The daemon's own GitHub identity. With it installed on an organization:
 
 ## Create it (once, about a minute)
 
-1. Open `https://celiador.ai/api/github/app/new` as an **owner of the GitHub organization** (`CELIADOR_GITHUB_ORG`, default `Cliefden`).
+0. On the daemon, set `CELIADOR_GITHUB_SETUP_TOKEN` (16+ characters, e.g. `openssl rand -hex 24`) in its env and restart it. Without it the setup routes answer 404.
+1. Open `https://celiador.ai/api/github/app/new` (the environment's own host for dev/test) as an **owner of the GitHub organization** (`CELIADOR_GITHUB_ORG`, default `Cliefden`) and enter the setup token.
 2. Click **Continue to GitHub**. The manifest (name, webhook URL, permissions, events) is filled in; GitHub shows it and asks you to confirm.
 3. GitHub sends you back to `/api/github/app/setup`. The daemon exchanges the one-time code for the app's id, private key and webhook secret and stores them in `data/github-app.json` (mode 0600). Nothing is typed or pasted.
 4. Click **install it on the organization** and choose the repositories agents may work on.
+5. Remove `CELIADOR_GITHUB_SETUP_TOKEN` from the env again. (With an app stored, both routes refuse with 409 anyway; to replace the app, delete `data/github-app.json` first.)
 
 Permissions requested: issues (write), pull requests (write), contents (write), metadata (read), checks (read), commit statuses (read). Events: `issues`, `issue_comment`, `pull_request`, `check_suite`, `status`.
 
