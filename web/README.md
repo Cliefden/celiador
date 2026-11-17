@@ -26,6 +26,8 @@ npm install
 npm run dev      # http://localhost:3000
 npm run build    # production build
 npm start        # serve the build
+npm run lint     # ESLint (next/core-web-vitals + next/typescript)
+npm run typecheck
 ```
 
 ## Deploy
