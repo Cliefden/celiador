@@ -197,7 +197,9 @@ export function dockerRunArgs(p: {
     "--user", `${p.uid}:${p.gid}`,
     "-e", "HOME=/home/runner",
     "-e", "ANTHROPIC_BASE_URL=http://127.0.0.1:8080/api/anthropic",
-    "-e", `ANTHROPIC_AUTH_TOKEN=${p.token}`,
+    // Name only: docker copies the value from its own environment (dockerRunEnv),
+    // so the run token never appears in the host's process list.
+    "-e", "ANTHROPIC_AUTH_TOKEN",
     "-e", "DISABLE_AUTOUPDATER=1",
     "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
     "-v", `${p.workspaceDir}:/workspace`,
@@ -213,6 +215,16 @@ export function dockerRunArgs(p: {
     "--max-turns", String(MAX_TURNS),
     ...(p.continueConversation ? ["--continue"] : []),
   ];
+}
+
+/**
+ * The docker CLI's environment for one run: the daemon's own (PATH, DOCKER_HOST, …)
+ * plus the run token, which `-e ANTHROPIC_AUTH_TOKEN` (name only) hands to the
+ * container. In the environment it is readable only by the daemon's user and
+ * root, where argv is readable by every user on the host. Pure; exported for tests.
+ */
+export function dockerRunEnv(token: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, ANTHROPIC_AUTH_TOKEN: token };
 }
 
 /** Whether Docker and the runner image are available — checked before a sandboxed run starts. */
@@ -256,7 +268,13 @@ export const sandboxAgent: RunnerAgent = async (ctx) => {
       homeDir,
       gitCommonDir,
       continueConversation: !!ctx.continueConversation && hasConversation,
-    }), { stdio: ["ignore", "pipe", "pipe"] });
+    }), { stdio: ["ignore", "pipe", "pipe"], env: dockerRunEnv(token) });
+    // Listen for `close` before draining stdout: it can fire in the same tick
+    // stdout ends, before the loop below would get to attach a listener.
+    const closed = new Promise<number | null>((resolve) => {
+      child.once("close", resolve);
+      child.once("error", () => resolve(null)); // docker itself failed to start
+    });
 
     const timer = setTimeout(kill, TIMEOUT_MS);
     const onAbort = () => kill();
@@ -270,7 +288,7 @@ export const sandboxAgent: RunnerAgent = async (ctx) => {
       for (const event of streamLineToEvents(line)) ctx.publish(event);
       result = streamLineResult(line) ?? result;
     }
-    const code: number | null = await new Promise((resolve) => child.once("close", resolve));
+    const code = await closed;
     clearTimeout(timer);
     ctx.signal.removeEventListener("abort", onAbort);
 
