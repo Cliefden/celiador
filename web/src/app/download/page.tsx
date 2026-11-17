@@ -136,7 +136,7 @@ export default async function DownloadPage() {
                 </a>
               ) : (
                 <Link href="/contact" className="font-mono text-xs text-brand hover:underline">
-                  By invite
+                  TestFlight · ask for an invite
                 </Link>
               )}
             </div>

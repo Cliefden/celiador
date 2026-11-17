@@ -60,8 +60,8 @@ export default function AboutPage() {
               an agent runs it on your Mac in its own git worktree, comments on the issue, and opens a
               pull request that closes it; you review and merge from your phone or from the editor&apos;s
               Agents view. The editor is still here, as the nicest runner. VS Code and Cursor run the
-              same loop through the Celiador Remote extension. Cloud runs for when your Mac is off are
-              being built. It&apos;s the tool we wanted for ourselves, and every change to Celiador now
+              same loop through the Celiador Remote extension, and when your Mac is off the run happens
+              in the cloud. It&apos;s the tool we wanted for ourselves, and every change to Celiador now
               ships through it.
             </p>
           </div>
