@@ -356,7 +356,7 @@ export function sessionRoutes(): Hono<AppEnv> {
     // the awaiting HTTP request and keep them OUT of the durable log / watcher stream.
     const inputs: unknown[] = [];
     for (const r of raw) {
-      if (isFsResult(r)) sessionBus.resolveFs(r.requestId, r);
+      if (isFsResult(r)) sessionBus.resolveFs(session.id, r.requestId, r);
       else inputs.push(r);
     }
 
