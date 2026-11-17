@@ -43,6 +43,9 @@ struct ChatsProvider: TimelineProvider {
 struct ChatsWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let snapshot: ChatSnapshot
+    /// The small widget's big count: 40 pt at the default text size, scaling
+    /// with Dynamic Type like a large title (`minimumScaleFactor` keeps it in the tile).
+    @ScaledMetric(relativeTo: .largeTitle) private var countSize: CGFloat = 40
 
     var body: some View {
         switch family {
@@ -76,7 +79,9 @@ struct ChatsWidgetView: View {
             Spacer(minLength: 4)
             if let lead {
                 Text("\(lead.count)")
-                    .font(.system(size: 40, weight: .semibold))
+                    .font(.system(size: countSize, weight: .semibold))
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
                     .monospacedDigit()
                     .foregroundStyle(lead.tone.color)
                     .widgetAccentable()
