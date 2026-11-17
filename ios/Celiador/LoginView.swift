@@ -187,7 +187,7 @@ struct LoginView: View {
                     using: url,
                     callbackURLScheme: AppScheme.scheme
                 )
-                if Api.shared.handleAuthCallback(callback) {
+                if await Api.shared.completeSignIn(from: callback) {
                     Telemetry.signal(.signedIn, ["method": "github"])
                     model.didSignIn()
                 } else {

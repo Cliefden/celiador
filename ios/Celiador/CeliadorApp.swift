@@ -39,12 +39,15 @@ struct CeliadorApp: App {
                     guard url.scheme == AppScheme.scheme else { return }
                     switch url.host {
                     case "auth-callback":
-                        // Magic-link / GitHub OAuth return — tokens in the fragment.
-                        if Api.shared.handleAuthCallback(url) {
-                            Telemetry.signal(.signedIn, ["method": "magicLink"])
-                            model.didSignIn()
-                        } else {
-                            Telemetry.signal(.signInFailed, ["method": "magicLink", "reason": "callbackInvalid"])
+                        // Magic-link / GitHub OAuth return — a PKCE auth code to
+                        // exchange (or, from an older link, tokens in the fragment).
+                        Task {
+                            if await Api.shared.completeSignIn(from: url) {
+                                Telemetry.signal(.signedIn, ["method": "magicLink"])
+                                model.didSignIn()
+                            } else {
+                                Telemetry.signal(.signInFailed, ["method": "magicLink", "reason": "callbackInvalid"])
+                            }
                         }
                     case "session":
                         // From widgets, Live Activities, and push taps. A task's session
