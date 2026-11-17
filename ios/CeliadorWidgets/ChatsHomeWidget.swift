@@ -95,8 +95,8 @@ struct ChatsWidgetView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .widgetURL(snapshot.items.first.map { URL(string: AppScheme.session($0.id, source: "homeWidget"))! }
-                   ?? URL(string: AppScheme.queue))
+        .widgetURL(snapshot.items.first.flatMap { AppScheme.sessionURL($0.id, source: "homeWidget") }
+                   ?? AppScheme.queueURL)
     }
 
     private var allClear: some View {
@@ -140,26 +140,35 @@ struct ChatsWidgetView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .widgetURL(URL(string: AppScheme.queue))
+        .widgetURL(AppScheme.queueURL)
     }
 
+    /// A row links to its run; without a usable URL it's plain (the widget's
+    /// own URL, the queue, still applies).
+    @ViewBuilder
     private func row(_ item: ChatSnapshotItem) -> some View {
-        Link(destination: URL(string: AppScheme.session(item.id, source: "homeWidget"))!) {
-            HStack(spacing: 10) {
-                RunBadge(tone: .bucket(item.bucket), size: 26)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(item.name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
-                    Text(item.detail)
-                        .font(.caption)
-                        .foregroundStyle(item.bucket == "needs-you" ? Theme.attention : .secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 0)
+        if let url = AppScheme.sessionURL(item.id, source: "homeWidget") {
+            Link(destination: url) { rowContent(item) }
+        } else {
+            rowContent(item)
+        }
+    }
+
+    private func rowContent(_ item: ChatSnapshotItem) -> some View {
+        HStack(spacing: 10) {
+            RunBadge(tone: .bucket(item.bucket), size: 26)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(item.name)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                Text(item.detail)
+                    .font(.caption)
+                    .foregroundStyle(item.bucket == "needs-you" ? Theme.attention : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
+            Spacer(minLength: 0)
         }
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import os
 
 /// Client of the Celiador daemon + its Supabase (GoTrue) auth — hand-rolled,
 /// dependency-free. Session lives in the Keychain; access tokens refresh
@@ -31,9 +32,25 @@ final class Api {
         let fromPlist = Bundle.main.object(forInfoDictionaryKey: "CELIADOR_DAEMON_URL") as? String
         let raw = [fromEnv, fromPlist]
             .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
-            .first { !$0.isEmpty } ?? "https://celiador.ai"
-        return URL(string: raw)!
+            .first { !$0.isEmpty } ?? ""
+        // A malformed override falls back to prod instead of crashing at launch.
+        if let url = URL(string: raw), url.scheme != nil, url.host != nil { return url }
+        return Api.prodURL
     }()
+
+    nonisolated private static let prodURL = URL(string: "https://celiador.ai")! // constant: always valid
+
+    /// A GoTrue endpoint (`<supabaseUrl>/auth/v1/<path>`). Throws, instead of
+    /// crashing, when the daemon reports a malformed `supabaseUrl`.
+    private func authURL(_ config: DaemonConfig, _ path: String, query: String? = nil, items: [URLQueryItem]? = nil) throws -> URL {
+        guard let base = URL(string: config.supabaseUrl ?? baseURL.absoluteString),
+              var components = URLComponents(url: base.appendingPathComponent("auth/v1/\(path)"), resolvingAgainstBaseURL: false)
+        else { throw ApiError(message: "The server's sign-in address is invalid.") }
+        if let query { components.query = query }
+        if let items { components.queryItems = items }
+        guard let url = components.url else { throw ApiError(message: "Could not build the sign-in URL.") }
+        return url
+    }
 
     private var config: DaemonConfig?
     /// The sign-in methods the daemon reported (nil until `loadConfig()` ran, or
@@ -65,7 +82,8 @@ final class Api {
             }
         }
         let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (raw?.isEmpty == false ? raw! : fallback)
+        if let raw, !raw.isEmpty { return raw }
+        return fallback
     }
 
     // MARK: - Bootstrap
@@ -92,13 +110,7 @@ final class Api {
     private func gotruePost(path: String, query: String? = nil, body: [String: String]) async throws -> Data {
         let config = try await loadConfig()
         guard let anon = config.supabaseAnonKey else { throw ApiError(message: "Server has no auth configured.") }
-        let authBase = URL(string: config.supabaseUrl ?? baseURL.absoluteString)!
-        var components = URLComponents(
-            url: authBase.appendingPathComponent("auth/v1/\(path)"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.query = query
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: try authURL(config, path, query: query))
         request.httpMethod = "POST"
         request.setValue(anon, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -179,13 +191,7 @@ final class Api {
         struct OtpBody: Encodable { let email: String; let create_user: Bool }
         let config = try await loadConfig()
         guard let anon = config.supabaseAnonKey else { throw ApiError(message: "Server has no auth configured.") }
-        let authBase = URL(string: config.supabaseUrl ?? baseURL.absoluteString)!
-        var components = URLComponents(
-            url: authBase.appendingPathComponent("auth/v1/otp"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.queryItems = [URLQueryItem(name: "redirect_to", value: Self.authRedirect)]
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: try authURL(config, "otp", items: [URLQueryItem(name: "redirect_to", value: Self.authRedirect)]))
         request.httpMethod = "POST"
         request.setValue(anon, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -202,16 +208,10 @@ final class Api {
     /// authorizes, GoTrue redirects to `authRedirect` with tokens in the fragment.
     func githubAuthorizeURL() async throws -> URL {
         let config = try await loadConfig()
-        let authBase = URL(string: config.supabaseUrl ?? baseURL.absoluteString)!
-        var components = URLComponents(
-            url: authBase.appendingPathComponent("auth/v1/authorize"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.queryItems = [
+        let url = try authURL(config, "authorize", items: [
             URLQueryItem(name: "provider", value: "github"),
             URLQueryItem(name: "redirect_to", value: Self.authRedirect),
-        ]
-        guard let url = components.url else { throw ApiError(message: "Could not build the sign-in URL.") }
+        ])
         markSignInPending()
         return url
     }
@@ -814,12 +814,29 @@ private enum Keychain {
         ]
     }
 
-    static func save(_ session: Api.AuthSession) {
-        guard let data = try? JSONEncoder().encode(session) else { return }
-        SecItemDelete(query as CFDictionary)
-        var attributes = query
-        attributes[kSecValueData as String] = data
-        SecItemAdd(attributes as CFDictionary, nil)
+    private static let log = Logger(subsystem: "ai.celiador.companion", category: "keychain")
+
+    /// Store the session. Updates the existing item in place (no delete-then-add
+    /// window where a crash would lose it), adds it when there is none. A
+    /// failure is logged and returned: the session then lives in memory only,
+    /// and the next cold start asks for a sign-in.
+    @discardableResult
+    static func save(_ session: Api.AuthSession) -> Bool {
+        guard let data = try? JSONEncoder().encode(session) else {
+            log.error("could not encode the session")
+            return false
+        }
+        var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var attributes = query
+            attributes[kSecValueData as String] = data
+            status = SecItemAdd(attributes as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else {
+            log.error("could not store the session: OSStatus \(status, privacy: .public)")
+            return false
+        }
+        return true
     }
 
     static func load() -> Api.AuthSession? {
@@ -834,6 +851,9 @@ private enum Keychain {
     }
 
     static func delete() {
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            log.error("could not delete the session: OSStatus \(status, privacy: .public)")
+        }
     }
 }
