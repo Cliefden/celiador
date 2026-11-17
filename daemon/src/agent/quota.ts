@@ -280,18 +280,26 @@ class AgentQuota {
 
   private scheduleSave(): void {
     if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      try {
-        fs.mkdirSync(path.dirname(this.file), { recursive: true });
-        const tmp = `${this.file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(this.usage));
-        fs.renameSync(tmp, this.file);
-      } catch (err) {
-        console.error("[quota] save failed:", err instanceof Error ? err.message : err);
-      }
-    }, SAVE_DEBOUNCE_MS);
+    this.saveTimer = setTimeout(() => this.saveNow(), SAVE_DEBOUNCE_MS);
     this.saveTimer.unref?.();
+  }
+
+  private saveNow(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      const tmp = `${this.file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.usage));
+      fs.renameSync(tmp, this.file);
+    } catch (err) {
+      console.error("[quota] save failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Write a pending (debounced) save now — on shutdown, so a deploy loses no usage. */
+  flush(): void {
+    if (this.saveTimer) this.saveNow();
   }
 }
 
