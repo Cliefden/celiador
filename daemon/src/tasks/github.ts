@@ -5,6 +5,7 @@ import { hasProvenLink } from "../github/access";
 import { appRequest, githubApp, reactToComment } from "../github/app";
 import { sessionBus } from "../sessions/bus";
 import { checksFailed, type CiFailure } from "./ci";
+import { githubDeliveries } from "./deliveries";
 import { dispatchTasks, taskStores } from "./dispatch";
 import { publishTaskChange } from "./events";
 import { refreshPullRequest } from "./pulls";
@@ -52,7 +53,7 @@ interface GhPayload {
   issue?: GhIssue;
   label?: { name?: string };
   comment?: { id?: number; body?: string; author_association?: string };
-  pull_request?: { number?: number; merged?: boolean; html_url?: string; head?: { ref?: string } };
+  pull_request?: { number?: number; merged?: boolean; html_url?: string; head?: { ref?: string; repo?: { full_name?: string } | null } };
   check_suite?: { id?: number; head_branch?: string | null; head_sha?: string; conclusion?: string | null; pull_requests?: GhPullRef[] };
   check_run?: { name?: string; head_sha?: string; conclusion?: string | null; details_url?: string | null; html_url?: string | null; check_suite?: { head_branch?: string | null }; pull_requests?: GhPullRef[] };
   /** `status` events: the branches whose head is the commit. */
@@ -118,6 +119,22 @@ export async function githubWebhook(c: Context<AppEnv>): Promise<Response> {
   } catch {
     return c.json({ error: "bad payload" }, 400);
   }
+
+  // A delivery seen before (GitHub's redelivery, or a captured one replayed — the
+  // signature alone doesn't expire) is acknowledged, not processed again.
+  const delivery = c.req.header("x-github-delivery");
+  if (!githubDeliveries.claim(delivery)) return c.json({ ok: true, ignored: "duplicate delivery" });
+  try {
+    const res = await deliveryEvent(c, event, payload);
+    if (res.status >= 500) githubDeliveries.release(delivery);
+    return res;
+  } catch (err) {
+    githubDeliveries.release(delivery);
+    throw err;
+  }
+}
+
+async function deliveryEvent(c: Context<AppEnv>, event: string, payload: GhPayload): Promise<Response> {
   if (event === "pull_request") return pullRequestEvent(c, payload);
   if (event === "check_suite" || event === "check_run" || event === "status") return ciEvent(c, event, payload);
   if (event === "issue_comment" && payload.action === "created" && !payload.issue?.pull_request) {
@@ -158,9 +175,12 @@ export async function githubWebhook(c: Context<AppEnv>): Promise<Response> {
  * north-star number is right however the PR was merged.
  */
 function pullRequestEvent(c: Context<AppEnv>, p: GhPayload): Response {
+  // A task's branch lives in the repo itself. A PR from a fork can carry the same
+  // branch name; it is not the task's PR, so it neither refreshes nor merges it.
+  const sameRepoHead = headIsInRepo(p);
   // Opened / new commits / reopened: refresh the task's PR card (size, checks, mergeable).
   if (PR_REFRESH_ACTIONS.has(p.action ?? "")) {
-    const head = p.pull_request?.head?.ref;
+    const head = sameRepoHead ? p.pull_request?.head?.ref : undefined;
     const refreshed = refreshForBranches(p.repository, head ? [head] : [], p.pull_request?.number ? [p.pull_request.number] : []);
     return c.json({ ok: true, refreshed });
   }
@@ -168,15 +188,29 @@ function pullRequestEvent(c: Context<AppEnv>, p: GhPayload): Response {
   const repo = repoOf(p.repository);
   const head = p.pull_request.head?.ref;
   if (!repo || !head) return c.json({ ok: true, ignored: "incomplete payload" });
+  if (!sameRepoHead) return c.json({ ok: true, ignored: "pull request from another repository" });
   const userId = taskStores.links.owner(repo.url);
   if (!userId) return c.json({ ok: true, ignored: "repo is not linked to a Celiador account" });
   const store = taskStores.for(userId);
-  const task = store.list().find((t) => repoKey(t.repo.url) === repoKey(repo.url) && t.branch === head && t.state !== "merged");
+  const number = p.pull_request.number;
+  // Branch + repo; once the task knows its PR, the number must match too.
+  const task = store
+    .list()
+    .find((t) => repoKey(t.repo.url) === repoKey(repo.url) && t.branch === head && t.state !== "merged" && (!t.pr || typeof number !== "number" || t.pr.number === number));
   if (!task) return c.json({ ok: true, ignored: "no task for this branch" });
   const updated = store.update(task.id, { state: "merged", ...(p.pull_request.html_url ? { prUrl: p.pull_request.html_url } : {}) })!;
   publishTaskChange(userId, updated);
   dispatchTasks(userId);
   return c.json({ ok: true, taskId: task.id, state: "merged" });
+}
+
+/** Whether a pull_request payload's head branch is in the event's repository (not a fork). */
+function headIsInRepo(p: GhPayload): boolean {
+  const headRepo = p.pull_request?.head?.repo?.full_name;
+  const owner = p.repository?.owner?.login;
+  const name = p.repository?.name;
+  if (!headRepo || !owner || !name) return false;
+  return headRepo.toLowerCase() === `${owner}/${name}`.toLowerCase();
 }
 
 /**
