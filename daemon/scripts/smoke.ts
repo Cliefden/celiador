@@ -309,6 +309,162 @@ async function main(): Promise<void> {
 	ok("empty-prompt start-run has an empty prompt", received.length === 2 && received[1].prompt === "");
 	unsub();
 
+	// ── Two users: B can't see, change or delete anything of A's (#92) ───────
+	console.log("\n== multi-user isolation ==");
+	{
+		const aH = { "content-type": "application/json", authorization: `Bearer ${userToken("iso-a")}` };
+		const bH = { "content-type": "application/json", authorization: `Bearer ${userToken("iso-b")}` };
+		const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+		const req = (p: string, h: Record<string, string>, init: { method?: string; body?: string } = {}) => app.request(`http://localhost${p}`, { headers: h, ...init });
+
+		// A's state: an editor session with events, a cloud session with a workspace file, a task, presence.
+		const sA = ((await (await req("/api/sessions", aH, { method: "POST", body: JSON.stringify({ title: "A's run" }) })).json()) as { session: { id: string } }).session.id;
+		await req(`/api/sessions/${sA}/events`, aH, { method: "POST", body: JSON.stringify([{ kind: "message", role: "assistant", text: "A-SECRET-TRANSCRIPT" }]) });
+		const { sessionStores } = await import("../src/sessions/instance.ts");
+		const { workspaceDir } = await import("../src/runner/workspace.ts");
+		const sS = sessionStores.for("iso-a").create({ origin: "phone", runner: "server", title: "A's cloud run" }).id;
+		const wsA = workspaceDir("iso-a", sS);
+		fs.mkdirSync(wsA, { recursive: true });
+		fs.writeFileSync(path.join(wsA, "a.txt"), "A-SECRET-FILE\n");
+		const tA = ((await (await req("/api/tasks", aH, { method: "POST", body: JSON.stringify({ remoteUrl: "https://github.com/iso-a/private-repo", title: "A's task" }) })).json()) as { task: { id: string; state: string } }).task;
+		await req("/api/presence/workspaces", aH, { method: "PUT", body: JSON.stringify({ clientId: "a-mac", workspaces: [{ name: "private-repo", remoteUrl: "https://github.com/iso-a/private-repo.git" }] }) });
+
+		// Sessions: listing, every /:id route, the event stream and the runner channel.
+		const bList = ((await (await req("/api/sessions", bH)).json()) as { sessions: Array<{ id: string }> }).sessions.map((s) => s.id);
+		ok("B's session list has none of A's", !bList.includes(sA) && !bList.includes(sS), bList.join(","));
+		const sessionRoutes: Array<[string, string, string?]> = [
+			["GET", ""],
+			["GET", "/events"],
+			["GET", "/commands"],
+			["POST", "/events", JSON.stringify([{ kind: "message", role: "assistant", text: "injected by B" }])],
+			["POST", "/message", JSON.stringify({ text: "x" })],
+			["POST", "/cancel"],
+			["POST", "/approvals/r1", JSON.stringify({ decision: "approve" })],
+			["POST", "/answers/r1", JSON.stringify({ text: "x" })],
+			["GET", "/files?path="],
+			["GET", "/file?path=a.txt"],
+			["PUT", "/file", JSON.stringify({ path: "a.txt", content: "B was here" })],
+			["GET", "/git/status"],
+			["GET", "/git/diff"],
+			["POST", "/git/commit", JSON.stringify({ message: "x" })],
+			["POST", "/git/revert", JSON.stringify({ paths: ["a.txt"] })],
+			["POST", "/git/push"],
+			["POST", "/git/pr", JSON.stringify({ title: "x" })],
+			["POST", "/git/merge", JSON.stringify({})],
+		];
+		const sessionLeaks: string[] = [];
+		for (const id of [sA, sS]) {
+			for (const [method, suffix, b] of sessionRoutes) {
+				const r = await req(`/api/sessions/${id}${suffix}`, bH, { method, ...(b ? { body: b } : {}) });
+				const text = await r.text();
+				if (r.status !== 404 || text.includes("A-SECRET")) sessionLeaks.push(`${method} ${suffix || "/"} → ${r.status}`);
+			}
+		}
+		ok(`B on A's sessions: every /:id route → 404 (${2 * sessionRoutes.length} requests)`, sessionLeaks.length === 0, sessionLeaks.join("; "));
+		for (const id of [sA, sS]) {
+			const del = await req(`/api/sessions/${id}`, bH, { method: "DELETE" });
+			if (((await del.json()) as { ok?: boolean }).ok !== false) sessionLeaks.push(`DELETE ${id}`);
+		}
+		await sleep(50);
+		ok("B's DELETE of A's sessions → ok:false", sessionLeaks.length === 0, sessionLeaks.join("; "));
+		const aEvents = await req(`/api/sessions/${sA}`, aH);
+		const aSession = ((await aEvents.json()) as { session?: { lastSeq?: number } }).session;
+		ok("…A's sessions are still there, with no event injected by B", aSession?.lastSeq === 1 && (await req(`/api/sessions/${sS}`, aH)).status === 200, JSON.stringify(aSession));
+		ok("…A's workspace file is unchanged", fs.readFileSync(path.join(wsA, "a.txt"), "utf8") === "A-SECRET-FILE\n");
+		const aFile = await req(`/api/sessions/${sS}/file?path=a.txt`, aH);
+		ok("…and A still reads it (positive control)", aFile.status === 200 && ((await aFile.json()) as { content?: string }).content === "A-SECRET-FILE\n");
+
+		// Tasks: listing, every /:id route, the live stream.
+		const bTasks = (await (await req("/api/tasks", bH)).json()) as { tasks: Array<{ id: string }>; repos?: unknown[] };
+		ok("B's task list has none of A's tasks or repos", !bTasks.tasks.some((t) => t.id === tA.id) && !JSON.stringify(bTasks).includes("iso-a/private-repo"), JSON.stringify(bTasks).slice(0, 300));
+		const taskRoutes: Array<[string, string]> = [
+			["/cancel", "{}"],
+			["/status", JSON.stringify({ state: "failed", error: "B" })],
+			["/merge", "{}"],
+			["/followup", JSON.stringify({ text: "x" })],
+		];
+		const taskLeaks: string[] = [];
+		for (const [suffix, b] of taskRoutes) {
+			const r = await req(`/api/tasks/${tA.id}${suffix}`, bH, { method: "POST", body: b });
+			if (r.status !== 404) taskLeaks.push(`${suffix} → ${r.status}`);
+		}
+		const aTaskNow = ((await (await req("/api/tasks", aH)).json()) as { tasks: Array<{ id: string; state: string; error?: string }> }).tasks.find((t) => t.id === tA.id);
+		ok("B on A's task: cancel / status / merge / followup → 404, A's task unchanged", taskLeaks.length === 0 && aTaskNow?.state === tA.state && !aTaskNow?.error, `${taskLeaks.join("; ")} ${JSON.stringify(aTaskNow)}`);
+		const streamOf = async (h: Record<string, string>) => {
+			const ac = new AbortController();
+			const res = await app.request("http://localhost/api/tasks/stream", { headers: h, signal: ac.signal } as RequestInit);
+			let seen = "";
+			const reader = res.body!.getReader();
+			const pump = (async () => { try { for (;;) { const { done, value } = await reader.read(); if (done) return; seen += new TextDecoder().decode(value); } } catch { /* aborted */ } })();
+			return { stop: async () => { ac.abort(); await reader.cancel().catch(() => undefined); await Promise.race([pump, sleep(500)]); return seen; } };
+		};
+		const aStream = await streamOf(aH);
+		const bStream = await streamOf(bH);
+		await sleep(20);
+		const tA2 = ((await (await req("/api/tasks", aH, { method: "POST", body: JSON.stringify({ remoteUrl: "https://github.com/iso-a/private-repo", title: "A's second task" }) })).json()) as { task: { id: string } }).task.id;
+		await sleep(100);
+		const aSeen = await aStream.stop();
+		const bSeen = await bStream.stop();
+		ok("task stream: A's new task reaches A's stream, never B's", aSeen.includes(tA2) && !bSeen.includes(tA2) && !bSeen.includes("iso-a"), `a=${aSeen.length} b=${bSeen.slice(0, 200)}`);
+
+		// Presence: B neither sees A's editors' repos nor can drive A's editor.
+		const bPresence = JSON.stringify(await (await req("/api/presence/workspaces", bH)).json());
+		ok("B's presence list has none of A's repos", !bPresence.includes("iso-a"), bPresence);
+		const { editorControl: ctl } = await import("../src/presence/control.ts");
+		const toA: unknown[] = [];
+		const unsubA = ctl.subscribe("iso-a", (cmd) => toA.push(cmd));
+		const bRun = await req("/api/presence/requests", bH, { method: "POST", body: JSON.stringify({ remoteUrl: "https://github.com/iso-a/private-repo.git", prompt: "rm -rf" }) });
+		unsubA();
+		ok("B's run request for A's repo → 409 (B has no editor), A's editor gets nothing", bRun.status === 409 && toA.length === 0, `${bRun.status} ${JSON.stringify(toA)}`);
+
+		// Chats (Postgres, faked here): every query is scoped to the caller.
+		const pg = (await import("pg")).default;
+		const proto = pg.Pool.prototype as unknown as { query: (sql: string, params?: unknown[]) => Promise<unknown> };
+		const realQuery = proto.query;
+		const chats = [{ id: "11111111-1111-4111-8111-111111111111", user_id: "iso-a", title: "A-SECRET-CHAT", origin: "editor", status: "done", created_at: "x", updated_at: "x", last_message_at: null }];
+		const messages = [{ id: "m1", chat_id: chats[0]!.id, user_id: "iso-a", role: "user", content: "A-SECRET-MESSAGE", seq: 1, created_at: "x" }];
+		const unscoped: string[] = [];
+		proto.query = async function (sql: string, params: unknown[] = []) {
+			const s = sql.replace(/\s+/g, " ").trim();
+			const pick = <T extends Record<string, unknown>>(rows: T[]) => ({ rows: rows.map(({ user_id: _u, chat_id: _c, ...r }) => r), rowCount: rows.length });
+			if (/from public\.chats where user_id = \$1/.test(s)) return pick(chats.filter((c) => c.user_id === params[0]));
+			if (/from public\.chats where id = \$1 and user_id = \$2/.test(s)) return pick(chats.filter((c) => c.id === params[0] && c.user_id === params[1]));
+			if (/from public\.messages where chat_id = \$1 and user_id = \$2/.test(s)) return pick(messages.filter((m) => m.chat_id === params[0] && m.user_id === params[1]));
+			if (/^update public\.chats set title = \$3.* where id = \$1 and user_id = \$2/.test(s)) {
+				const hit = chats.filter((c) => c.id === params[0] && c.user_id === params[1]);
+				for (const c of hit) c.title = String(params[2]);
+				return pick(hit);
+			}
+			if (/^delete from public\.chats where id = \$1 and user_id = \$2/.test(s)) {
+				const before = chats.length;
+				for (let i = chats.length - 1; i >= 0; i--) if (chats[i]!.id === params[0] && chats[i]!.user_id === params[1]) chats.splice(i, 1);
+				return { rows: [], rowCount: before - chats.length };
+			}
+			if (/public\.(chats|messages)/.test(s)) unscoped.push(s.slice(0, 120));
+			return { rows: [], rowCount: 0 };
+		};
+		process.env.DATABASE_URL = "postgres://smoke.invalid/none";
+		try {
+			const C = `/api/chats/${chats[0]!.id}`;
+			const bChats = await req("/api/chats", bH);
+			const bChatsText = await bChats.text();
+			const bGet = await req(C, bH);
+			const bGetText = await bGet.text();
+			const bPatch = await req(C, bH, { method: "PATCH", body: JSON.stringify({ title: "renamed by B" }) });
+			const bDel = (await (await req(C, bH, { method: "DELETE" })).json()) as { ok?: boolean };
+			ok("B's chat list has none of A's", bChats.status === 200 && !bChatsText.includes("A-SECRET"), bChatsText);
+			ok("B on A's chat: GET → 404, PATCH → 404, DELETE → ok:false, nothing leaked", bGet.status === 404 && !bGetText.includes("A-SECRET") && bPatch.status === 404 && bDel.ok === false, `${bGet.status} ${bPatch.status} ${JSON.stringify(bDel)}`);
+			const aGet = await req(C, aH);
+			const aChat = (await aGet.json()) as { chat?: { title?: string }; messages?: Array<{ content?: string }> };
+			ok("…A's chat is intact (title, messages) and A still reads it", aGet.status === 200 && aChat.chat?.title === "A-SECRET-CHAT" && aChat.messages?.[0]?.content === "A-SECRET-MESSAGE", JSON.stringify(aChat));
+			ok("…every chats/messages query the routes ran was scoped by user", unscoped.length === 0, unscoped.join(" | "));
+		} finally {
+			delete process.env.DATABASE_URL;
+			proto.query = realQuery;
+		}
+		fs.rmSync(path.dirname(wsA), { recursive: true, force: true });
+	}
+
 	// ── Releases (editor update feed + downloads) ────────────────────────────
 	console.log("\n== releases ==");
 	const relDir = path.join(HOME, "releases");
