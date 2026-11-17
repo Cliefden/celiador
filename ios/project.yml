@@ -7,9 +7,9 @@ options:
   createIntermediateGroups: true
 # Three build channels pointing at the matching daemon environment (see
 # ../ENVIRONMENTS.md). The xcconfigs define CELIADOR_DAEMON_URL +
-# BUNDLE_ID_SUFFIX + APP_NAME + URL_SCHEME; targets below reference those so all
-# Dev installs beside the prod app; Test IS the prod app (same bundle id) pointed
-# at test.celiador.ai — see CHANNELS.md. Build with `-configuration Test|Dev`.
+# BUNDLE_ID_SUFFIX + APP_NAME + URL_SCHEME + APP_GROUP; targets below reference
+# those so Dev (.dev) and Test (.test) install beside the prod app, each with its
+# own App Group — see CHANNELS.md. Build with `-configuration Test|Dev`.
 configs:
   Dev: debug
   Test: release
@@ -52,6 +52,8 @@ targets:
         CFBundleDisplayName: $(APP_NAME)
         CELIADOR_DAEMON_URL: $(CELIADOR_DAEMON_URL)
         CELIADOR_URL_SCHEME: $(URL_SCHEME)
+        # This channel's App Group (Config/Base.xcconfig), read by SharedStore.
+        CELIADOR_APP_GROUP: $(APP_GROUP)
         # Short commit, stamped by the Build iOS workflow at archive time
         # (empty for a build from Xcode); shown on the Settings build card.
         CELIADOR_COMMIT: $(CELIADOR_COMMIT)
