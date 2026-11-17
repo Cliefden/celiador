@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import { AGENT_MODEL, AGENT_MAX_TOKENS } from "./config";
-import { validateGatewayRequest } from "./agent/policy";
+import { allowedBetas, validateGatewayRequest } from "./agent/policy";
 import { agentQuota } from "./agent/quota";
 import { authorizeAgent, refuse } from "./agent/authorize";
 import type { AuthResult } from "./auth";
@@ -22,8 +22,11 @@ import { attributeUsage, MIRROR_HEADER } from "./sessions/usage";
  * data, not an exec surface.
  *
  * It is a transparent reverse proxy (raw fetch passthrough) rather than a re-issue
- * via the SDK, so it faithfully forwards thinking config, tool_choice, server-side
- * tools, images and anthropic-beta headers without the daemon modelling each field.
+ * via the SDK, so it faithfully forwards thinking config, tool_choice, images and
+ * the like without the daemon modelling each field. Two exceptions, because they
+ * are billed outside the per-user budget: server-side tools (web search, code
+ * execution, MCP connectors) are refused, and `anthropic-beta` values are
+ * filtered to an allowlist (agent/policy.ts).
  */
 
 const UPSTREAM = (process.env.ANTHROPIC_UPSTREAM_URL ?? "https://api.anthropic.com").replace(/\/+$/, "");
@@ -55,7 +58,7 @@ function upstreamHeaders(c: Context): Record<string, string> {
     "content-type": "application/json",
     "anthropic-version": c.req.header("anthropic-version") || "2023-06-01",
   };
-  const beta = c.req.header("anthropic-beta");
+  const beta = allowedBetas(c.req.header("anthropic-beta"));
   if (beta) headers["anthropic-beta"] = beta;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const authToken = process.env.ANTHROPIC_AUTH_TOKEN;

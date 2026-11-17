@@ -32,6 +32,7 @@ async function main(): Promise<void> {
 
 	// Stub the Anthropic upstream the gateway forwards to.
 	let gwBody: Record<string, unknown> | null = null;
+	let gwHeaders: Record<string, string> = {};
 	// The `message_start` usage the stub reports (a test swaps it to exercise cache pricing).
 	let gwStartUsage = '{"input_tokens":5,"output_tokens":0}';
 	const realFetch = globalThis.fetch;
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
 		}
 		if (String(url).includes("/v1/messages")) {
 			gwBody = JSON.parse(init.body ?? "{}");
+			gwHeaders = init.headers ?? {};
 			const sse = `event: message_start\ndata: {"type":"message_start","message":{"usage":${gwStartUsage}}}\n\n`
 				+ `event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":3}}\n\n`;
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
@@ -127,6 +129,26 @@ async function main(): Promise<void> {
 	ok("effort dropped (format kept) when the model is overridden", cfg !== undefined && !("effort" in cfg) && typeof cfg.format === "object", JSON.stringify(gwBody?.output_config));
 	await (await app.request(GW, { method: "POST", headers: authH, body: effortBody(AGENT_MODEL) })).text();
 	ok("effort kept for the daemon's own model", (gwBody?.output_config as { effort?: string } | undefined)?.effort === "high", JSON.stringify(gwBody?.output_config));
+	// Server-side tools are billed per use outside the budget → refused; client-side
+	// Anthropic-defined tools (bash_*, text_editor_*) still pass.
+	const toolBody = (tools: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ max_tokens: 10, stream: true, tools, messages: [{ role: "user", content: "hi" }], ...extra });
+	gwBody = null;
+	const ws = await app.request(GW, { method: "POST", headers: authH, body: toolBody([{ type: "web_search_20250305", name: "web_search" }]) });
+	ok("server tool (web_search) → 400, never upstream", ws.status === 400 && gwBody === null && ((await ws.json()) as { error?: string }).error?.includes("server tool") === true);
+	const ce = await app.request(GW, { method: "POST", headers: authH, body: toolBody([{ type: "code_execution_20250825", name: "code_execution" }]) });
+	ok("server tool (code_execution) → 400", ce.status === 400 && gwBody === null);
+	const mcp = await app.request(GW, { method: "POST", headers: authH, body: toolBody([], { mcp_servers: [{ type: "url", url: "https://mcp.test", name: "x" }] }) });
+	ok("mcp_servers (MCP connector) → 400", mcp.status === 400 && gwBody === null);
+	const ct = await app.request(GW, { method: "POST", headers: authH, body: toolBody([], { container: "c1" }) });
+	ok("container → 400", ct.status === 400 && gwBody === null);
+	const cli = await app.request(GW, { method: "POST", headers: authH, body: toolBody([{ type: "bash_20250124", name: "bash" }, { type: "text_editor_20250728", name: "str_replace_based_edit_tool" }, { type: "custom", name: "x", input_schema: { type: "object" } }]) });
+	ok("client-side tools (bash_*, text_editor_*, custom) pass", cli.status === 200 && gwBody !== null);
+	await cli.text();
+	// anthropic-beta is filtered to an allowlist: shape/caching betas pass, billed ones are dropped.
+	await (await app.request(GW, { method: "POST", headers: { ...authH, "anthropic-beta": "interleaved-thinking-2025-05-14, context-1m-2025-08-07,code-execution-2025-08-25,fine-grained-tool-streaming-2025-05-14" }, body })).text();
+	ok("anthropic-beta: allowlisted kept, billed (context-1m, code-execution) dropped", gwHeaders["anthropic-beta"] === "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14", String(gwHeaders["anthropic-beta"]));
+	await (await app.request(GW, { method: "POST", headers: { ...authH, "anthropic-beta": "mcp-client-2025-04-04" }, body })).text();
+	ok("anthropic-beta: nothing allowed → header not sent", gwHeaders["anthropic-beta"] === undefined, String(gwHeaders["anthropic-beta"]));
 
 	// ── Relay ────────────────────────────────────────────────────────────────
 	console.log("\n== relay ==");
