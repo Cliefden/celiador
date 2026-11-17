@@ -136,8 +136,8 @@ Then the deliberately manual, prod-touching steps:
 1. Caddy: merge `deploy/Caddyfile.example` into `/etc/caddy/Caddyfile` (back the
    live file up first), `sudo caddy validate --config /etc/caddy/Caddyfile`,
    `sudo systemctl reload caddy`.
-2. Web previews: `celiador-web@test` / `@dev` from the `celiador-web` repo
-   (its `deploy/`), on `:3102` / `:3103`.
+2. Web previews: `celiador-web@test` / `@dev` from this repo's
+   `web/deploy/` (`provision-web.sh test|dev`), on `:3102` / `:3103`.
 3. APNs: add the team key (`APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_KEY_PATH`) to
    each env's `.env` to enable push there.
 
@@ -172,9 +172,13 @@ npm run migrate -- --baseline                            # records 0001 + 0002, 
 sudo systemctl disable celiador-daemon
 sudo systemctl enable --now celiador-daemon@prod
 curl -s https://celiador.ai/api/health                   # env=prod, commit=<step 1>, same :4671, Caddy unchanged
-# 3. from the laptop
-gh variable set PROD_ENABLED --body true -R Cliefden/daemon
+# 3. from the laptop, once the site's cutover below is done too
+gh variable set PROD_ENABLED --body true -R Cliefden/celiador
 ```
+
+`PROD_ENABLED` is one repository variable on `Cliefden/celiador`: it unlocks
+prod dispatches of **both** `deploy.yml` (daemon) and `web-deploy.yml` (site).
+Set it only when both are on their templated `@prod` units.
 
 From then on prod deploys only through the workflow (`RELEASING.md`):
 **Actions → Deploy → Run workflow**, tag `vX.Y.Z`, env `prod`, approved by the
@@ -182,10 +186,10 @@ From then on prod deploys only through the workflow (`RELEASING.md`):
 `sudo systemctl disable --now celiador-daemon@prod && rm ~/daemon && mv ~/envs/prod/daemon ~/daemon && sudo systemctl enable --now celiador-daemon`.
 Keep the backup tarball until prod has deployed through the workflow twice.
 
-The marketing site follows the same shape (`celiador-web/deploy/provision-web.sh prod`
-builds into `~/envs/prod/web` beside the live unit; then
-`sudo systemctl disable --now celiador-web && sudo systemctl enable --now celiador-web@prod`,
-and `PROD_ENABLED=true` on `Cliefden/celiador-web`).
+The marketing site follows the same shape (`web/deploy/provision-web.sh prod`
+from this repo builds into `~/envs/prod/web` beside the live unit; then
+`sudo systemctl disable --now celiador-web && sudo systemctl enable --now celiador-web@prod`).
+It shares the `PROD_ENABLED` variable above with the daemon.
 
 ## Verification
 
