@@ -146,6 +146,41 @@ async function main(): Promise<void> {
 	const bad = await app.request(`http://localhost/api/sessions/${sid}/events`, { method: "POST", headers: authH, body: JSON.stringify([{ kind: "tool" }]) });
 	ok("invalid event → 400", bad.status === 400, `got ${bad.status}`);
 
+	// ── Body limits + log byte budgets ─────────────────────────────────────────
+	console.log("\n== limits ==");
+	const { bodyLimitFor, DEFAULT_BODY_LIMIT } = await import("../src/app.ts");
+	ok("bodyLimitFor: default 1 MB, larger caps only on the routes that need them",
+		DEFAULT_BODY_LIMIT === 1024 * 1024 && bodyLimitFor("POST", "/api/sessions") === DEFAULT_BODY_LIMIT && bodyLimitFor("PATCH", "/api/profile") === DEFAULT_BODY_LIMIT
+		&& bodyLimitFor("POST", "/api/anthropic/v1/messages") > DEFAULT_BODY_LIMIT && bodyLimitFor("POST", `/api/sessions/${sid}/events`) > DEFAULT_BODY_LIMIT
+		&& bodyLimitFor("GET", `/api/sessions/${sid}/events`) === DEFAULT_BODY_LIMIT && bodyLimitFor("POST", `/api/sessions/${sid}/events/x`) === DEFAULT_BODY_LIMIT);
+	const big = "x".repeat(2 * 1024 * 1024);
+	const bigCreate = await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ title: big }) });
+	ok("2 MB body on a default route → 413", bigCreate.status === 413, `got ${bigCreate.status}`);
+	const bigMsg = await app.request(`http://localhost/api/sessions/${sid}/message`, { method: "POST", headers: authH, body: JSON.stringify({ text: big }) });
+	ok("2 MB body on POST /:id/message → 413", bigMsg.status === 413, `got ${bigMsg.status}`);
+	const limRes = await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ title: "limits", origin: "editor", runner: "editor" }) });
+	const limSid = ((await limRes.json()) as { session: { id: string } }).session.id;
+	const bigEvents = await app.request(`http://localhost/api/sessions/${limSid}/events`, { method: "POST", headers: authH, body: JSON.stringify(Array.from({ length: 12 }, () => ({ kind: "delta", text: "y".repeat(190_000) }))) });
+	ok("a 2 MB event batch is within the events route's own cap", bigEvents.status === 200, `got ${bigEvents.status}`);
+	await app.request(`http://localhost/api/sessions/${limSid}`, { method: "DELETE", headers: authH });
+	const hugeEvents = await app.request(`http://localhost/api/sessions/${sid}/events`, { method: "POST", headers: authH, body: "[" + "1,".repeat(5 * 1024 * 1024) + "1]" });
+	ok("a 10 MB event batch → 413", hugeEvents.status === 413, `got ${hugeEvents.status}`);
+	// The ring is bounded by bytes, per session and per user, not just by count.
+	const { SessionStore } = await import("../src/sessions/store.ts");
+	const ringDir = path.join(HOME, "ring-test");
+	const ringStore = new SessionStore("ring-user", path.join(ringDir, "meta.json"), path.join(ringDir, "log"), { session: 50_000, user: 120_000 });
+	const r1 = ringStore.create({ title: "one", origin: "editor", runner: "editor" });
+	for (let i = 0; i < 40; i++) ringStore.append(r1.id, { kind: "message", role: "assistant", text: `${i}:` + "z".repeat(5_000) });
+	const replay1 = ringStore.replay(r1.id, 0);
+	ok("session ring: over its byte budget the oldest events fall out", ringStore.logSize(r1.id) <= 50_000 && replay1.events.length < 40 && replay1.truncatedFrom !== undefined && replay1.events.at(-1)?.seq === 40, `${ringStore.logSize(r1.id)} bytes, ${replay1.events.length} events`);
+	const r2 = ringStore.create({ title: "two", origin: "editor", runner: "editor" });
+	const r3 = ringStore.create({ title: "three", origin: "editor", runner: "editor" });
+	for (let i = 0; i < 9; i++) ringStore.append(r2.id, { kind: "message", role: "assistant", text: "w".repeat(5_000) });
+	for (let i = 0; i < 9; i++) ringStore.append(r3.id, { kind: "message", role: "assistant", text: "v".repeat(5_000) });
+	ok("user budget: total held under the cap", ringStore.logSize() <= 120_000, `${ringStore.logSize()}`);
+	ok("user budget: the least recently updated session is trimmed first, the active one kept whole", ringStore.logSize(r1.id) < 50_000 - 5_000 && ringStore.replay(r3.id, 0).events.length === 9, `${ringStore.logSize(r1.id)} / ${ringStore.replay(r3.id, 0).events.length}`);
+	ringStore.discard();
+
 	// ── Runner tokens: the sandbox's token is good on the Anthropic gateway only ──
 	console.log("\n== runner token scope ==");
 	const rgw = await app.request(GW, { method: "POST", headers: runnerH, body });

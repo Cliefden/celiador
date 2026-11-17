@@ -54,28 +54,39 @@ export async function getProfile(userId: string): Promise<Profile | null> {
   return rows[0] ?? null;
 }
 
+/**
+ * Update a profile. `settings` is merged into the stored object, so the cap
+ * (`maxSettingsBytes`) applies to the merged result: a patch that would grow it
+ * past the cap changes nothing and returns "too-large".
+ */
 export async function updateProfile(
   userId: string,
-  patch: { display_name?: string; avatar_url?: string; settings?: Record<string, unknown> }
-): Promise<Profile | null> {
+  patch: { display_name?: string; avatar_url?: string; settings?: Record<string, unknown> },
+  maxSettingsBytes: number
+): Promise<Profile | null | "too-large"> {
   const pool = getPool();
   if (!pool) return null;
   const { rows } = await pool.query<Profile>(
     `update public.profiles set
        display_name = coalesce($2, display_name),
        avatar_url   = coalesce($3, avatar_url),
-       settings     = case when $4::jsonb is null then settings else settings || $4::jsonb end,
+       settings     = case when $4::jsonb is null then settings else coalesce(settings, '{}'::jsonb) || $4::jsonb end,
        updated_at   = now()
      where id = $1
+       and ($4::jsonb is null or octet_length((coalesce(settings, '{}'::jsonb) || $4::jsonb)::text) <= $5)
      returning ${PROFILE_COLS}`,
     [
       userId,
       patch.display_name ?? null,
       patch.avatar_url ?? null,
       patch.settings !== undefined ? JSON.stringify(patch.settings) : null,
+      maxSettingsBytes,
     ]
   );
-  return rows[0] ?? null;
+  if (rows[0]) return rows[0];
+  // No row: either no profile, or the merged settings would be over the cap.
+  if (patch.settings !== undefined && (await getProfile(userId))) return "too-large";
+  return null;
 }
 
 // ── Chats & messages ─────────────────────────────────────────────────────────

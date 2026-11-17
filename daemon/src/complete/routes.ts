@@ -27,6 +27,7 @@ const SYSTEM = [
 /** Trim limits on what we send upstream — keeps latency and cost bounded. */
 const MAX_PREFIX = 4000;
 const MAX_SUFFIX = 1000;
+const LANGUAGE_ID = /^[A-Za-z0-9#+._-]{1,40}$/;
 
 /**
  * Clean the model's raw output into something safe to insert: drop a Markdown
@@ -69,7 +70,9 @@ export async function completeHandler(c: Context<AppEnv>) {
 
   const prefix = typeof body.prefix === "string" ? body.prefix.slice(-MAX_PREFIX) : "";
   const suffix = typeof body.suffix === "string" ? body.suffix.slice(0, MAX_SUFFIX) : "";
-  const language = typeof body.language === "string" ? body.language : "";
+  // A language id ("typescript", "c++", "objective-c") — anything else is dropped,
+  // so the field can't smuggle prompt text past the prefix/suffix caps.
+  const language = typeof body.language === "string" && LANGUAGE_ID.test(body.language) ? body.language : "";
   if (!prefix && !suffix) {
     return c.json({ completion: "" });
   }
