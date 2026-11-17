@@ -23,6 +23,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
 
     #if os(iOS)
     /// Push the current session to the watch. Call on activation and whenever auth changes.
+    @MainActor
     func pushSession() {
         guard activated, WCSession.isSupported() else { return }
         let session = WCSession.default
@@ -38,6 +39,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
     #endif
 
     #if os(watchOS)
+    @MainActor
     private func apply(_ context: [String: Any]) {
         if context["signedOut"] as? Bool == true {
             Api.shared.signOut()
@@ -54,18 +56,25 @@ final class WatchSync: NSObject, WCSessionDelegate {
     // MARK: - WCSessionDelegate
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
-        activated = activationState == .activated
-        #if os(iOS)
-        pushSession()
-        #endif
+        // Delegate callbacks arrive on a background queue; Api is main-actor isolated.
+        let isActivated = activationState == .activated
         #if os(watchOS)
-        apply(session.receivedApplicationContext)
+        let context = session.receivedApplicationContext
         #endif
+        Task { @MainActor in
+            self.activated = isActivated
+            #if os(iOS)
+            self.pushSession()
+            #endif
+            #if os(watchOS)
+            self.apply(context)
+            #endif
+        }
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         #if os(watchOS)
-        apply(applicationContext)
+        Task { @MainActor in self.apply(applicationContext) }
         #endif
     }
 

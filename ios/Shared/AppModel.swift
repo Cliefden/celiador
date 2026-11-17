@@ -100,6 +100,12 @@ final class AppModel {
         #if os(iOS)
         WatchSync.shared.start() // hand the session to a paired watch
         #endif
+        // The refresh token was revoked/reused/deleted server-side: every call
+        // would fail from here on, so drop to the sign-in screen.
+        Api.shared.onSessionRevoked = { [weak self] in
+            guard let self, case .signedIn = self.phase else { return }
+            self.signOut()
+        }
         do {
             _ = try await Api.shared.loadConfig()
         } catch {
