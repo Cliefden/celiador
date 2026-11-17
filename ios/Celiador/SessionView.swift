@@ -71,7 +71,8 @@ private final class SessionTranscript {
         statusTask = Task { [weak self] in
             var first = true
             while !Task.isCancelled {
-                if let s = try? await Api.shared.getSession(sessionId) {
+                // Skip polls while the app is in the background (AppLifecycle).
+                if AppLifecycle.isActive, let s = try? await Api.shared.getSession(sessionId) {
                     if first { self?.state = s.state }
                     self?.runnerConnected = s.runnerConnected
                     self?.isCloud = s.isCloud

@@ -7,7 +7,7 @@ struct ChatsHomeWidget: Widget {
     var body: some WidgetConfiguration {
         // The kind keeps its old name so widgets people already placed survive.
         StaticConfiguration(kind: "CeliadorChats", provider: ChatsProvider()) { entry in
-            ChatsWidgetView(snapshot: entry.snapshot)
+            ChatsWidgetView(snapshot: entry.snapshot, stale: entry.snapshot.isStale(at: entry.date))
                 .containerBackground(Theme.bg, for: .widget)
         }
         .configurationDisplayName("Celiador Runs")
@@ -31,10 +31,18 @@ struct ChatsProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<ChatsEntry>) -> Void) {
-        let entry = ChatsEntry(date: Date(), snapshot: SharedStore.readSnapshot())
-        // The app reloads the timeline on refresh; this cadence is a safety net.
-        let next = Calendar.current.date(byAdding: .minute, value: 15, to: Date()) ?? Date()
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        let now = Date()
+        let snapshot = SharedStore.readSnapshot()
+        var entries = [ChatsEntry(date: now, snapshot: snapshot)]
+        // A second entry at the moment the data turns stale, so the widget says
+        // so even if the app never runs again to reload it.
+        let staleAt = snapshot.updatedAt.addingTimeInterval(ChatSnapshot.staleAfter)
+        if snapshot.updatedAt != .distantPast, staleAt > now {
+            entries.append(ChatsEntry(date: staleAt, snapshot: snapshot))
+        }
+        // The app reloads the timeline when what it shows changes; this cadence is a safety net.
+        let next = Calendar.current.date(byAdding: .minute, value: 15, to: now) ?? now
+        completion(Timeline(entries: entries, policy: .after(max(next, entries.last?.date ?? next))))
     }
 }
 
@@ -43,6 +51,9 @@ struct ChatsProvider: TimelineProvider {
 struct ChatsWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let snapshot: ChatSnapshot
+    /// The app hasn't refreshed this for a while (`ChatSnapshot.staleAfter`):
+    /// say how old it is and mute the counts rather than pass it off as live.
+    var stale = false
 
     var body: some View {
         switch family {
@@ -58,10 +69,19 @@ struct ChatsWidgetView: View {
         return nil
     }
 
+    @ViewBuilder
     private var brand: some View {
-        Text("Celiador")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+        if stale {
+            Text("Updated \(snapshot.updatedAt, style: .relative) ago")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        } else {
+            Text("Celiador")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: Small
@@ -81,6 +101,7 @@ struct ChatsWidgetView: View {
                     .foregroundStyle(lead.tone.color)
                     .widgetAccentable()
                     .contentTransition(.numericText())
+                    .opacity(stale ? 0.55 : 1)
                 Text(lead.caption)
                     .font(.subheadline.weight(.semibold))
                 if let top = snapshot.items.first {
