@@ -33,14 +33,18 @@ It bumps `daemon/package.json` + `package-lock.json` and every
 two stages:
 
 ```bash
-git push origin main      # daemon + web → dev; the Dev app builds — wait for green
+git push origin main      # daemon → dev; the Dev app builds — wait for green
 git push origin vX.Y.Z    # daemon + web → test; the iOS Test build → TestFlight
 ```
 
 Never `--follow-tags`: both deploys would run at once on the same box. The tag
 deploy checks that the tag is on `main` and matches `daemon/package.json`.
 Pushes to `main` only deploy what they touch (`daemon/**` → the daemon,
-`web/**` → the site, `ios/` → the Dev app); a tag deploys everything.
+`web/**` → the site, `ios/` → the Dev app); a tag deploys everything. The
+release commit touches `daemon/` and `ios/` but not `web/`, so pushing it does
+**not** redeploy the site to dev: dev already runs the latest `web/` from the
+pushes that changed it (dispatch `web-deploy.yml` with `env=dev` to redeploy it
+anyway).
 
 ## Environments
 
@@ -80,7 +84,7 @@ Migrations only go forward, so rolling back code leaves the schema as it is.
 | `ci.yml` | pull requests and pushes to other branches touching `daemon/`, and from Deploy daemon | `npm run typecheck` + `npm run smoke` in `daemon/` on Node 20 and 22 |
 | `deploy.yml` (Deploy daemon) | `main` pushes touching `daemon/`, `vX.Y.Z` tags, manual runs | CI, then rsync `daemon/` to `~/envs/<env>/daemon`, `npm ci`, `BUILD_INFO`, migrate, restart `celiador-daemon@<env>`, and a health gate: `/api/health` through Caddy must report this `env` and this `commit`. Mails the result. |
 | `web-deploy.yml` (Deploy web) | `main` pushes touching `web/`, `vX.Y.Z` tags, manual runs | `next build`, rsync `web/` + `.next` to `~/envs/<env>/web`, `npm ci`, restart `celiador-web@<env>`, check the page through the public host. Mails the result. |
-| `ios.yml` (Build iOS) | `main` pushes touching `ios/`, `vX.Y.Z` tags, manual runs | On a macOS runner: XcodeGen, icon banner, `xcodebuild archive` of the channel's scheme with automatic signing through the App Store Connect API key, upload to App Store Connect (TestFlight). `main` → the Dev app, tag → the Test build, manual `prod` → the App Store build behind the `prod` reviewer. Mails the result. `ios/TESTFLIGHT.md`. |
+| `ios.yml` (Build iOS) | `main` pushes touching `ios/`, `vX.Y.Z` tags, manual runs | On a macOS runner: XcodeGen, icon banner, `xcodebuild archive` of the channel's scheme with **manual** signing (a CI-only Apple Distribution certificate from the repository secrets and the channel's two App Store profiles, fetched with the App Store Connect API key), then `-exportArchive` with `destination=upload` to App Store Connect (TestFlight). `main` → the Dev app, tag → the Test build, manual `prod` → the App Store build behind the `prod` reviewer. Mails the result. `ios/TESTFLIGHT.md`. |
 
 Secrets stay on the box (`~/envs/<env>/daemon/.env`, written by
 `daemon/deploy/provision-env.sh`); the workflow never writes them. This differs from
@@ -117,8 +121,10 @@ JWT secret, the database password and the anon key are generated on the box.
    only failures should mail. Without the secrets, results only show in GitHub
    (and GitHub mails the actor on failed runs anyway).
 
-4. **Prod.** After the cutover to `celiador-daemon@prod` (`ENVIRONMENTS.md`):
-   `gh variable set PROD_ENABLED --body true -R Cliefden/celiador`.
+4. **Prod.** After the cutover to `celiador-daemon@prod` **and**
+   `celiador-web@prod` (`ENVIRONMENTS.md` § Prod cutover):
+   `gh variable set PROD_ENABLED --body true -R Cliefden/celiador`. The one
+   variable unlocks prod for both deploy workflows.
 
 5. **iOS signing.** `ios/scripts/ci-signing-setup.sh` once: it issues a CI-only
    Apple Distribution certificate and writes the five repository secrets the
