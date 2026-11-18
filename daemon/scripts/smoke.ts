@@ -266,6 +266,62 @@ async function main(): Promise<void> {
 	ok("runner token on the locked agent proxy → 403", lockedProxy.status === 403, `got ${lockedProxy.status}`);
 	ok("…the session it tried to drive is untouched (a user token still sees it)", (await app.request(`http://localhost/api/sessions/${sid}`, { headers: authH })).status === 200);
 
+	// ── Deleted accounts: a still-valid token is refused everywhere, across restarts ──
+	console.log("\n== deleted accounts ==");
+	{
+		const goneId = "0d1e7e7e-0000-4000-8000-00000000d1e7";
+		const goneH = { "content-type": "application/json", authorization: `Bearer ${userToken(goneId)}` };
+		const goneRunnerH = { "content-type": "application/json", authorization: `Bearer ${mintRunnerToken(goneId, "gone-run", 300)!}` };
+		const before = await app.request(GW, { method: "POST", headers: goneH, body });
+		await before.text();
+		ok("before deletion: the gateway serves the account", before.status === 200, `got ${before.status}`);
+		// GoTrue's admin API, stubbed for this section only.
+		const prevFetch = globalThis.fetch;
+		const gotrueCalls: string[] = [];
+		process.env.GOTRUE_URL = "https://gotrue.smoke.test";
+		globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+			if (String(url).startsWith("https://gotrue.smoke.test/")) { gotrueCalls.push(`${init?.method} ${String(url).slice(25)}`); return new Response("{}", { status: 200 }); }
+			return prevFetch(url as string, init);
+		}) as typeof fetch;
+		const del = await app.request("http://localhost/api/account", { method: "DELETE", headers: goneH });
+		globalThis.fetch = prevFetch;
+		delete process.env.GOTRUE_URL;
+		ok("DELETE /api/account → ok (GoTrue admin delete called)", del.status === 200 && gotrueCalls.includes(`DELETE /admin/users/${goneId}`), `${del.status} ${gotrueCalls.join(",")}`);
+		const { deletedUsers } = await import("../src/deleted-users.ts");
+		ok("…the deletion is persisted", JSON.parse(fs.readFileSync(path.join(HOME, "data", "deleted-users.json"), "utf8"))[goneId] !== undefined);
+		const everyRoute = async (label: string): Promise<void> => {
+			const routes: Array<[string, string, Record<string, string>, string?]> = [
+				["POST", "/api/anthropic/v1/messages", goneH, body],
+				["GET", "/api/anthropic/v1/models", goneH],
+				["POST", "/api/agent/messages", goneH, JSON.stringify({ messages: [{ role: "user", content: "hi" }] })],
+				["POST", "/api/anthropic/v1/messages", goneRunnerH, body],
+				["POST", "/api/complete", goneH, JSON.stringify({ prefix: "x" })],
+				["GET", "/api/sessions", goneH],
+				["POST", "/api/sessions", goneH, JSON.stringify({ title: "x" })],
+				["GET", "/api/tasks", goneH],
+				["GET", "/api/me", goneH],
+				["GET", "/api/profile", goneH],
+				["GET", "/api/chats", goneH],
+				["POST", "/api/push/register", goneH, JSON.stringify({ token: "x" })],
+				["GET", "/api/presence", goneH],
+				["GET", "/api/github/account", goneH],
+				["DELETE", "/api/account", goneH],
+			];
+			const leaks: string[] = [];
+			for (const [method, p, h, b] of routes) {
+				const r = await app.request(`http://localhost${p}`, { method, headers: h, ...(b ? { body: b } : {}) });
+				if (r.status !== 401) leaks.push(`${method} ${p}${h === goneRunnerH ? " (runner)" : ""} → ${r.status}`);
+				await r.body?.cancel();
+			}
+			ok(`${label}: every route, incl. the agent proxy, gateway and a runner token → 401 (${routes.length})`, leaks.length === 0, leaks.join("; "));
+		};
+		await everyRoute("after deletion");
+		deletedUsers.reloadForTests(); // as a restart would: the in-memory copy is gone, the file is read again
+		await everyRoute("after a restart");
+		ok("…and no per-user session file was recreated", !fs.existsSync(path.join(HOME, "data", "sessions", "meta", `${goneId}.json`)));
+		ok("another account is unaffected", (await app.request("http://localhost/api/sessions", { headers: authH })).status === 200);
+	}
+
 	// ── Run review (git over the relay) ──────────────────────────────────────
 	console.log("\n== git review ==");
 	const G = `http://localhost/api/sessions/${sid}/git`;

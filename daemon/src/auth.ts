@@ -157,11 +157,17 @@ export function bearerFrom(c: Context): string | null {
   return header?.startsWith("Bearer ") ? header.slice(7) : null;
 }
 
-/** Resolve a token to a user per the active auth mode, or null. */
+/**
+ * Resolve a token to a user per the active auth mode, or null. A deleted
+ * account's token resolves to null here, so every caller (requireUser and the
+ * agent proxy/gateway's authorizeAgent) refuses it the same way.
+ */
 export function authenticateToken(token: string | null): AuthResult | null {
   switch (authMode()) {
-    case "supabase":
-      return token ? verifySupabaseJwt(token) : null;
+    case "supabase": {
+      const user = token ? verifySupabaseJwt(token) : null;
+      return user && !deletedUsers.isDeleted(user.userId) ? user : null;
+    }
     case "token":
       return safeEqual(token, process.env.CELIADOR_TOKEN) ? { userId: "default" } : null;
     case "none":
@@ -181,10 +187,6 @@ export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   const user = authenticateToken(bearerFrom(c));
   if (!user) return c.json({ error: "unauthorized" }, 401);
   if (user.runner) return c.json({ error: RUNNER_TOKEN_REFUSED }, 403);
-  // Block deleted users even if their JWT is still valid
-  if (deletedUsers.isDeleted(user.userId)) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
   c.set("user", user);
   await next();
 };
