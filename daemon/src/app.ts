@@ -27,9 +27,43 @@ import { githubAccountRoutes, githubCallbackRoutes } from "./github/access";
 import { githubAppRoutes } from "./github/app";
 import { openRoutes } from "./open/routes";
 
+const MB = 1024 * 1024;
+/** Request body cap for every /api route not listed in {@link BODY_LIMITS}. */
+export const DEFAULT_BODY_LIMIT = 1 * MB;
+/**
+ * Routes that legitimately carry more than the default. First match wins; the
+ * pattern is matched against the request path.
+ */
+const BODY_LIMITS: Array<{ method: string; path: RegExp; maxSize: number }> = [
+  // SDK turns carry big tool_result payloads.
+  { method: "POST", path: /^\/api\/anthropic\/v1\/messages$/, maxSize: 32 * MB },
+  // The locked proxy: one request can't ship an unbounded conversation upstream.
+  { method: "POST", path: /^\/api\/agent\/messages$/, maxSize: 8 * MB },
+  // GitHub caps webhook payloads at 25 MB.
+  { method: "POST", path: /^\/api\/github\/webhook$/, maxSize: 25 * MB },
+  // Runner event batches, incl. fs.result replies carrying a file (≤1 MB) and diffs.
+  { method: "POST", path: /^\/api\/sessions\/[^/]+\/events$/, maxSize: 8 * MB },
+  // A file edited on the phone (content ≤ 2M chars, up to 3 bytes each as UTF-8).
+  { method: "PUT", path: /^\/api\/sessions\/[^/]+\/file$/, maxSize: 7 * MB },
+];
+
+/** The body cap for one request. Exported for the smoke test. */
+export function bodyLimitFor(method: string, path: string): number {
+  return BODY_LIMITS.find((l) => l.method === method && l.path.test(path))?.maxSize ?? DEFAULT_BODY_LIMIT;
+}
+
 /** Build the daemon's HTTP app. Pure — no listening; see main.ts. */
 export function createApp(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+
+  // One body cap for every route (per-route overrides above), enforced before
+  // any handler parses JSON — a handler's own field caps then bound what's kept.
+  app.use("/api/*", (c, next) =>
+    bodyLimit({
+      maxSize: bodyLimitFor(c.req.method, c.req.path),
+      onError: (cc) => cc.json({ error: "request too large" }, 413),
+    })(c, next)
+  );
 
   // CORS for API clients. Safe with Bearer-token auth (no cookies → no CSRF
   // surface) and required by the iOS/companion clients calling cross-origin.
@@ -92,22 +126,14 @@ export function createApp(): Hono<AppEnv> {
   );
 
   // Anthropic agent proxy (SSE). Auth handled inside (user JWT or shared token).
-  // Body capped so one request can't ship an unbounded conversation upstream.
-  app.post(
-    "/api/agent/messages",
-    bodyLimit({ maxSize: 8 * 1024 * 1024, onError: (c) => c.json({ error: "request too large" }, 413) }),
-    agentProxy
-  );
+  // Body capped (BODY_LIMITS) so one request can't ship an unbounded conversation upstream.
+  app.post("/api/agent/messages", agentProxy);
 
   // First-party Anthropic-compatible gateway (SSE). Forwards the caller's own
   // system prompt + tool schemas (the Claude Agent SDK's full toolset) while the
   // daemon keeps key custody, model choice, token caps, auth and quota. A larger
-  // body cap than the locked proxy: SDK turns carry big tool_result payloads.
-  app.post(
-    "/api/anthropic/v1/messages",
-    bodyLimit({ maxSize: 32 * 1024 * 1024, onError: (c) => c.json({ error: "request too large" }, 413) }),
-    anthropicGateway
-  );
+  // body cap than the locked proxy (BODY_LIMITS).
+  app.post("/api/anthropic/v1/messages", anthropicGateway);
   app.get("/api/anthropic/v1/models", anthropicModels);
 
   // Inline completion ("Tab autocomplete") — small fast Haiku call, non-streaming.
