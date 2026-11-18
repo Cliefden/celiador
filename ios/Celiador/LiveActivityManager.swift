@@ -30,42 +30,69 @@ final class LiveActivityManager {
         }
     }
 
-    /// End every Live Activity (sign-out / account deletion).
+    /// How long a pushed state counts as current. The app re-sends it every poll
+    /// (15 s) while in the foreground, and the daemon's APNs updates carry their
+    /// own stale date, so content older than this means nobody is updating it —
+    /// the system then shows it as stale (`context.isStale`) instead of a frozen
+    /// "working…".
+    static let staleAfter: TimeInterval = 10 * 60
+    /// How long a settled run's final state stays on the Lock Screen.
+    static let settledDismissAfter: TimeInterval = 15 * 60
+
+    /// End every Live Activity (sign-out / account deletion) — removed at once:
+    /// nothing of the account should stay on the Lock Screen.
     func endAll() {
         adoptExisting()
-        for (id, activity) in activities { end(id, activity: activity, reason: "signOut") }
+        for (id, activity) in activities { end(id, activity: activity, reason: "signOut", final: nil) }
     }
 
     /// Bring Live Activities in line with the current session list: start ones
-    /// that just began running, refresh them, end ones that settled.
+    /// that just began running, refresh the ones still live (running, or waiting
+    /// on you — the amber "needs you" state), end ones that settled.
     func reconcile(sessions: [Session], activity: [String: String]) {
         adoptExisting()
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        let running = sessions.filter { $0.state == .running }
-        let runningIds = Set(running.map(\.id))
+        let live = sessions.filter { $0.state == .running || $0.state == .awaiting }
+        let liveIds = Set(live.map(\.id))
 
-        for session in running {
-            let state = contentState(session, line: activity[session.id])
-            if let existing = activities[session.id] {
-                Task { await existing.update(ActivityContent(state: state, staleDate: nil)) }
+        // Ending never depends on authorization: activities the user turned off
+        // after they started must still be settled.
+        for (id, current) in activities where !liveIds.contains(id) {
+            // Why it ended: the session's new state, or gone from the list.
+            if let session = sessions.first(where: { $0.id == id }) {
+                end(id, activity: current, reason: session.state.rawValue, final: contentState(session, line: nil))
             } else {
-                start(session, state: state)
+                end(id, activity: current, reason: "removed", final: nil)
             }
         }
 
-        for (id, activity) in activities where !runningIds.contains(id) {
-            // Why it ended: the session's new state, or gone from the list.
-            let reason = sessions.first { $0.id == id }?.state.rawValue ?? "removed"
-            end(id, activity: activity, reason: reason)
+        let enabled = ActivityAuthorizationInfo().areActivitiesEnabled
+        for session in live {
+            let state = contentState(session, line: activity[session.id])
+            if let existing = activities[session.id] {
+                update(existing, sessionId: session.id, state: state)
+            } else if enabled, session.state == .running {
+                // Only a run seen working starts one; an old chat that has been
+                // waiting for days shouldn't pop onto the Lock Screen.
+                start(session, state: state)
+            }
         }
     }
 
-    /// Push a single fresh agent line into a running activity.
+    /// Push a single fresh agent line into a live activity.
     func updateLine(sessionId: String, text: String, sessions: [Session]) {
         guard let activity = activities[sessionId],
               let session = sessions.first(where: { $0.id == sessionId }) else { return }
-        let state = contentState(session, line: text)
-        Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
+        update(activity, sessionId: sessionId, state: contentState(session, line: text))
+    }
+
+    private func update(_ activity: Activity<ChatActivityAttributes>, sessionId: String, state: ChatActivityAttributes.ContentState) {
+        // Re-send unchanged content only to push the stale date forward. Compared
+        // with what the activity shows now, which includes the daemon's pushes.
+        if activity.content.state == state,
+           let stale = activity.content.staleDate,
+           stale.timeIntervalSinceNow > Self.staleAfter / 2 { return }
+        let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter))
+        Task { await activity.update(content) }
     }
 
     private func contentState(_ session: Session, line: String?) -> ChatActivityAttributes.ContentState {
@@ -91,7 +118,7 @@ final class LiveActivityManager {
         do {
             let activity = try Activity.request(
                 attributes: attributes,
-                content: ActivityContent(state: state, staleDate: nil),
+                content: ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter)),
                 pushType: .token
             )
             activities[session.id] = activity
@@ -115,11 +142,18 @@ final class LiveActivityManager {
         }
     }
 
-    private func end(_ id: String, activity: Activity<ChatActivityAttributes>, reason: String) {
+    /// End an activity. With `final` (a run that settled: done / failed /
+    /// cancelled) its last state stays on the Lock Screen for a while so you see
+    /// how it ended; without (sign-out, deleted session) it goes at once.
+    private func end(_ id: String, activity: Activity<ChatActivityAttributes>, reason: String, final: ChatActivityAttributes.ContentState?) {
         Telemetry.signal(.liveActivityEnded, ["reason": reason])
         activities[id] = nil
         tokenTasks[id]?.cancel()
         tokenTasks[id] = nil
-        Task { await activity.end(nil, dismissalPolicy: .immediate) }
+        let content = final.map { ActivityContent(state: $0, staleDate: nil) }
+        let policy: ActivityUIDismissalPolicy = final == nil
+            ? .immediate
+            : .after(Date().addingTimeInterval(Self.settledDismissAfter))
+        Task { await activity.end(content, dismissalPolicy: policy) }
     }
 }

@@ -10,7 +10,7 @@ import ActivityKit
 struct ChatLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: ChatActivityAttributes.self) { context in
-            RunActivityLockScreen(attributes: context.attributes, state: context.state)
+            RunActivityLockScreen(attributes: context.attributes, state: context.state, isStale: context.isStale)
                 .activityBackgroundTint(Theme.bg)
                 .activitySystemActionForegroundColor(Theme.accent)
         } dynamicIsland: { context in
@@ -21,7 +21,7 @@ struct ChatLiveActivity: Widget {
                         .padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    if let started = context.attributes.startedAt {
+                    if let started = context.attributes.startedAt, tone.isLive {
                         ElapsedText(since: started)
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(tone.color)
@@ -41,7 +41,7 @@ struct ChatLiveActivity: Widget {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(RunActivityLockScreen.liveText(context.state))
+                    Text(RunActivityLockScreen.liveText(context.state, isStale: context.isStale))
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -81,9 +81,13 @@ struct ChatLiveActivity: Widget {
 struct RunActivityLockScreen: View {
     let attributes: ChatActivityAttributes
     let state: ChatActivityAttributes.ContentState
+    /// Past its stale date: neither the app nor the daemon has updated it lately,
+    /// so the line may be out of date (e.g. the phone was offline).
+    var isStale = false
 
-    static func liveText(_ state: ChatActivityAttributes.ContentState) -> String {
-        state.activityText.isEmpty ? state.statusLabel : state.activityText
+    static func liveText(_ state: ChatActivityAttributes.ContentState, isStale: Bool = false) -> String {
+        let text = state.activityText.isEmpty ? state.statusLabel : state.activityText
+        return isStale ? "Not updated lately · \(text)" : text
     }
 
     /// "Working on your Mac" / "Needs you · in the cloud".
@@ -112,13 +116,13 @@ struct RunActivityLockScreen: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if let started = attributes.startedAt {
+                if let started = attributes.startedAt, tone.isLive {
                     ElapsedText(since: started)
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(tone.color)
                 }
             }
-            Text(Self.liveText(state))
+            Text(Self.liveText(state, isStale: isStale))
                 .font(.footnote.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

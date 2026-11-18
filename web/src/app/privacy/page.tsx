@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import { LegalPage } from "../legal/legal";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/privacy",
   title: "Privacy Policy",
-  description: "How Celiador handles your data.",
-};
+  description:
+    "How Celiador handles your data.",
+});
 
 export default function PrivacyPage() {
   return (

@@ -1,0 +1,82 @@
+name: iOS CI
+
+# Compiles the iPhone app (ios/) on pull requests and on pushes to branches
+# other than main that touch it: XcodeGen generates the project and xcodebuild
+# builds the app and its widgets for the simulator, unsigned. No secrets, no
+# signing, no upload: that is ios.yml, on main and release tags. When the app
+# gets a test target (#101), add an `xcodebuild test` step here.
+
+on:
+  pull_request:
+    paths:
+      - ios/**
+      - .github/workflows/ios-ci.yml
+  push:
+    branches-ignore: [main]
+    paths:
+      - ios/**
+      - .github/workflows/ios-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to the same PR or branch supersedes the running check.
+  group: ios-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The Xcode ios.yml archives with, so a green check means the same compiler.
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+defaults:
+  run:
+    working-directory: ios
+
+jobs:
+  build:
+    name: xcodegen + unsigned simulator build
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          set -euo pipefail
+          # The bottle download is occasionally reset mid-way; try a few times.
+          for attempt in 1 2 3 4; do
+            brew install xcodegen && break
+            [[ $attempt -lt 4 ]] || { echo "::error::brew install xcodegen failed $attempt times"; exit 1; }
+            echo "brew install xcodegen failed (attempt $attempt), retrying in 15s"; sleep 15
+          done
+          xcodegen --version
+
+      - name: Generate the project
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          # Pin the Swift packages to the committed resolution, as ios.yml does.
+          mkdir -p Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+          cp Package.resolved Celiador.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          xcodebuild -version
+
+      - name: Build (Release, simulator, unsigned)
+        # The Release configuration is what the App Store build compiles; the
+        # Dev and Test channels differ only in their xcconfig values.
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project Celiador.xcodeproj \
+            -scheme Celiador \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CELIADOR_COMMIT="${GITHUB_SHA::7}" \
+            | xcbeautify --renderer github-actions

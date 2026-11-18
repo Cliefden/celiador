@@ -1,11 +1,14 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import { Container, Eyebrow } from "@/components/ui";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/changelog",
   title: "Changelog",
-  description: "What's new in Celiador.",
-};
+  description:
+    "What's new in Celiador.",
+});
 
 // One entry per thing worth knowing about, newest first. Pricing and plan
 // changes always get an entry here, dated, before they take effect (/conduct).
