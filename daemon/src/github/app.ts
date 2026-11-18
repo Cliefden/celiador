@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import type { AppEnv } from "../auth";
+import { safeEqual } from "../auth";
 import { ROOT } from "../config";
 import type { TaskRepo } from "../tasks/store";
 import { appMayActFor } from "./access";
@@ -241,6 +243,17 @@ function newState(): string {
   return state;
 }
 
+/** Whether `state` was handed out by `POST /new` and hasn't expired. */
+function liveState(state: string): boolean {
+  const exp = pendingStates.get(state);
+  if (exp === undefined) return false;
+  if (exp < Date.now()) {
+    pendingStates.delete(state);
+    return false;
+  }
+  return true;
+}
+
 /** The app as GitHub's manifest flow wants it. Exported for the smoke test. */
 export function appManifest(): Record<string, unknown> {
   return {
@@ -271,18 +284,50 @@ export function page(title: string, body: string, head = ""): string {
 }
 
 /**
- * `/api/github/app/*` — the manifest flow. Unauthenticated on purpose: it only
- * works for someone who can create apps in the org (GitHub enforces that), the
- * manifest carries no secret, and the redirect is bound to a one-time state.
+ * The operator's setup token (CELIADOR_GITHUB_SETUP_TOKEN, at least 16
+ * characters), or null. Without it the setup routes don't exist (404): an
+ * environment only offers the manifest flow while its operator has turned it on.
+ */
+function setupToken(): string | null {
+  const t = process.env.CELIADOR_GITHUB_SETUP_TOKEN?.trim();
+  return t && t.length >= 16 ? t : null;
+}
+
+function alreadySetUp(c: Context, existing: GitHubAppCredentials) {
+  return c.html(page("Celiador GitHub App", `<h1>Already set up</h1><p>The app <a href="${escapeHtml(existing.htmlUrl)}">${escapeHtml(existing.name)}</a> is registered. Install it on more repositories from <a href="${escapeHtml(existing.htmlUrl)}/installations/new">its install page</a>. To replace it, remove <code>data/github-app.json</code> on the daemon first.</p>`), 409);
+}
+
+/**
+ * `/api/github/app/*` — the manifest flow, for the environment's operator only.
+ *
+ * Celiador edit (setup gating): the routes answer 404 unless
+ * CELIADOR_GITHUB_SETUP_TOKEN is set; `GET /new` asks for that token and only
+ * `POST /new` with it hands out a one-time state, which `/setup` requires. Both
+ * refuse (409) once an app is stored, so a configured environment's app can't
+ * be replaced through them. Unset the token again after setup.
  */
 export function githubAppRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
+  app.use("*", async (c, next) => {
+    if (!setupToken()) return c.json({ error: "Unknown endpoint" }, 404);
+    await next();
+  });
+
   app.get("/new", (c) => {
     const existing = githubApp();
-    if (existing) {
-      return c.html(page("Celiador GitHub App", `<h1>Already set up</h1><p>The app <a href="${escapeHtml(existing.htmlUrl)}">${escapeHtml(existing.name)}</a> is registered. Install it on more repositories from <a href="${escapeHtml(existing.htmlUrl)}/installations/new">its install page</a>.</p>`));
+    if (existing) return alreadySetUp(c, existing);
+    return c.html(page("Create the Celiador GitHub App", `<h1>Create the Celiador GitHub App</h1><p>Enter this environment's setup token (<code>CELIADOR_GITHUB_SETUP_TOKEN</code> in the daemon's env).</p><form method="post" action=""><p><input type="password" name="token" autocomplete="off" required style="font:inherit;padding:10px;border-radius:8px;border:1px solid #333;width:100%;box-sizing:border-box"></p><button type="submit">Continue</button></form>`));
+  });
+
+  app.post("/new", async (c) => {
+    const form = await c.req.parseBody().catch(() => ({} as Record<string, unknown>));
+    const given = typeof form.token === "string" ? form.token.trim() : "";
+    if (!safeEqual(given, setupToken())) {
+      return c.html(page("Celiador GitHub App", `<h1>Wrong setup token</h1><p>Go back and try again.</p>`), 403);
     }
+    const existing = githubApp();
+    if (existing) return alreadySetUp(c, existing);
     const state = newState();
     const action = `https://github.com/organizations/${encodeURIComponent(ORG)}/settings/apps/new?state=${state}`;
     const manifest = escapeHtml(JSON.stringify(appManifest()));
@@ -290,9 +335,11 @@ export function githubAppRoutes(): Hono<AppEnv> {
   });
 
   app.get("/setup", async (c) => {
+    const existing = githubApp();
+    if (existing) return alreadySetUp(c, existing);
     const code = c.req.query("code");
     const state = c.req.query("state");
-    if (!code || !state || !pendingStates.has(state)) {
+    if (!code || !state || !liveState(state)) {
       return c.html(page("Celiador GitHub App", `<h1>That link has expired</h1><p>Start again from <a href="${escapeHtml(PUBLIC_URL)}/api/github/app/new">the setup page</a>.</p>`), 400);
     }
     pendingStates.delete(state);
@@ -315,7 +362,11 @@ export function githubAppRoutes(): Hono<AppEnv> {
       clientSecret: String(json.client_secret ?? ""),
       createdAt: new Date().toISOString(),
     };
+    // Another setup may have finished while this one waited on GitHub: the first one stays.
+    const raced = githubApp();
+    if (raced) return alreadySetUp(c, raced);
     saveApp(created);
+    pendingStates.clear();
     return c.html(page("Celiador GitHub App", `<h1>Done</h1><p>The app <a href="${escapeHtml(created.htmlUrl)}">${escapeHtml(created.name)}</a> is registered and its credentials are stored on the daemon.</p><p>Last step: <a href="${escapeHtml(created.htmlUrl)}/installations/new">install it on the organization</a> and pick the repositories agents may work on. From then on the app's webhook feeds the queue, the daemon comments on issues as ${escapeHtml(created.name)}, and cloud runs can clone private repositories. The per-repository webhooks can be removed.</p>`));
   });
 

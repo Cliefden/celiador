@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import { Button, Container, Eyebrow, SectionHeading } from "@/components/ui";
 import { EditorMock } from "@/components/EditorMock";
 import { IssueMock, LoopMock, PhoneMock } from "@/components/LoopMock";
 import { iconMap, CheckIcon } from "@/components/icons";
 import { features } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/features",
   title: "Features",
   description:
     "Issue in, pull request out: the loop, the three runners (Celiador editor, VS Code or Cursor with Celiador Remote, the cloud), review from your phone, and what is still being built.",
-};
+});
 
 // Each deep dive says what works today and marks what is in progress with a
 // "coming" tag. Do not move an item out of `coming` until it is live.
@@ -105,7 +107,7 @@ export default function FeaturesPage() {
                   <div className="grid h-11 w-11 place-items-center rounded-xl border border-line bg-brand/10 text-brand">
                     {Icon ? <Icon className="h-5 w-5" /> : null}
                   </div>
-                  <h3 className="mt-5 text-lg font-semibold tracking-tight">{f.title}</h3>
+                  <h2 className="mt-5 text-lg font-semibold tracking-tight">{f.title}</h2>
                   <p className="mt-2 text-sm leading-relaxed text-fog">{f.body}</p>
                   {f.coming && (
                     <p className="mt-3 text-xs leading-relaxed text-fog-dim">

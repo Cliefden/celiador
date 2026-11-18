@@ -1,0 +1,61 @@
+name: Web CI
+
+# Checks the marketing site (web/) on pull requests and on pushes to branches
+# other than main that touch it: install from the lockfile, lint, typecheck and
+# a production build. Deploys (web-deploy.yml) build again on their own; this
+# catches a broken site before it is merged.
+
+on:
+  pull_request:
+    paths:
+      - web/**
+      - .github/workflows/web-ci.yml
+  push:
+    branches-ignore: [main]
+    paths:
+      - web/**
+      - .github/workflows/web-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to the same PR or branch supersedes the running check.
+  group: web-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  check:
+    name: lint + typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # The version web-deploy.yml builds with.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      # `lint` arrives with #108; skip quietly until the script exists.
+      - run: npm run --if-present lint
+
+      - run: npx tsc --noEmit
+
+      - name: Build
+        # As a dev deploy builds it; the releases API is read at build time for
+        # the download page and the build falls back when it is unreachable.
+        env:
+          CELIADOR_RELEASES_API: https://dev.celiador.ai/api/releases
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run build

@@ -110,6 +110,8 @@ jobs:
   ci:
     needs: plan
     uses: ./.github/workflows/ci.yml
+    with:
+      called: true # never cancelled by another run's CI (ci.yml § concurrency)
 
   deploy:
     needs: [plan, ci]

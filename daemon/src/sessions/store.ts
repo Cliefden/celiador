@@ -6,6 +6,25 @@ import type { Session, SessionEvent, SessionEventInput, SessionOrigin, SessionRe
 
 /** Max events retained per session (older ones fall out of the ring). */
 const RING = 2000;
+/**
+ * Byte budgets for the event logs (JSON size): per session ring, and across all
+ * of one user's sessions — every log of a user is held in memory once loaded.
+ * Over budget, the oldest events fall out (replay reports `truncatedFrom`); the
+ * user-wide budget trims the least recently updated sessions first.
+ */
+export const SESSION_LOG_BYTES = Number(process.env.CELIADOR_SESSION_LOG_BYTES || 8 * 1024 * 1024);
+export const USER_LOG_BYTES = Number(process.env.CELIADOR_USER_LOG_BYTES || 64 * 1024 * 1024);
+
+/** Serialized size of an event, cached per object (events are immutable once stored). */
+const eventSizes = new WeakMap<SessionEvent, number>();
+function sizeOf(event: SessionEvent): number {
+  let n = eventSizes.get(event);
+  if (n === undefined) {
+    n = Buffer.byteLength(JSON.stringify(event), "utf8");
+    eventSizes.set(event, n);
+  }
+  return n;
+}
 /** Sessions older than this (by updatedAt) are reaped on load. */
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** Errored/cancelled runs are debris, not history — they get a much shorter TTL. */
@@ -18,6 +37,11 @@ const SAVE_DEBOUNCE_MS = 250;
 const LOG_DEBOUNCE_MS = 1000;
 /** Session ids are daemon-issued UUIDs; anything else never touches the disk. */
 const SAFE_ID = /^[A-Za-z0-9-]{1,64}$/;
+
+/** Whether `id` has the shape of a session id (the routes refuse anything else before any lookup). */
+export function isSessionId(id: unknown): id is string {
+  return typeof id === "string" && SAFE_ID.test(id);
+}
 
 interface MetaFile {
   sessions: Session[];
@@ -38,20 +62,35 @@ interface LogFile {
 export class SessionStore {
   private sessions: Session[] = [];
   private logs = new Map<string, SessionEvent[]>();
+  /** Bytes per session log, and their sum (see SESSION_LOG_BYTES / USER_LOG_BYTES). */
+  private logBytes = new Map<string, number>();
+  private totalLogBytes = 0;
   private dirtyLogs = new Set<string>();
   private metaTimer: NodeJS.Timeout | null = null;
   private logTimer: NodeJS.Timeout | null = null;
 
-  constructor(private userId: string, private metaFile: string, private logDir: string) {
+  constructor(
+    private userId: string,
+    private metaFile: string,
+    private logDir: string,
+    private budget: { session: number; user: number } = { session: SESSION_LOG_BYTES, user: USER_LOG_BYTES }
+  ) {
     this.sessions = readJson<MetaFile>(metaFile)?.sessions ?? [];
     const legacy = `${logDir}.json`;
     const legacyLogs = readJson<LogFile>(legacy)?.logs;
     for (const s of this.sessions) {
       const events = legacyLogs?.[s.id] ?? readJson<SessionEvent[]>(this.logPath(s.id));
-      if (Array.isArray(events)) this.logs.set(s.id, events);
+      if (Array.isArray(events)) {
+        this.logs.set(s.id, events);
+        this.measure(s.id);
+        // Logs written before the byte budget can be over it.
+        if (this.trimSession(s.id)) this.dirtyLogs.add(s.id);
+      }
       if (legacyLogs) this.dirtyLogs.add(s.id);
     }
     this.reap();
+    this.trimUser(undefined);
+    if (this.dirtyLogs.size > 0) this.scheduleLogSave();
     if (legacyLogs) {
       this.saveLogNow();
       fs.rmSync(legacy, { force: true });
@@ -92,6 +131,7 @@ export class SessionStore {
     };
     this.sessions.push(session);
     this.logs.set(session.id, []);
+    this.logBytes.set(session.id, 0);
     this.reap();
     this.saveMetaNow();
     return session;
@@ -100,8 +140,7 @@ export class SessionStore {
   delete(id: string): boolean {
     const before = this.sessions.length;
     this.sessions = this.sessions.filter((s) => s.id !== id);
-    this.logs.delete(id);
-    this.dirtyLogs.delete(id);
+    this.forgetLog(id);
     if (this.sessions.length === before) return false;
     this.saveMetaNow();
     if (SAFE_ID.test(id)) fs.rmSync(this.logPath(id), { force: true });
@@ -117,8 +156,15 @@ export class SessionStore {
 
     const ring = this.logs.get(id) ?? [];
     ring.push(event);
-    while (ring.length > RING) compactOldest(ring);
     this.logs.set(id, ring);
+    if (ring.length > RING) {
+      while (ring.length > RING) compactOldest(ring);
+      this.measure(id); // compaction merged events: recount
+    } else {
+      this.addBytes(id, sizeOf(event));
+    }
+    this.trimSession(id);
+    this.trimUser(id);
     this.dirtyLogs.add(id);
 
     session.updatedAt = event.at;
@@ -213,12 +259,74 @@ export class SessionStore {
       this.sessions = fresh;
       for (const id of [...this.logs.keys()]) {
         if (keep.has(id)) continue;
-        this.logs.delete(id);
-        this.dirtyLogs.delete(id);
+        this.forgetLog(id);
         if (SAFE_ID.test(id)) fs.rmSync(this.logPath(id), { force: true });
       }
       this.saveMetaNow();
     }
+  }
+
+  // ---- Log byte accounting ---------------------------------------------------
+
+  private addBytes(id: string, delta: number): void {
+    this.logBytes.set(id, (this.logBytes.get(id) ?? 0) + delta);
+    this.totalLogBytes += delta;
+  }
+
+  /** Recount one session's log from scratch (load, compaction). */
+  private measure(id: string): void {
+    const ring = this.logs.get(id) ?? [];
+    let n = 0;
+    for (const e of ring) n += sizeOf(e);
+    this.addBytes(id, n - (this.logBytes.get(id) ?? 0));
+  }
+
+  private forgetLog(id: string): void {
+    this.totalLogBytes -= this.logBytes.get(id) ?? 0;
+    this.logBytes.delete(id);
+    this.logs.delete(id);
+    this.dirtyLogs.delete(id);
+  }
+
+  /** Drop a session's oldest events until it fits `budget` (keeps at least one). Returns whether it changed. */
+  private dropOldest(id: string, budget: number, keepOne: boolean): boolean {
+    const ring = this.logs.get(id);
+    if (!ring) return false;
+    let changed = false;
+    while ((this.logBytes.get(id) ?? 0) > budget && ring.length > (keepOne ? 1 : 0)) {
+      this.addBytes(id, -sizeOf(ring.shift()!));
+      changed = true;
+    }
+    if (changed) this.dirtyLogs.add(id);
+    return changed;
+  }
+
+  private trimSession(id: string): boolean {
+    return this.dropOldest(id, this.budget.session, true);
+  }
+
+  /**
+   * Bring the user's logs under USER_LOG_BYTES, trimming the least recently
+   * updated sessions first; `active` (the session just written) goes last.
+   */
+  private trimUser(active: string | undefined): void {
+    if (this.totalLogBytes <= this.budget.user) return;
+    const order = [...this.sessions]
+      .filter((s) => s.id !== active)
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      .map((s) => s.id);
+    if (active) order.push(active);
+    for (const id of order) {
+      const over = this.totalLogBytes - this.budget.user;
+      if (over <= 0) break;
+      const mine = this.logBytes.get(id) ?? 0;
+      this.dropOldest(id, Math.max(0, mine - over), id === active);
+    }
+  }
+
+  /** Bytes held by this user's logs (for tests/metrics). */
+  logSize(id?: string): number {
+    return id === undefined ? this.totalLogBytes : this.logBytes.get(id) ?? 0;
   }
 
   private scheduleMetaSave(): void {
@@ -329,6 +437,17 @@ export class SessionStores {
       this.stores.set(userId, store);
     }
     return store;
+  }
+
+  /** Write every pending (debounced) save now — on shutdown. */
+  flushAll(): void {
+    for (const store of this.stores.values()) {
+      try {
+        store.flush();
+      } catch (err) {
+        console.error("[sessions] flush failed:", err instanceof Error ? err.message : err);
+      }
+    }
   }
 
   /** Forget everything stored for a user (account deletion). */

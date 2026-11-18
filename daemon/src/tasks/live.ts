@@ -40,7 +40,13 @@ function publishNow(userId: string, taskId: string): void {
   const timer = pendingPublish.get(key);
   if (timer) clearTimeout(timer);
   pendingPublish.delete(key);
-  lastPublish.set(key, Date.now());
+  const now = Date.now();
+  // Past THROTTLE_MS an entry no longer throttles anything: drop those (once
+  // the map has grown), so every task ever published doesn't keep one.
+  if (lastPublish.size > 256) {
+    for (const [k, at] of lastPublish) if (now - at >= THROTTLE_MS) lastPublish.delete(k);
+  }
+  lastPublish.set(key, now);
   const task = taskStores.for(userId).get(taskId);
   if (task) publishTaskChange(userId, task);
 }

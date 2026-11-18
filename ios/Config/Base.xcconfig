@@ -11,3 +11,18 @@ CELIADOR_DAEMON_URL = https:/$()/celiador.ai
 // Short commit of the build; CI passes CELIADOR_COMMIT=<sha7> to xcodebuild
 // (ios.yml), a build from Xcode leaves it empty ("local build" in Settings).
 CELIADOR_COMMIT =
+
+// APNs environment this build's push tokens belong to — Info.plist
+// CELIADOR_APS_ENV, sent with every token so the daemon picks the APNs host.
+// It must match the aps-environment the INSTALLED app is signed with, which is
+// not always the entitlements file: every archive is exported with an App Store
+// profile (aps-environment production), so a TestFlight build of the Debug-based
+// Dev config still gets production tokens. Hence the ACTION switch: `xcodebuild
+// archive` builds with ACTION=install (`-showBuildSettings archive` reports
+// "archive") → production; a run from Xcode has ACTION=build → the config's own
+// entitlement. Any other action leaves it empty and Api.pushEnv falls back to
+// DEBUG → sandbox.
+APS_ENV = $(APS_ENV_$(ACTION))
+APS_ENV_install = production
+APS_ENV_archive = production
+APS_ENV_build = production
