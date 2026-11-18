@@ -1,5 +1,7 @@
 import UIKit
-import UserNotifications
+// UserNotifications predates Sendable: its delegate hands main-actor
+// implementations non-Sendable center/notification objects.
+@preconcurrency import UserNotifications
 
 /// Owns APNs registration and notification handling for the app. The daemon
 /// sends an alert when a session needs you (approval, question, error) or
@@ -71,8 +73,11 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - UNUserNotificationCenterDelegate
 
+    // The delegate methods are nonisolated (UserNotifications calls them off the
+    // main actor with non-Sendable objects); only the ids cross to the main actor.
+
     /// Show the banner even in the foreground; SSE keeps the list fresh anyway.
-    func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
@@ -80,12 +85,18 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// A tap on the notification opens the session it was about.
-    func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
-        if let taskId = info["taskId"] as? String, !taskId.isEmpty {
+        let taskId = info["taskId"] as? String
+        let sessionId = (info["sessionId"] ?? info["activityId"]) as? String
+        await handleTap(taskId: taskId, sessionId: sessionId)
+    }
+
+    private func handleTap(taskId: String?, sessionId: String?) {
+        if let taskId, !taskId.isEmpty {
             // A task push: its run screen on the Queue tab.
             if let model, case .signedIn = model.phase {
                 model.open(taskId: taskId)
@@ -95,7 +106,7 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
             return
         }
         // A session push: AppModel.open prefers the run screen when the session is a task's.
-        if let id = (info["sessionId"] ?? info["activityId"]) as? String {
+        if let id = sessionId {
             if let model, case .signedIn = model.phase {
                 Telemetry.signal(.notificationOpened, ["kind": "push", "appState": "running"])
                 model.open(sessionId: id)

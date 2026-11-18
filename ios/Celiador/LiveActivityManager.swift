@@ -1,5 +1,7 @@
 import Foundation
-import ActivityKit
+// `Activity` isn't Sendable; every one here is created, kept and ended on the
+// main actor (this class), the async update/end calls only hop off it.
+@preconcurrency import ActivityKit
 
 /// Starts a Live Activity when a session begins running, updates it as the agent
 /// streams progress, and ends it when the session settles. Each activity's push

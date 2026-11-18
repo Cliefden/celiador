@@ -8,7 +8,11 @@ struct CeliadorApp: App {
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Hosting the unit tests (CeliadorTests): don't boot, sign in or send telemetry.
+    static let isUnitTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     init() {
+        guard !Self.isUnitTesting else { return }
         Telemetry.configure()
         Telemetry.signal(.appLaunched, [
             "daysSinceInstall": Telemetry.daysSinceInstall,
@@ -117,7 +121,10 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(CeliadorBackground())
         .animation(Theme.gentle, value: phaseKey)
-        .task { await model.boot() }
+        .task {
+            guard !CeliadorApp.isUnitTesting else { return }
+            await model.boot()
+        }
     }
 
     @ViewBuilder

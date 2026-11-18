@@ -6,6 +6,8 @@ import UIKit
 // MARK: - Haptics
 
 /// Thin wrapper over UIKit feedback so call sites read intent, not boilerplate.
+/// Main-actor: the UIKit feedback generators are.
+@MainActor
 enum Haptics {
     static func tap() { impact(.light) }
     static func select() {
@@ -271,7 +273,9 @@ extension View {
 // MARK: - Relative time
 
 enum RelativeTime {
-    private static let parsers: [ISO8601DateFormatter] = {
+    /// ISO8601DateFormatter is documented thread-safe, and these are never
+    /// mutated after creation — safe to share across isolation domains.
+    nonisolated(unsafe) private static let parsers: [ISO8601DateFormatter] = {
         let withFraction = ISO8601DateFormatter()
         withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let plain = ISO8601DateFormatter()

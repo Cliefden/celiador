@@ -6,7 +6,10 @@ import WatchConnectivity
 /// watch app can call the daemon without its own sign-in. The iPhone pushes the
 /// current session as the WatchConnectivity application context; the watch imports it
 /// into `Api` and re-checks. Best-effort — if there's no watch / no session, it no-ops.
-final class WatchSync: NSObject, WCSessionDelegate {
+/// `@unchecked Sendable`: its only mutable state (`activated`,
+/// `onSessionImported`) is touched on the main actor; the WCSession delegate
+/// callbacks arrive on a background queue and hop there.
+final class WatchSync: NSObject, WCSessionDelegate, @unchecked Sendable {
     static let shared = WatchSync()
 
     /// Watch-side: invoked after a session is imported so the UI can refresh.
