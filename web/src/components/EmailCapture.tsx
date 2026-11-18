@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { CheckIcon } from "./icons";
 
 // The waitlist lives on the daemon (POST /api/waitlist, same origin as the site
@@ -38,6 +38,10 @@ export function EmailCapture({
   const [website, setWebsite] = useState(""); // honeypot: hidden from people, filled by naive bots
   const [state, setState] = useState<"idle" | "sending" | "done" | "fallback">("idle");
   const [error, setError] = useState("");
+  const id = useId();
+  const inputId = `${id}-email`;
+  const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -110,15 +114,21 @@ export function EmailCapture({
   return (
     <form onSubmit={submit} className={"w-full " + (compact ? "" : "mx-auto max-w-md")} noValidate>
       <div className="flex flex-col gap-2 sm:flex-row">
+        <label htmlFor={inputId} className="sr-only">
+          Email address
+        </label>
         <input
+          id={inputId}
           type="email"
           inputMode="email"
           autoComplete="email"
           placeholder="you@company.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm text-white outline-none transition placeholder:text-fog-dim focus:border-brand"
-          aria-label="Email address"
+          required
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${errorId} ${hintId}` : hintId}
+          className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm text-white outline-none transition placeholder:text-fog-dim focus:border-brand focus-visible:ring-2 focus-visible:ring-brand/60 aria-[invalid=true]:border-[#ff6b6b]"
         />
         {/* Honeypot. Off-screen rather than display:none so simple bots still see it. */}
         <input
@@ -134,13 +144,16 @@ export function EmailCapture({
         <button
           type="submit"
           disabled={state === "sending"}
-          className="shrink-0 rounded-xl bg-brand px-5 py-3 text-sm font-medium text-white transition hover:brightness-110 disabled:opacity-60"
+          className="shrink-0 rounded-xl bg-brand-fill px-5 py-3 text-sm font-medium text-white transition hover:brightness-110 disabled:opacity-60"
         >
           {state === "sending" ? "Sending…" : cta}
         </button>
       </div>
-      {error && <p className="mt-2 text-xs text-[#ff6b6b]">{error}</p>}
-      <p className="mt-2 text-xs text-fog-dim">
+      {/* Always rendered so screen readers announce the message when it appears. */}
+      <p id={errorId} role="alert" className={error ? "mt-2 text-xs text-[#ff6b6b]" : "sr-only"}>
+        {error}
+      </p>
+      <p id={hintId} className="mt-2 text-xs text-fog-dim">
         {hint} We&apos;ll email you a link to confirm. We keep only your address and which list you
         joined; every email has an unsubscribe link.{" "}
         <Link href="/privacy#waitlist" className="underline hover:text-white">

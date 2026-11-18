@@ -194,7 +194,7 @@ export default function HomePage() {
                 }
               >
                 {t.featured && (
-                  <span className="absolute right-6 top-6 rounded-full bg-brand px-2.5 py-1 text-xs font-medium text-white">
+                  <span className="absolute right-6 top-6 rounded-full bg-brand-fill px-2.5 py-1 text-xs font-medium text-white">
                     Popular
                   </span>
                 )}
