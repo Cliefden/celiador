@@ -1,12 +1,15 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { ContactForm } from "@/components/ContactForm";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/contact",
   title: "Contact",
-  description: "Talk to the Celiador team about teams, security, or partnerships.",
-};
+  description:
+    "Talk to the Celiador team about teams, security, or partnerships.",
+});
 
 export default function ContactPage() {
   return (

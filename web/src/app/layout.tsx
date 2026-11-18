@@ -35,10 +35,13 @@ export const metadata: Metadata = {
     "VS Code fork",
     "Cursor alternative",
   ],
+  // The homepage's card. Every other page overrides openGraph/twitter (and
+  // sets its canonical) through pageMetadata() in src/lib/metadata.ts; the
+  // image is app/opengraph-image.tsx.
   openGraph: {
     title: `${site.name} — ${site.tagline}`,
     description: site.description,
-    url: site.url,
+    url: "/",
     siteName: site.name,
     type: "website",
   },

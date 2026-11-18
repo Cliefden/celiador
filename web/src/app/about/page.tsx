@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import { Button, Container, Eyebrow } from "@/components/ui";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/about",
   title: "About",
-  description: "Why we're building Celiador: work should start as a GitHub issue and end as a pull request you review from wherever you are.",
-};
+  description:
+    "Why we're building Celiador: work should start as a GitHub issue and end as a pull request you review from wherever you are.",
+});
 
 const values = [
   {

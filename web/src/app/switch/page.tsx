@@ -1,13 +1,15 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { site } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/switch",
   title: "Coming from Cursor or VS Code",
   description:
     "Keep Cursor or VS Code and add the Celiador Remote extension to get the loop: label a GitHub issue, an agent runs it in a worktree on your Mac, review and merge from your phone. Or move to the Celiador editor and bring your settings.",
-};
+});
 
 // The page for people coming from Cursor or VS Code. Rules: say what carries
 // over and what doesn't, state Celiador's own commitments with links to where

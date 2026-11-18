@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import { Container, Eyebrow } from "@/components/ui";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/conduct",
   title: "Our Conduct Pledge",
   description:
     "How Celiador promises to treat customers: clear pricing, honest limits, and changes you hear about before they bite.",
-};
+});
 
 // Not a legal document — a public commitment on how we treat customers. The
 // developer tools our competitors burned their users with were not technical
