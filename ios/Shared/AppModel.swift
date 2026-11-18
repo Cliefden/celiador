@@ -97,9 +97,9 @@ final class AppModel {
             return
         }
         #endif
-        #if os(iOS)
-        WatchSync.shared.start() // hand the session to a paired watch
-        #endif
+        // No WatchSync here: the watch app isn't shipping (project.yml), and
+        // syncing would hand refresh tokens to a watch for nothing. Re-enable
+        // `WatchSync.shared.start()` (+ `pushSession()` in didSignIn) with it.
         // The refresh token was revoked/reused/deleted server-side: every call
         // would fail from here on, so drop to the sign-in screen.
         Api.shared.onSessionRevoked = { [weak self] in
@@ -166,9 +166,6 @@ final class AppModel {
 
     func didSignIn() {
         email = Api.shared.session?.email
-        #if os(iOS)
-        WatchSync.shared.pushSession() // sync the new session to a paired watch
-        #endif
         phase = .signedIn
         #if os(iOS)
         Telemetry.onboarding(.signedIn)
