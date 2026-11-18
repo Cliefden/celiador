@@ -1143,6 +1143,60 @@ async function main(): Promise<void> {
 	// account deletion / boot sweep, not in executeServerRun's finally.
 	ok("workspace retained after run", fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-1")));
 
+	// ── Phone file browser on a cloud workspace: symlinks never lead out of it (#83) ──
+	console.log("\n== workspace files ==");
+	{
+		const { sessionStores } = await import("../src/sessions/instance.ts");
+		const { workspaceDir } = await import("../src/runner/workspace.ts");
+		const fsess = sessionStores.for("smoke-user").create({ origin: "phone", runner: "server", title: "files" });
+		const ws = workspaceDir("smoke-user", fsess.id);
+		const outside = path.join(HOME, "outside");
+		fs.mkdirSync(outside, { recursive: true });
+		const secret = path.join(outside, "host.env");
+		fs.writeFileSync(secret, "SECRET=hunter2\n");
+		fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+		fs.writeFileSync(path.join(ws, "a.txt"), "hello\n");
+		fs.symlinkSync("a.txt", path.join(ws, "alias"));            // inside → listed, readable
+		fs.symlinkSync("src", path.join(ws, "srclink"));            // inside dir → listed as dir
+		fs.symlinkSync(secret, path.join(ws, "leak"));              // absolute, out
+		fs.symlinkSync("../../../../../outside/host.env", path.join(ws, "leakrel")); // relative, out
+		fs.symlinkSync(outside, path.join(ws, "leakdir"));          // a directory out
+		fs.symlinkSync(path.join(outside, "made-by-write.txt"), path.join(ws, "dangling")); // dangling, out
+		await run("mkfifo", [path.join(ws, "pipe")]);
+		const F = `http://localhost/api/sessions/${fsess.id}`;
+		const list = await app.request(`${F}/files?path=`, { headers: authH });
+		const names = (((await list.json()) as { entries?: Array<{ name: string; type: string }> }).entries ?? []).map((e) => `${e.name}:${e.type}`);
+		ok("list: in-root symlinks shown as their target's type", names.includes("alias:file") && names.includes("srclink:dir") && names.includes("a.txt:file"), names.join(","));
+		ok("list: symlinks pointing out (file, dir, dangling) and the FIFO are left out", !names.some((n) => /^(leak|leakrel|leakdir|dangling|pipe):/.test(n)), names.join(","));
+		ok("list through a symlinked dir that points out → 400", (await app.request(`${F}/files?path=leakdir`, { headers: authH })).status === 400);
+		const readAlias = await app.request(`${F}/file?path=alias`, { headers: authH });
+		ok("read through an in-root symlink → 200", readAlias.status === 200 && ((await readAlias.json()) as { content?: string }).content === "hello\n");
+		const reads = await Promise.all(["leak", "leakrel", "leakdir/host.env"].map(async (p) => {
+			const r = await app.request(`${F}/file?path=${encodeURIComponent(p)}`, { headers: authH });
+			const t = await r.text();
+			return { p, status: r.status, leaked: t.includes("hunter2") };
+		}));
+		ok("read through symlinks pointing out → 400, nothing leaked", reads.every((r) => r.status === 400 && !r.leaked), JSON.stringify(reads));
+		const pipeRead = await Promise.race([
+			app.request(`${F}/file?path=pipe`, { headers: authH }).then((r) => r.status),
+			new Promise<number>((r) => setTimeout(() => r(-1), 3000)),
+		]);
+		ok("read a FIFO → refused without blocking", pipeRead === 400, `got ${pipeRead}`);
+		const put = (p: string, content = "PWNED") => app.request(`${F}/file`, { method: "PUT", headers: authH, body: JSON.stringify({ path: p, content }) });
+		const writes = await Promise.all(["leak", "leakrel", "leakdir/host.env", "leakdir/new.txt", "leakdir/deep/new.txt", "dangling"].map(async (p) => ({ p, status: (await put(p)).status })));
+		ok("write through symlinks pointing out → 400", writes.every((w) => w.status === 400), JSON.stringify(writes));
+		ok("…the host file is unchanged and nothing was created outside", fs.readFileSync(secret, "utf8") === "SECRET=hunter2\n" && !fs.existsSync(path.join(outside, "new.txt")) && !fs.existsSync(path.join(outside, "deep")) && !fs.existsSync(path.join(outside, "made-by-write.txt")));
+		ok("write onto an in-root symlink → refused (never written through)", (await put("alias")).status === 400 && fs.readFileSync(path.join(ws, "a.txt"), "utf8") === "hello\n");
+		const okWrite = await put("src/new/dir/n.txt", "fine\n");
+		ok("a plain write (new parent dirs) → 200", okWrite.status === 200 && fs.readFileSync(path.join(ws, "src/new/dir/n.txt"), "utf8") === "fine\n");
+		const overWrite = await put("a.txt", "hi");
+		ok("overwrite a file with shorter content → 200, truncated", overWrite.status === 200 && fs.readFileSync(path.join(ws, "a.txt"), "utf8") === "hi");
+		ok("lexical escapes still → 400", (await put("../../escape.txt")).status === 400 && (await app.request(`${F}/file?path=${encodeURIComponent("/etc/hosts")}`, { headers: authH })).status === 400);
+		sessionStores.for("smoke-user").delete(fsess.id);
+		fs.rmSync(path.dirname(ws), { recursive: true, force: true });
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
+
 	// ── Cost per run: gateway usage → session → task → /api/me ───────────────
 	console.log("\n== cost ==");
 	const { parseSelfReview, extractPlan, composePrBody, formatUsage } = await import("../src/tasks/prBody.ts");

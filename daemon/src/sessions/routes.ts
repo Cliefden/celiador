@@ -13,7 +13,7 @@ import { cloudBranches, cloudGit, cloudRepos, cloudSessionFollowUp, removeCloudS
 import { taskStores } from "../tasks/dispatch";
 import { publishTaskChange } from "../tasks/events";
 import { workspaceDir } from "../runner/workspace";
-import { listDir, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
+import { listDir, OutsideRootError, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
 import type { FsCommand, FsResult, FsResultInput, GitCommand, Session, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
 
 /** How often to send an SSE heartbeat so proxies/clients keep the stream open. */
@@ -394,11 +394,13 @@ export function sessionRoutes(): Hono<AppEnv> {
     if (!session) return c.json({ error: "not found" }, 404);
     const rel = c.req.query("path") ?? "";
     if (session.runner === "server") {
-      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      const root = workspaceDir(userId, session.id);
+      const abs = resolveInside(root, rel);
       if (!abs) return c.json({ error: "bad path" }, 400);
       try {
-        return c.json({ entries: await listDir(abs) });
-      } catch {
+        return c.json({ entries: await listDir(abs, root) });
+      } catch (err) {
+        if (err instanceof OutsideRootError) return c.json({ error: "bad path" }, 400);
         return c.json({ error: "not found" }, 404);
       }
     }
@@ -413,13 +415,15 @@ export function sessionRoutes(): Hono<AppEnv> {
     const rel = c.req.query("path") ?? "";
     if (!rel) return c.json({ error: "path is required" }, 400);
     if (session.runner === "server") {
-      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      const root = workspaceDir(userId, session.id);
+      const abs = resolveInside(root, rel);
       if (!abs) return c.json({ error: "bad path" }, 400);
       try {
-        const r = await readFileCapped(abs);
+        const r = await readFileCapped(abs, root);
         if (r.binary) return c.json({ error: "binary file" }, 415);
         return c.json({ path: rel, content: r.content, encoding: r.encoding, truncated: r.truncated });
-      } catch {
+      } catch (err) {
+        if (err instanceof OutsideRootError) return c.json({ error: "bad path" }, 400);
         return c.json({ error: "not found" }, 404);
       }
     }
@@ -436,13 +440,17 @@ export function sessionRoutes(): Hono<AppEnv> {
     if (typeof content !== "string") return c.json({ error: "content is required" }, 400);
     if (content.length > 2_000_000) return c.json({ error: "file too large" }, 413);
     if (session.runner === "server") {
-      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      const root = workspaceDir(userId, session.id);
+      const abs = resolveInside(root, rel);
       if (!abs) return c.json({ error: "bad path" }, 400);
       try {
-        await writeFileSafe(abs, content);
+        await writeFileSafe(abs, content, root);
         return c.json({ ok: true });
       } catch (err) {
-        return c.json({ error: err instanceof Error ? err.message : "write failed" }, 500);
+        if (err instanceof OutsideRootError) return c.json({ error: "bad path" }, 400);
+        // Host paths stay out of the reply.
+        console.error("[files] write failed:", err instanceof Error ? err.message : err);
+        return c.json({ error: "write failed" }, 500);
       }
     }
     if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);
