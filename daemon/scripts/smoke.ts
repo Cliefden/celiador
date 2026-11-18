@@ -671,10 +671,51 @@ async function main(): Promise<void> {
 	const mergedTask = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; state: string }> }).tasks.find((t) => t.id === tid);
 	ok("a pull_request merged on GitHub moves the task to merged", mergedRes.taskId === tid && mergedTask?.state === "merged", JSON.stringify(mergedRes));
 	ok("a closed-unmerged pull_request is ignored", /pull_request\/closed/.test(((await (await hook("pull_request", { ...prMerged, pull_request: { ...prMerged.pull_request, merged: false } }, "appsec")).json()) as { ignored?: string }).ignored ?? ""));
-	resetGitHubAppForTests();
-	const newPage = await app.request("http://localhost/api/github/app/new");
-	ok("setup page renders the manifest form when no app is stored", newPage.status === 200 && /organizations\/Cliefden\/settings\/apps\/new\?state=/.test(await newPage.text()));
-	ok("setup callback without a known state → 400", (await app.request("http://localhost/api/github/app/setup?code=x&state=unknown")).status === 400);
+	// Setup flow: off unless the operator's setup token is set; token-gated; refused once an app is stored.
+	{
+		const A = "http://localhost/api/github/app";
+		const SETUP = "smoke-setup-token-0123456789";
+		const form = (t: string) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: t }).toString() });
+		const stateOf = (html: string) => /settings\/apps\/new\?state=([0-9a-f]+)/.exec(html)?.[1];
+		resetGitHubAppForTests();
+		delete process.env.CELIADOR_GITHUB_SETUP_TOKEN;
+		const off = await Promise.all([app.request(`${A}/new`), app.request(`${A}/new`, form(SETUP)), app.request(`${A}/setup?code=x&state=y`)]);
+		ok("setup routes without CELIADOR_GITHUB_SETUP_TOKEN → 404", off.every((r) => r.status === 404), off.map((r) => r.status).join(","));
+		process.env.CELIADOR_GITHUB_SETUP_TOKEN = "short";
+		ok("…a too-short setup token counts as unset → 404", (await app.request(`${A}/new`)).status === 404);
+		process.env.CELIADOR_GITHUB_SETUP_TOKEN = SETUP;
+		const ask = await app.request(`${A}/new`);
+		const askHtml = await ask.text();
+		ok("GET /new asks for the setup token and hands out no state", ask.status === 200 && /name="token"/.test(askHtml) && !stateOf(askHtml));
+		const wrong = await app.request(`${A}/new`, form("not-the-token-at-all"));
+		ok("POST /new with a wrong token → 403, no state", wrong.status === 403 && !stateOf(await wrong.text()));
+		const right = await app.request(`${A}/new`, form(SETUP));
+		const state = stateOf(await right.text());
+		ok("POST /new with the token → the manifest form with a one-time state", right.status === 200 && !!state);
+		ok("setup callback without a known state → 400", (await app.request(`${A}/setup?code=x&state=unknown`)).status === 400);
+		// An app is stored: neither route can replace it, even with a live state and a valid code.
+		resetGitHubAppForTests(smokeApp);
+		const conversions: string[] = [];
+		const prevHandler = ghHandler;
+		ghHandler = (call) => { if (call.path.startsWith("/app-manifests/")) conversions.push(call.path); return prevHandler(call); };
+		const replace = await app.request(`${A}/setup?code=c0de&state=${state}`);
+		ok("…once an app is stored, /setup with a live state → 409 and GitHub isn't asked", replace.status === 409 && conversions.length === 0, `${replace.status} ${conversions.join(",")}`);
+		ok("…and POST /new with the token → 409, no new state", await (async () => { const r = await app.request(`${A}/new`, form(SETUP)); return r.status === 409 && !stateOf(await r.text()); })());
+		ok("…and GET /new → 409", (await app.request(`${A}/new`)).status === 409);
+		// No app yet, a live state: the conversion runs once and the result is stored; the state can't be replayed.
+		resetGitHubAppForTests();
+		ghHandler = (call) => call.method === "POST" && call.path === "/app-manifests/c0de/conversions"
+			? { status: 201, json: { id: 777, slug: "celiador-smoke-2", name: "Celiador", html_url: "https://github.com/apps/celiador-smoke-2", pem, webhook_secret: "w", client_id: "cid", client_secret: "cs" } }
+			: prevHandler(call);
+		const done = await app.request(`${A}/setup?code=c0de&state=${state}`);
+		const { githubApp } = await import("../src/github/app.ts");
+		ok("/setup with the token-issued state → app stored", done.status === 200 && githubApp()?.id === 777, `${done.status}`);
+		ok("…the state is single-use (a replay → 409 now that an app exists)", (await app.request(`${A}/setup?code=c0de&state=${state}`)).status === 409);
+		ghHandler = prevHandler;
+		fs.rmSync(path.join(HOME, "data", "github-app.json"), { force: true });
+		resetGitHubAppForTests();
+		delete process.env.CELIADOR_GITHUB_SETUP_TOKEN;
+	}
 	ok("manifest: checks + statuses read, check_suite + status events", manifest.default_permissions.checks === "read" && manifest.default_permissions.statuses === "read" && manifest.default_events.includes("check_suite") && manifest.default_events.includes("status"), JSON.stringify(manifest.default_permissions));
 	const m2 = manifest as unknown as { callback_urls?: string[]; request_oauth_on_install?: boolean };
 	ok("manifest: user-authorization callback on the public URL, asked at install", m2.callback_urls?.[0] === "https://smoke.test/api/github/callback" && m2.request_oauth_on_install === true, JSON.stringify(m2));
