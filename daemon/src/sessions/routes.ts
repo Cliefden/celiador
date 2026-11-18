@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
 import { sessionStores } from "./instance";
+import { isSessionId } from "./store";
 import { sessionBus } from "./bus";
 import { publishSessionEvent } from "./publish";
 import { cancelServerRun } from "../runner/manager";
@@ -12,7 +13,7 @@ import { cloudBranches, cloudGit, cloudRepos, cloudSessionFollowUp, removeCloudS
 import { taskStores } from "../tasks/dispatch";
 import { publishTaskChange } from "../tasks/events";
 import { workspaceDir } from "../runner/workspace";
-import { listDir, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
+import { listDir, OutsideRootError, readFileCapped, resolveInside, writeFileSafe } from "../files/local";
 import type { FsCommand, FsResult, FsResultInput, GitCommand, Session, SessionCommand, SessionEvent, SessionEventInput, SessionState } from "./types";
 
 /** How often to send an SSE heartbeat so proxies/clients keep the stream open. */
@@ -108,6 +109,16 @@ export function sessionRoutes(): Hono<AppEnv> {
 
   app.use("*", requireUser);
 
+  // Celiador edit (id validation): every `/:id` route — and the paths derived
+  // from it (event logs, run workspaces) — only ever sees a well-formed session
+  // id. Anything else is a 404 before any lookup or disk access.
+  const validId: MiddlewareHandler<AppEnv> = async (c, next) => {
+    if (!isSessionId(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    await next();
+  };
+  app.use("/:id", validId);
+  app.use("/:id/*", validId);
+
   /** Append, fan out to watchers, and push to APNs — all best-effort (shared with the server runner). */
   const publish = (userId: string, sessionId: string, input: SessionEventInput): SessionEvent | undefined =>
     publishSessionEvent(userId, sessionId, input);
@@ -196,9 +207,11 @@ export function sessionRoutes(): Hono<AppEnv> {
     const userId = c.get("user").userId;
     const id = c.req.param("id");
     const session = stores.for(userId).get(id);
-    const ok = stores.for(userId).delete(id);
+    // Only the caller's own sessions: an unknown id deletes (and removes) nothing.
+    if (!session) return c.json({ ok: false });
+    const ok = stores.for(userId).delete(session.id);
     // Reclaim the server-run workspace we kept around for file browsing (and its worktree).
-    void removeCloudSession(userId, session, id);
+    void removeCloudSession(userId, session, session.id);
     return c.json({ ok });
   });
 
@@ -356,7 +369,7 @@ export function sessionRoutes(): Hono<AppEnv> {
     // the awaiting HTTP request and keep them OUT of the durable log / watcher stream.
     const inputs: unknown[] = [];
     for (const r of raw) {
-      if (isFsResult(r)) sessionBus.resolveFs(r.requestId, r);
+      if (isFsResult(r)) sessionBus.resolveFs(session.id, r.requestId, r);
       else inputs.push(r);
     }
 
@@ -381,11 +394,13 @@ export function sessionRoutes(): Hono<AppEnv> {
     if (!session) return c.json({ error: "not found" }, 404);
     const rel = c.req.query("path") ?? "";
     if (session.runner === "server") {
-      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      const root = workspaceDir(userId, session.id);
+      const abs = resolveInside(root, rel);
       if (!abs) return c.json({ error: "bad path" }, 400);
       try {
-        return c.json({ entries: await listDir(abs) });
-      } catch {
+        return c.json({ entries: await listDir(abs, root) });
+      } catch (err) {
+        if (err instanceof OutsideRootError) return c.json({ error: "bad path" }, 400);
         return c.json({ error: "not found" }, 404);
       }
     }
@@ -400,13 +415,15 @@ export function sessionRoutes(): Hono<AppEnv> {
     const rel = c.req.query("path") ?? "";
     if (!rel) return c.json({ error: "path is required" }, 400);
     if (session.runner === "server") {
-      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      const root = workspaceDir(userId, session.id);
+      const abs = resolveInside(root, rel);
       if (!abs) return c.json({ error: "bad path" }, 400);
       try {
-        const r = await readFileCapped(abs);
+        const r = await readFileCapped(abs, root);
         if (r.binary) return c.json({ error: "binary file" }, 415);
         return c.json({ path: rel, content: r.content, encoding: r.encoding, truncated: r.truncated });
-      } catch {
+      } catch (err) {
+        if (err instanceof OutsideRootError) return c.json({ error: "bad path" }, 400);
         return c.json({ error: "not found" }, 404);
       }
     }
@@ -423,13 +440,17 @@ export function sessionRoutes(): Hono<AppEnv> {
     if (typeof content !== "string") return c.json({ error: "content is required" }, 400);
     if (content.length > 2_000_000) return c.json({ error: "file too large" }, 413);
     if (session.runner === "server") {
-      const abs = resolveInside(workspaceDir(userId, session.id), rel);
+      const root = workspaceDir(userId, session.id);
+      const abs = resolveInside(root, rel);
       if (!abs) return c.json({ error: "bad path" }, 400);
       try {
-        await writeFileSafe(abs, content);
+        await writeFileSafe(abs, content, root);
         return c.json({ ok: true });
       } catch (err) {
-        return c.json({ error: err instanceof Error ? err.message : "write failed" }, 500);
+        if (err instanceof OutsideRootError) return c.json({ error: "bad path" }, 400);
+        // Host paths stay out of the reply.
+        console.error("[files] write failed:", err instanceof Error ? err.message : err);
+        return c.json({ error: "write failed" }, 500);
       }
     }
     if (!session.runnerConnected) return c.json({ error: "editor offline" }, 409);

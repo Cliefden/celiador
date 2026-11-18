@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { publishedLimits } from "@/lib/limits";
 import { latestMacDmgHref, latestMacRelease } from "@/lib/releases";
 import { site } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/start",
   title: "Your first agent pull request",
   description:
     "From nothing to a merged agent pull request in about ten minutes: pick a runner (Celiador editor, or VS Code and Cursor with Celiador Remote), sign in, connect GitHub, label an issue, review and merge from your phone.",
-};
+});
 
 // The page an outside developer gets sent. Every step below was exercised on a
 // clean profile in the loop tests (Oct 2026); the two preconditions people miss

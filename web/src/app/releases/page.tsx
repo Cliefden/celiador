@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { DownloadIcon } from "@/components/icons";
 import { formatReleaseDate, listReleases, shortCommit } from "@/lib/releases";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/releases",
   title: "Releases",
-  description: "Every published Celiador build for macOS and Linux, with checksums.",
-};
+  description:
+    "Every published Celiador build for macOS and Linux, with checksums.",
+});
 
 export default async function ReleasesPage() {
   const releases = await listReleases();

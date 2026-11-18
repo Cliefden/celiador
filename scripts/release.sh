@@ -20,7 +20,9 @@
 #   5. commit "Release vX.Y.Z" and create an annotated tag
 #
 # It never pushes. Then, in two stages:
-#   git push origin main        # deploys daemon + web to dev; Dev app build
+#   git push origin main        # deploys the daemon to dev; Dev app build (the
+#                               # release commit doesn't touch web/, so the site
+#                               # on dev stays as its last web/ push left it)
 #   git push origin vX.Y.Z      # deploys daemon + web to test; Test app → TestFlight
 # Never --follow-tags: both deploys would run at once on the same box.
 #
@@ -109,7 +111,7 @@ cat <<EOF
 
 Created commit and tag $tag locally. NOT pushed.
 
-  1) git push origin main       # daemon + web → dev (wait for green); Dev app build
+  1) git push origin main       # daemon → dev (wait for green); Dev app build
   2) git push origin $tag        # daemon + web → test; iOS Test build → TestFlight
 
 Never use --follow-tags: it would start the dev and test deploys at once on the box.

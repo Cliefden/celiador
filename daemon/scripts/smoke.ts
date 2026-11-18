@@ -32,6 +32,7 @@ async function main(): Promise<void> {
 
 	// Stub the Anthropic upstream the gateway forwards to.
 	let gwBody: Record<string, unknown> | null = null;
+	let gwHeaders: Record<string, string> = {};
 	// The `message_start` usage the stub reports (a test swaps it to exercise cache pricing).
 	let gwStartUsage = '{"input_tokens":5,"output_tokens":0}';
 	const realFetch = globalThis.fetch;
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
 		}
 		if (String(url).includes("/v1/messages")) {
 			gwBody = JSON.parse(init.body ?? "{}");
+			gwHeaders = init.headers ?? {};
 			const sse = `event: message_start\ndata: {"type":"message_start","message":{"usage":${gwStartUsage}}}\n\n`
 				+ `event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":3}}\n\n`;
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
@@ -127,6 +129,26 @@ async function main(): Promise<void> {
 	ok("effort dropped (format kept) when the model is overridden", cfg !== undefined && !("effort" in cfg) && typeof cfg.format === "object", JSON.stringify(gwBody?.output_config));
 	await (await app.request(GW, { method: "POST", headers: authH, body: effortBody(AGENT_MODEL) })).text();
 	ok("effort kept for the daemon's own model", (gwBody?.output_config as { effort?: string } | undefined)?.effort === "high", JSON.stringify(gwBody?.output_config));
+	// Server-side tools are billed per use outside the budget → refused; client-side
+	// Anthropic-defined tools (bash_*, text_editor_*) still pass.
+	const toolBody = (tools: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ max_tokens: 10, stream: true, tools, messages: [{ role: "user", content: "hi" }], ...extra });
+	gwBody = null;
+	const ws = await app.request(GW, { method: "POST", headers: authH, body: toolBody([{ type: "web_search_20250305", name: "web_search" }]) });
+	ok("server tool (web_search) → 400, never upstream", ws.status === 400 && gwBody === null && ((await ws.json()) as { error?: string }).error?.includes("server tool") === true);
+	const ce = await app.request(GW, { method: "POST", headers: authH, body: toolBody([{ type: "code_execution_20250825", name: "code_execution" }]) });
+	ok("server tool (code_execution) → 400", ce.status === 400 && gwBody === null);
+	const mcp = await app.request(GW, { method: "POST", headers: authH, body: toolBody([], { mcp_servers: [{ type: "url", url: "https://mcp.test", name: "x" }] }) });
+	ok("mcp_servers (MCP connector) → 400", mcp.status === 400 && gwBody === null);
+	const ct = await app.request(GW, { method: "POST", headers: authH, body: toolBody([], { container: "c1" }) });
+	ok("container → 400", ct.status === 400 && gwBody === null);
+	const cli = await app.request(GW, { method: "POST", headers: authH, body: toolBody([{ type: "bash_20250124", name: "bash" }, { type: "text_editor_20250728", name: "str_replace_based_edit_tool" }, { type: "custom", name: "x", input_schema: { type: "object" } }]) });
+	ok("client-side tools (bash_*, text_editor_*, custom) pass", cli.status === 200 && gwBody !== null);
+	await cli.text();
+	// anthropic-beta is filtered to an allowlist: shape/caching betas pass, billed ones are dropped.
+	await (await app.request(GW, { method: "POST", headers: { ...authH, "anthropic-beta": "interleaved-thinking-2025-05-14, context-1m-2025-08-07,code-execution-2025-08-25,fine-grained-tool-streaming-2025-05-14" }, body })).text();
+	ok("anthropic-beta: allowlisted kept, billed (context-1m, code-execution) dropped", gwHeaders["anthropic-beta"] === "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14", String(gwHeaders["anthropic-beta"]));
+	await (await app.request(GW, { method: "POST", headers: { ...authH, "anthropic-beta": "mcp-client-2025-04-04" }, body })).text();
+	ok("anthropic-beta: nothing allowed → header not sent", gwHeaders["anthropic-beta"] === undefined, String(gwHeaders["anthropic-beta"]));
 
 	// ── Relay ────────────────────────────────────────────────────────────────
 	console.log("\n== relay ==");
@@ -180,6 +202,72 @@ async function main(): Promise<void> {
 	ok("user budget: total held under the cap", ringStore.logSize() <= 120_000, `${ringStore.logSize()}`);
 	ok("user budget: the least recently updated session is trimmed first, the active one kept whole", ringStore.logSize(r1.id) < 50_000 - 5_000 && ringStore.replay(r3.id, 0).events.length === 9, `${ringStore.logSize(r1.id)} / ${ringStore.replay(r3.id, 0).events.length}`);
 	ringStore.discard();
+	// ── Session ids: only well-formed ids reach a lookup or the disk ─────────
+	console.log("\n== session ids ==");
+	{
+		const dataDir = path.join(HOME, "data");
+		const canary = path.join(dataDir, "id-canary");
+		fs.mkdirSync(canary, { recursive: true });
+		fs.writeFileSync(path.join(canary, "keep"), "x");
+		const poll = async (pred: () => boolean): Promise<boolean> => {
+			for (let i = 0; i < 100; i++) { if (pred()) return true; await new Promise((r) => setTimeout(r, 20)); }
+			return pred();
+		};
+		// Another user's session with a kept workspace: the first user must not reach either.
+		const otherH = { "content-type": "application/json", authorization: `Bearer ${userToken("smoke-other")}` };
+		const otherSid = ((await (await app.request("http://localhost/api/sessions", { method: "POST", headers: otherH, body: JSON.stringify({ title: "theirs" }) })).json()) as { session: { id: string } }).session.id;
+		const otherRun = path.join(runsRoot(), "smoke-other", otherSid, "repo");
+		fs.mkdirSync(otherRun, { recursive: true });
+		fs.writeFileSync(path.join(otherRun, "keep"), "x");
+		const badIds = ["..%2F..", "..%2F..%2Fid-canary", "..%2F..%2F..", "%2E%2E", "..%5C..", "..", "a%2F..%2F..", "x.y", "%00"];
+		const routes: Array<[string, string, string?]> = [
+			["GET", ""],
+			["DELETE", ""],
+			["GET", "/events"],
+			["POST", "/message", JSON.stringify({ text: "x" })],
+			["POST", "/cancel"],
+			["POST", "/approvals/r1", JSON.stringify({ decision: "approve" })],
+			["POST", "/answers/r1", JSON.stringify({ text: "x" })],
+			["GET", "/commands"],
+			["POST", "/events", JSON.stringify([{ kind: "done" }])],
+			["GET", "/files?path="],
+			["GET", "/file?path=keep"],
+			["PUT", "/file", JSON.stringify({ path: "keep", content: "y" })],
+			["GET", "/git/status"],
+			["GET", "/git/diff"],
+			["POST", "/git/commit", JSON.stringify({ message: "x" })],
+			["POST", "/git/revert", JSON.stringify({ paths: ["keep"] })],
+			["POST", "/git/push"],
+			["POST", "/git/pr", JSON.stringify({ title: "x" })],
+			["POST", "/git/merge", JSON.stringify({})],
+		];
+		let refused = 0;
+		const notRefused: string[] = [];
+		for (const id of badIds) {
+			for (const [method, suffix, b] of routes) {
+				const r = await app.request(`http://localhost/api/sessions/${id}${suffix}`, { method, headers: authH, ...(b ? { body: b } : {}) });
+				if (r.status === 404) refused++;
+				else notRefused.push(`${method} ${id}${suffix} → ${r.status}`);
+				await r.body?.cancel();
+			}
+		}
+		ok(`malformed / encoded-traversal ids → 404 on every /:id route (${badIds.length * routes.length} requests)`, notRefused.length === 0, notRefused.slice(0, 5).join("; "));
+		await new Promise((r) => setTimeout(r, 50));
+		ok("…the data dir and its contents survive", fs.existsSync(path.join(canary, "keep")) && fs.existsSync(path.join(dataDir, "sessions")));
+		ok("…another user's run workspace survives", fs.existsSync(path.join(otherRun, "keep")));
+		const crossDel = await app.request(`http://localhost/api/sessions/${otherSid}`, { method: "DELETE", headers: authH });
+		ok("DELETE another user's session id → ok:false", crossDel.status === 200 && ((await crossDel.json()) as { ok?: boolean }).ok === false);
+		await new Promise((r) => setTimeout(r, 50));
+		ok("…their session and workspace are untouched", fs.existsSync(path.join(otherRun, "keep")) && (await app.request(`http://localhost/api/sessions/${otherSid}`, { headers: otherH })).status === 200);
+		const unknownDel = await app.request(`http://localhost/api/sessions/00000000-0000-0000-0000-000000000000`, { method: "DELETE", headers: authH });
+		ok("DELETE an unknown id → ok:false", ((await unknownDel.json()) as { ok?: boolean }).ok === false);
+		const ownDel = await app.request(`http://localhost/api/sessions/${otherSid}`, { method: "DELETE", headers: otherH });
+		ok("the owner's DELETE → ok and the workspace is reclaimed", ((await ownDel.json()) as { ok?: boolean }).ok === true && await poll(() => !fs.existsSync(path.dirname(otherRun))));
+		const { runDir, workspaceDir: wsDir } = await import("../src/runner/workspace.ts");
+		const throws = (f: () => unknown) => { try { f(); return false; } catch { return true; } };
+		ok("runDir/workspaceDir refuse ids that aren't one path segment", throws(() => runDir("u", "..")) && throws(() => runDir("..", "x")) && throws(() => wsDir("u", "../x")) && throws(() => runDir("u", "a/b")) && throws(() => runDir("u", "")) && !throws(() => runDir("smoke-user", otherSid)));
+		fs.rmSync(canary, { recursive: true, force: true });
+	}
 
 	// ── Runner tokens: the sandbox's token is good on the Anthropic gateway only ──
 	console.log("\n== runner token scope ==");
@@ -211,6 +299,62 @@ async function main(): Promise<void> {
 	const lockedProxy = await app.request("http://localhost/api/agent/messages", { method: "POST", headers: runnerH, body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }) });
 	ok("runner token on the locked agent proxy → 403", lockedProxy.status === 403, `got ${lockedProxy.status}`);
 	ok("…the session it tried to drive is untouched (a user token still sees it)", (await app.request(`http://localhost/api/sessions/${sid}`, { headers: authH })).status === 200);
+
+	// ── Deleted accounts: a still-valid token is refused everywhere, across restarts ──
+	console.log("\n== deleted accounts ==");
+	{
+		const goneId = "0d1e7e7e-0000-4000-8000-00000000d1e7";
+		const goneH = { "content-type": "application/json", authorization: `Bearer ${userToken(goneId)}` };
+		const goneRunnerH = { "content-type": "application/json", authorization: `Bearer ${mintRunnerToken(goneId, "gone-run", 300)!}` };
+		const before = await app.request(GW, { method: "POST", headers: goneH, body });
+		await before.text();
+		ok("before deletion: the gateway serves the account", before.status === 200, `got ${before.status}`);
+		// GoTrue's admin API, stubbed for this section only.
+		const prevFetch = globalThis.fetch;
+		const gotrueCalls: string[] = [];
+		process.env.GOTRUE_URL = "https://gotrue.smoke.test";
+		globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+			if (String(url).startsWith("https://gotrue.smoke.test/")) { gotrueCalls.push(`${init?.method} ${String(url).slice(25)}`); return new Response("{}", { status: 200 }); }
+			return prevFetch(url as string, init);
+		}) as typeof fetch;
+		const del = await app.request("http://localhost/api/account", { method: "DELETE", headers: goneH });
+		globalThis.fetch = prevFetch;
+		delete process.env.GOTRUE_URL;
+		ok("DELETE /api/account → ok (GoTrue admin delete called)", del.status === 200 && gotrueCalls.includes(`DELETE /admin/users/${goneId}`), `${del.status} ${gotrueCalls.join(",")}`);
+		const { deletedUsers } = await import("../src/deleted-users.ts");
+		ok("…the deletion is persisted", JSON.parse(fs.readFileSync(path.join(HOME, "data", "deleted-users.json"), "utf8"))[goneId] !== undefined);
+		const everyRoute = async (label: string): Promise<void> => {
+			const routes: Array<[string, string, Record<string, string>, string?]> = [
+				["POST", "/api/anthropic/v1/messages", goneH, body],
+				["GET", "/api/anthropic/v1/models", goneH],
+				["POST", "/api/agent/messages", goneH, JSON.stringify({ messages: [{ role: "user", content: "hi" }] })],
+				["POST", "/api/anthropic/v1/messages", goneRunnerH, body],
+				["POST", "/api/complete", goneH, JSON.stringify({ prefix: "x" })],
+				["GET", "/api/sessions", goneH],
+				["POST", "/api/sessions", goneH, JSON.stringify({ title: "x" })],
+				["GET", "/api/tasks", goneH],
+				["GET", "/api/me", goneH],
+				["GET", "/api/profile", goneH],
+				["GET", "/api/chats", goneH],
+				["POST", "/api/push/register", goneH, JSON.stringify({ token: "x" })],
+				["GET", "/api/presence", goneH],
+				["GET", "/api/github/account", goneH],
+				["DELETE", "/api/account", goneH],
+			];
+			const leaks: string[] = [];
+			for (const [method, p, h, b] of routes) {
+				const r = await app.request(`http://localhost${p}`, { method, headers: h, ...(b ? { body: b } : {}) });
+				if (r.status !== 401) leaks.push(`${method} ${p}${h === goneRunnerH ? " (runner)" : ""} → ${r.status}`);
+				await r.body?.cancel();
+			}
+			ok(`${label}: every route, incl. the agent proxy, gateway and a runner token → 401 (${routes.length})`, leaks.length === 0, leaks.join("; "));
+		};
+		await everyRoute("after deletion");
+		deletedUsers.reloadForTests(); // as a restart would: the in-memory copy is gone, the file is read again
+		await everyRoute("after a restart");
+		ok("…and no per-user session file was recreated", !fs.existsSync(path.join(HOME, "data", "sessions", "meta", `${goneId}.json`)));
+		ok("another account is unaffected", (await app.request("http://localhost/api/sessions", { headers: authH })).status === 200);
+	}
 
 	// ── Run review (git over the relay) ──────────────────────────────────────
 	console.log("\n== git review ==");
@@ -344,6 +488,162 @@ async function main(): Promise<void> {
 	ok("empty-prompt start-run has an empty prompt", received.length === 2 && received[1].prompt === "");
 	unsub();
 
+	// ── Two users: B can't see, change or delete anything of A's (#92) ───────
+	console.log("\n== multi-user isolation ==");
+	{
+		const aH = { "content-type": "application/json", authorization: `Bearer ${userToken("iso-a")}` };
+		const bH = { "content-type": "application/json", authorization: `Bearer ${userToken("iso-b")}` };
+		const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+		const req = (p: string, h: Record<string, string>, init: { method?: string; body?: string } = {}) => app.request(`http://localhost${p}`, { headers: h, ...init });
+
+		// A's state: an editor session with events, a cloud session with a workspace file, a task, presence.
+		const sA = ((await (await req("/api/sessions", aH, { method: "POST", body: JSON.stringify({ title: "A's run" }) })).json()) as { session: { id: string } }).session.id;
+		await req(`/api/sessions/${sA}/events`, aH, { method: "POST", body: JSON.stringify([{ kind: "message", role: "assistant", text: "A-SECRET-TRANSCRIPT" }]) });
+		const { sessionStores } = await import("../src/sessions/instance.ts");
+		const { workspaceDir } = await import("../src/runner/workspace.ts");
+		const sS = sessionStores.for("iso-a").create({ origin: "phone", runner: "server", title: "A's cloud run" }).id;
+		const wsA = workspaceDir("iso-a", sS);
+		fs.mkdirSync(wsA, { recursive: true });
+		fs.writeFileSync(path.join(wsA, "a.txt"), "A-SECRET-FILE\n");
+		const tA = ((await (await req("/api/tasks", aH, { method: "POST", body: JSON.stringify({ remoteUrl: "https://github.com/iso-a/private-repo", title: "A's task" }) })).json()) as { task: { id: string; state: string } }).task;
+		await req("/api/presence/workspaces", aH, { method: "PUT", body: JSON.stringify({ clientId: "a-mac", workspaces: [{ name: "private-repo", remoteUrl: "https://github.com/iso-a/private-repo.git" }] }) });
+
+		// Sessions: listing, every /:id route, the event stream and the runner channel.
+		const bList = ((await (await req("/api/sessions", bH)).json()) as { sessions: Array<{ id: string }> }).sessions.map((s) => s.id);
+		ok("B's session list has none of A's", !bList.includes(sA) && !bList.includes(sS), bList.join(","));
+		const sessionRoutes: Array<[string, string, string?]> = [
+			["GET", ""],
+			["GET", "/events"],
+			["GET", "/commands"],
+			["POST", "/events", JSON.stringify([{ kind: "message", role: "assistant", text: "injected by B" }])],
+			["POST", "/message", JSON.stringify({ text: "x" })],
+			["POST", "/cancel"],
+			["POST", "/approvals/r1", JSON.stringify({ decision: "approve" })],
+			["POST", "/answers/r1", JSON.stringify({ text: "x" })],
+			["GET", "/files?path="],
+			["GET", "/file?path=a.txt"],
+			["PUT", "/file", JSON.stringify({ path: "a.txt", content: "B was here" })],
+			["GET", "/git/status"],
+			["GET", "/git/diff"],
+			["POST", "/git/commit", JSON.stringify({ message: "x" })],
+			["POST", "/git/revert", JSON.stringify({ paths: ["a.txt"] })],
+			["POST", "/git/push"],
+			["POST", "/git/pr", JSON.stringify({ title: "x" })],
+			["POST", "/git/merge", JSON.stringify({})],
+		];
+		const sessionLeaks: string[] = [];
+		for (const id of [sA, sS]) {
+			for (const [method, suffix, b] of sessionRoutes) {
+				const r = await req(`/api/sessions/${id}${suffix}`, bH, { method, ...(b ? { body: b } : {}) });
+				const text = await r.text();
+				if (r.status !== 404 || text.includes("A-SECRET")) sessionLeaks.push(`${method} ${suffix || "/"} → ${r.status}`);
+			}
+		}
+		ok(`B on A's sessions: every /:id route → 404 (${2 * sessionRoutes.length} requests)`, sessionLeaks.length === 0, sessionLeaks.join("; "));
+		for (const id of [sA, sS]) {
+			const del = await req(`/api/sessions/${id}`, bH, { method: "DELETE" });
+			if (((await del.json()) as { ok?: boolean }).ok !== false) sessionLeaks.push(`DELETE ${id}`);
+		}
+		await sleep(50);
+		ok("B's DELETE of A's sessions → ok:false", sessionLeaks.length === 0, sessionLeaks.join("; "));
+		const aEvents = await req(`/api/sessions/${sA}`, aH);
+		const aSession = ((await aEvents.json()) as { session?: { lastSeq?: number } }).session;
+		ok("…A's sessions are still there, with no event injected by B", aSession?.lastSeq === 1 && (await req(`/api/sessions/${sS}`, aH)).status === 200, JSON.stringify(aSession));
+		ok("…A's workspace file is unchanged", fs.readFileSync(path.join(wsA, "a.txt"), "utf8") === "A-SECRET-FILE\n");
+		const aFile = await req(`/api/sessions/${sS}/file?path=a.txt`, aH);
+		ok("…and A still reads it (positive control)", aFile.status === 200 && ((await aFile.json()) as { content?: string }).content === "A-SECRET-FILE\n");
+
+		// Tasks: listing, every /:id route, the live stream.
+		const bTasks = (await (await req("/api/tasks", bH)).json()) as { tasks: Array<{ id: string }>; repos?: unknown[] };
+		ok("B's task list has none of A's tasks or repos", !bTasks.tasks.some((t) => t.id === tA.id) && !JSON.stringify(bTasks).includes("iso-a/private-repo"), JSON.stringify(bTasks).slice(0, 300));
+		const taskRoutes: Array<[string, string]> = [
+			["/cancel", "{}"],
+			["/status", JSON.stringify({ state: "failed", error: "B" })],
+			["/merge", "{}"],
+			["/followup", JSON.stringify({ text: "x" })],
+		];
+		const taskLeaks: string[] = [];
+		for (const [suffix, b] of taskRoutes) {
+			const r = await req(`/api/tasks/${tA.id}${suffix}`, bH, { method: "POST", body: b });
+			if (r.status !== 404) taskLeaks.push(`${suffix} → ${r.status}`);
+		}
+		const aTaskNow = ((await (await req("/api/tasks", aH)).json()) as { tasks: Array<{ id: string; state: string; error?: string }> }).tasks.find((t) => t.id === tA.id);
+		ok("B on A's task: cancel / status / merge / followup → 404, A's task unchanged", taskLeaks.length === 0 && aTaskNow?.state === tA.state && !aTaskNow?.error, `${taskLeaks.join("; ")} ${JSON.stringify(aTaskNow)}`);
+		const streamOf = async (h: Record<string, string>) => {
+			const ac = new AbortController();
+			const res = await app.request("http://localhost/api/tasks/stream", { headers: h, signal: ac.signal } as RequestInit);
+			let seen = "";
+			const reader = res.body!.getReader();
+			const pump = (async () => { try { for (;;) { const { done, value } = await reader.read(); if (done) return; seen += new TextDecoder().decode(value); } } catch { /* aborted */ } })();
+			return { stop: async () => { ac.abort(); await reader.cancel().catch(() => undefined); await Promise.race([pump, sleep(500)]); return seen; } };
+		};
+		const aStream = await streamOf(aH);
+		const bStream = await streamOf(bH);
+		await sleep(20);
+		const tA2 = ((await (await req("/api/tasks", aH, { method: "POST", body: JSON.stringify({ remoteUrl: "https://github.com/iso-a/private-repo", title: "A's second task" }) })).json()) as { task: { id: string } }).task.id;
+		await sleep(100);
+		const aSeen = await aStream.stop();
+		const bSeen = await bStream.stop();
+		ok("task stream: A's new task reaches A's stream, never B's", aSeen.includes(tA2) && !bSeen.includes(tA2) && !bSeen.includes("iso-a"), `a=${aSeen.length} b=${bSeen.slice(0, 200)}`);
+
+		// Presence: B neither sees A's editors' repos nor can drive A's editor.
+		const bPresence = JSON.stringify(await (await req("/api/presence/workspaces", bH)).json());
+		ok("B's presence list has none of A's repos", !bPresence.includes("iso-a"), bPresence);
+		const { editorControl: ctl } = await import("../src/presence/control.ts");
+		const toA: unknown[] = [];
+		const unsubA = ctl.subscribe("iso-a", (cmd) => toA.push(cmd));
+		const bRun = await req("/api/presence/requests", bH, { method: "POST", body: JSON.stringify({ remoteUrl: "https://github.com/iso-a/private-repo.git", prompt: "rm -rf" }) });
+		unsubA();
+		ok("B's run request for A's repo → 409 (B has no editor), A's editor gets nothing", bRun.status === 409 && toA.length === 0, `${bRun.status} ${JSON.stringify(toA)}`);
+
+		// Chats (Postgres, faked here): every query is scoped to the caller.
+		const pg = (await import("pg")).default;
+		const proto = pg.Pool.prototype as unknown as { query: (sql: string, params?: unknown[]) => Promise<unknown> };
+		const realQuery = proto.query;
+		const chats = [{ id: "11111111-1111-4111-8111-111111111111", user_id: "iso-a", title: "A-SECRET-CHAT", origin: "editor", status: "done", created_at: "x", updated_at: "x", last_message_at: null }];
+		const messages = [{ id: "m1", chat_id: chats[0]!.id, user_id: "iso-a", role: "user", content: "A-SECRET-MESSAGE", seq: 1, created_at: "x" }];
+		const unscoped: string[] = [];
+		proto.query = async function (sql: string, params: unknown[] = []) {
+			const s = sql.replace(/\s+/g, " ").trim();
+			const pick = <T extends Record<string, unknown>>(rows: T[]) => ({ rows: rows.map(({ user_id: _u, chat_id: _c, ...r }) => r), rowCount: rows.length });
+			if (/from public\.chats where user_id = \$1/.test(s)) return pick(chats.filter((c) => c.user_id === params[0]));
+			if (/from public\.chats where id = \$1 and user_id = \$2/.test(s)) return pick(chats.filter((c) => c.id === params[0] && c.user_id === params[1]));
+			if (/from public\.messages where chat_id = \$1 and user_id = \$2/.test(s)) return pick(messages.filter((m) => m.chat_id === params[0] && m.user_id === params[1]));
+			if (/^update public\.chats set title = \$3.* where id = \$1 and user_id = \$2/.test(s)) {
+				const hit = chats.filter((c) => c.id === params[0] && c.user_id === params[1]);
+				for (const c of hit) c.title = String(params[2]);
+				return pick(hit);
+			}
+			if (/^delete from public\.chats where id = \$1 and user_id = \$2/.test(s)) {
+				const before = chats.length;
+				for (let i = chats.length - 1; i >= 0; i--) if (chats[i]!.id === params[0] && chats[i]!.user_id === params[1]) chats.splice(i, 1);
+				return { rows: [], rowCount: before - chats.length };
+			}
+			if (/public\.(chats|messages)/.test(s)) unscoped.push(s.slice(0, 120));
+			return { rows: [], rowCount: 0 };
+		};
+		process.env.DATABASE_URL = "postgres://smoke.invalid/none";
+		try {
+			const C = `/api/chats/${chats[0]!.id}`;
+			const bChats = await req("/api/chats", bH);
+			const bChatsText = await bChats.text();
+			const bGet = await req(C, bH);
+			const bGetText = await bGet.text();
+			const bPatch = await req(C, bH, { method: "PATCH", body: JSON.stringify({ title: "renamed by B" }) });
+			const bDel = (await (await req(C, bH, { method: "DELETE" })).json()) as { ok?: boolean };
+			ok("B's chat list has none of A's", bChats.status === 200 && !bChatsText.includes("A-SECRET"), bChatsText);
+			ok("B on A's chat: GET → 404, PATCH → 404, DELETE → ok:false, nothing leaked", bGet.status === 404 && !bGetText.includes("A-SECRET") && bPatch.status === 404 && bDel.ok === false, `${bGet.status} ${bPatch.status} ${JSON.stringify(bDel)}`);
+			const aGet = await req(C, aH);
+			const aChat = (await aGet.json()) as { chat?: { title?: string }; messages?: Array<{ content?: string }> };
+			ok("…A's chat is intact (title, messages) and A still reads it", aGet.status === 200 && aChat.chat?.title === "A-SECRET-CHAT" && aChat.messages?.[0]?.content === "A-SECRET-MESSAGE", JSON.stringify(aChat));
+			ok("…every chats/messages query the routes ran was scoped by user", unscoped.length === 0, unscoped.join(" | "));
+		} finally {
+			delete process.env.DATABASE_URL;
+			proto.query = realQuery;
+		}
+		fs.rmSync(path.dirname(wsA), { recursive: true, force: true });
+	}
+
 	// ── Releases (editor update feed + downloads) ────────────────────────────
 	console.log("\n== releases ==");
 	const relDir = path.join(HOME, "releases");
@@ -442,6 +742,19 @@ async function main(): Promise<void> {
 	process.env.CELIADOR_TASK_CONCURRENCY = "1";
 	ok("bad signature → 401", (await hook("ping", {}, "wrong")).status === 401);
 	ok("ping → 200", (await hook("ping", {})).status === 200);
+	// X-GitHub-Delivery: a delivery seen before is acknowledged, not processed again.
+	const delivered = (id: string, payload: unknown) => {
+		const raw = JSON.stringify(payload);
+		const sig = `sha256=${crypto.createHmac("sha256", "whsec").update(raw).digest("hex")}`;
+		return app.request(WH, { method: "POST", headers: { "content-type": "application/json", "x-github-event": "issues", "x-github-delivery": id, "x-hub-signature-256": sig }, body: raw });
+	};
+	const d1 = (await (await delivered("d-1", labeled(43, "bug"))).json()) as { ignored?: string };
+	const d2 = (await (await delivered("d-1", labeled(43, "bug"))).json()) as { ignored?: string };
+	const d3 = (await (await delivered("d-2", labeled(43, "bug"))).json()) as { ignored?: string };
+	ok("a replayed X-GitHub-Delivery → acknowledged as a duplicate, not processed", /another label/.test(d1.ignored ?? "") && d2.ignored === "duplicate delivery" && /another label/.test(d3.ignored ?? ""), JSON.stringify([d1, d2, d3]));
+	const { DeliveryLog } = await import("../src/tasks/deliveries.ts");
+	const dlog = new DeliveryLog(1000, 2);
+	ok("delivery log: TTL and size cap", dlog.claim("a", 0) && !dlog.claim("a", 500) && dlog.claim("a", 1500) && dlog.claim("b", 1600) && dlog.claim("c", 1700) && dlog.claim("d", 1800) && dlog.claim("a", 1900) && dlog.claim(undefined) && dlog.claim(undefined));
 	const unlinked = (await (await hook("issues", labeled(41))).json()) as { ignored?: string };
 	ok("label on an unlinked repo is ignored", /not linked/.test(unlinked.ignored ?? ""), JSON.stringify(unlinked));
 	const link = await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: "https://github.com/Cliefden/smoke-repo" }) });
@@ -556,15 +869,62 @@ async function main(): Promise<void> {
 	ok("manifest: webhook + redirect on the public URL, the three events, write on issues/PRs/contents", /\/api\/github\/webhook$/.test(manifest.hook_attributes.url) && /\/api\/github\/app\/setup$/.test(manifest.redirect_url) && manifest.default_events.includes("pull_request") && manifest.default_permissions.contents === "write", JSON.stringify(manifest));
 	ok("webhook signed with the app's secret is accepted", (await hook("ping", {}, "appsec")).status === 200);
 	ok("webhook signed with a third secret is still refused", (await hook("ping", {}, "nope")).status === 401);
-	const prMerged = { action: "closed", repository: ghRepo, pull_request: { merged: true, html_url: "https://github.com/Cliefden/smoke-repo/pull/7", head: { ref: "42-fix-the-thing-42" } } };
+	const prMerged = { action: "closed", repository: ghRepo, pull_request: { number: 7, merged: true, html_url: "https://github.com/Cliefden/smoke-repo/pull/7", head: { ref: "42-fix-the-thing-42", repo: { full_name: "cliefden/Smoke-Repo" } } } };
+	// A fork's PR with the task's branch name is not the task's PR.
+	const forkMerged = (await (await hook("pull_request", { ...prMerged, pull_request: { ...prMerged.pull_request, number: 8, head: { ref: "42-fix-the-thing-42", repo: { full_name: "mallory/smoke-repo" } } } }, "appsec")).json()) as { ignored?: string; taskId?: string };
+	const notMergedYet = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; state: string }> }).tasks.find((t) => t.id === tid);
+	ok("a merged fork PR with the task's branch name → ignored, the task isn't merged", /another repository/.test(forkMerged.ignored ?? "") && notMergedYet?.state !== "merged", JSON.stringify(forkMerged));
+	const noHeadRepo = (await (await hook("pull_request", { ...prMerged, pull_request: { ...prMerged.pull_request, head: { ref: "42-fix-the-thing-42", repo: null } } }, "appsec")).json()) as { ignored?: string };
+	ok("…and one whose head repo is gone (deleted fork) too", /another repository/.test(noHeadRepo.ignored ?? ""), JSON.stringify(noHeadRepo));
 	const mergedRes = (await (await hook("pull_request", prMerged, "appsec")).json()) as { taskId?: string; state?: string };
 	const mergedTask = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; state: string }> }).tasks.find((t) => t.id === tid);
 	ok("a pull_request merged on GitHub moves the task to merged", mergedRes.taskId === tid && mergedTask?.state === "merged", JSON.stringify(mergedRes));
 	ok("a closed-unmerged pull_request is ignored", /pull_request\/closed/.test(((await (await hook("pull_request", { ...prMerged, pull_request: { ...prMerged.pull_request, merged: false } }, "appsec")).json()) as { ignored?: string }).ignored ?? ""));
-	resetGitHubAppForTests();
-	const newPage = await app.request("http://localhost/api/github/app/new");
-	ok("setup page renders the manifest form when no app is stored", newPage.status === 200 && /organizations\/Cliefden\/settings\/apps\/new\?state=/.test(await newPage.text()));
-	ok("setup callback without a known state → 400", (await app.request("http://localhost/api/github/app/setup?code=x&state=unknown")).status === 400);
+	// Setup flow: off unless the operator's setup token is set; token-gated; refused once an app is stored.
+	{
+		const A = "http://localhost/api/github/app";
+		const SETUP = "smoke-setup-token-0123456789";
+		const form = (t: string) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: t }).toString() });
+		const stateOf = (html: string) => /settings\/apps\/new\?state=([0-9a-f]+)/.exec(html)?.[1];
+		resetGitHubAppForTests();
+		delete process.env.CELIADOR_GITHUB_SETUP_TOKEN;
+		const off = await Promise.all([app.request(`${A}/new`), app.request(`${A}/new`, form(SETUP)), app.request(`${A}/setup?code=x&state=y`)]);
+		ok("setup routes without CELIADOR_GITHUB_SETUP_TOKEN → 404", off.every((r) => r.status === 404), off.map((r) => r.status).join(","));
+		process.env.CELIADOR_GITHUB_SETUP_TOKEN = "short";
+		ok("…a too-short setup token counts as unset → 404", (await app.request(`${A}/new`)).status === 404);
+		process.env.CELIADOR_GITHUB_SETUP_TOKEN = SETUP;
+		const ask = await app.request(`${A}/new`);
+		const askHtml = await ask.text();
+		ok("GET /new asks for the setup token and hands out no state", ask.status === 200 && /name="token"/.test(askHtml) && !stateOf(askHtml));
+		const wrong = await app.request(`${A}/new`, form("not-the-token-at-all"));
+		ok("POST /new with a wrong token → 403, no state", wrong.status === 403 && !stateOf(await wrong.text()));
+		const right = await app.request(`${A}/new`, form(SETUP));
+		const state = stateOf(await right.text());
+		ok("POST /new with the token → the manifest form with a one-time state", right.status === 200 && !!state);
+		ok("setup callback without a known state → 400", (await app.request(`${A}/setup?code=x&state=unknown`)).status === 400);
+		// An app is stored: neither route can replace it, even with a live state and a valid code.
+		resetGitHubAppForTests(smokeApp);
+		const conversions: string[] = [];
+		const prevHandler = ghHandler;
+		ghHandler = (call) => { if (call.path.startsWith("/app-manifests/")) conversions.push(call.path); return prevHandler(call); };
+		const replace = await app.request(`${A}/setup?code=c0de&state=${state}`);
+		ok("…once an app is stored, /setup with a live state → 409 and GitHub isn't asked", replace.status === 409 && conversions.length === 0, `${replace.status} ${conversions.join(",")}`);
+		ok("…and POST /new with the token → 409, no new state", await (async () => { const r = await app.request(`${A}/new`, form(SETUP)); return r.status === 409 && !stateOf(await r.text()); })());
+		ok("…and GET /new → 409", (await app.request(`${A}/new`)).status === 409);
+		// No app yet, a live state: the conversion runs once and the result is stored; the state can't be replayed.
+		resetGitHubAppForTests();
+		ghHandler = (call) => call.method === "POST" && call.path === "/app-manifests/c0de/conversions"
+			? { status: 201, json: { id: 777, slug: "celiador-smoke-2", name: "Celiador", html_url: "https://github.com/apps/celiador-smoke-2", pem, webhook_secret: "w", client_id: "cid", client_secret: "cs" } }
+			: prevHandler(call);
+		const done = await app.request(`${A}/setup?code=c0de&state=${state}`);
+		const { githubApp } = await import("../src/github/app.ts");
+		ok("/setup with the token-issued state → app stored", done.status === 200 && githubApp()?.id === 777, `${done.status}`);
+		ok("…the state is single-use (a replay → 409 now that an app exists)", (await app.request(`${A}/setup?code=c0de&state=${state}`)).status === 409);
+		ghHandler = prevHandler;
+		fs.rmSync(path.join(HOME, "data", "github-app.json"), { force: true });
+		resetGitHubAppForTests();
+		delete process.env.CELIADOR_GITHUB_SETUP_TOKEN;
+	}
 	ok("manifest: checks + statuses read, check_suite + status events", manifest.default_permissions.checks === "read" && manifest.default_permissions.statuses === "read" && manifest.default_events.includes("check_suite") && manifest.default_events.includes("status"), JSON.stringify(manifest.default_permissions));
 	const m2 = manifest as unknown as { callback_urls?: string[]; request_oauth_on_install?: boolean };
 	ok("manifest: user-authorization callback on the public URL, asked at install", m2.callback_urls?.[0] === "https://smoke.test/api/github/callback" && m2.request_oauth_on_install === true, JSON.stringify(m2));
@@ -916,6 +1276,9 @@ async function main(): Promise<void> {
 	const flag = (f: string, v?: string) => { const i = dargs.indexOf(f); return i >= 0 && (v === undefined || dargs[i + 1] === v); };
 	ok("docker run: no network, read-only, caps dropped, no-new-privileges, non-root", flag("--network", "none") && flag("--read-only") && flag("--cap-drop", "ALL") && flag("--security-opt", "no-new-privileges") && flag("--user", "1000:1000"), dargs.join(" "));
 	ok("docker run: only the workspace + gateway dir mounted; prompt passed as one argv", dargs.filter((a) => a === "-v").length === 2 && flag("-p", "fix it"));
+	const { dockerRunEnv } = await import("../src/runner/sandbox.ts");
+	const denv = dockerRunEnv("tok", { PATH: "/bin", ANTHROPIC_AUTH_TOKEN: "daemon-own" });
+	ok("docker run: the run token is not in argv (ps), only named; docker reads it from its env", !dargs.some((a) => a.includes("tok")) && dargs.some((a, i) => a === "ANTHROPIC_AUTH_TOKEN" && dargs[i - 1] === "-e") && denv.ANTHROPIC_AUTH_TOKEN === "tok" && denv.PATH === "/bin", dargs.join(" "));
 	const notActive = await app.request(`http://localhost/api/sessions/${sid}/cancel`, { method: "POST", headers: authH });
 	ok("cancel on an editor session without a runner → 409 (unchanged)", notActive.status === 409, `got ${notActive.status}`);
 
@@ -958,6 +1321,29 @@ async function main(): Promise<void> {
 		daemon.close();
 	}
 
+	// ── Small leaks and error handling (#91) ──────────────────────────────────
+	console.log("\n== cleanups ==");
+	{
+		const { sessionBus } = await import("../src/sessions/bus.ts");
+		const detachA = sessionBus.attachRunner("fs-a", () => undefined, () => undefined);
+		const pendingFs = sessionBus.requestFs("fs-a", { kind: "fs.list", requestId: "fs-req-1", path: "" }, 5_000);
+		const fsResult = { kind: "fs.result" as const, requestId: "fs-req-1", ok: true };
+		ok("fs.result from another session can't answer a file request", sessionBus.resolveFs("fs-b", "fs-req-1", fsResult) === false);
+		ok("…its own session's can", sessionBus.resolveFs("fs-a", "fs-req-1", fsResult) === true && (await pendingFs).ok === true);
+		detachA();
+		const { isChatId } = await import("../src/db/repo.ts");
+		ok("chat ids: only uuids reach Postgres (anything else is a 404, not a 500)", isChatId("7dad8fd0-795c-4402-9202-492e76a36f09") && !isChatId("nope") && !isChatId("7dad8fd0-795c-4402-9202-492e76a36f09' or 1=1"));
+		const { agentQuota } = await import("../src/agent/quota.ts");
+		const slot = agentQuota.acquire("sweep-user");
+		if ("release" in slot) slot.release();
+		const before = agentQuota.minuteWindows();
+		agentQuota.sweepMinute(Date.now() + 61_000, true);
+		ok("quota: idle per-minute windows are dropped", before > 0 && agentQuota.minuteWindows() < before, `${before} → ${agentQuota.minuteWindows()}`);
+		const comp = await app.request("http://localhost/api/complete", { method: "POST", headers: authH, body: JSON.stringify({ prefix: "const x = ", language: "typescript" }) });
+		const compBody = (await comp.json()) as Record<string, unknown>;
+		ok("/api/complete: an upstream failure → 502 without the upstream detail", comp.status === 502 && compBody.detail === undefined && compBody.error === "upstream error", `${comp.status} ${JSON.stringify(compBody)}`);
+	}
+
 	// ── Server runner (offline local repo) ────────────────────────────────────
 	console.log("\n== server runner ==");
 	const repo = path.join(HOME, "origin");
@@ -991,6 +1377,60 @@ async function main(): Promise<void> {
 	// browse its files via GET /:id/files); it's reclaimed on session delete /
 	// account deletion / boot sweep, not in executeServerRun's finally.
 	ok("workspace retained after run", fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-1")));
+
+	// ── Phone file browser on a cloud workspace: symlinks never lead out of it (#83) ──
+	console.log("\n== workspace files ==");
+	{
+		const { sessionStores } = await import("../src/sessions/instance.ts");
+		const { workspaceDir } = await import("../src/runner/workspace.ts");
+		const fsess = sessionStores.for("smoke-user").create({ origin: "phone", runner: "server", title: "files" });
+		const ws = workspaceDir("smoke-user", fsess.id);
+		const outside = path.join(HOME, "outside");
+		fs.mkdirSync(outside, { recursive: true });
+		const secret = path.join(outside, "host.env");
+		fs.writeFileSync(secret, "SECRET=hunter2\n");
+		fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+		fs.writeFileSync(path.join(ws, "a.txt"), "hello\n");
+		fs.symlinkSync("a.txt", path.join(ws, "alias"));            // inside → listed, readable
+		fs.symlinkSync("src", path.join(ws, "srclink"));            // inside dir → listed as dir
+		fs.symlinkSync(secret, path.join(ws, "leak"));              // absolute, out
+		fs.symlinkSync("../../../../../outside/host.env", path.join(ws, "leakrel")); // relative, out
+		fs.symlinkSync(outside, path.join(ws, "leakdir"));          // a directory out
+		fs.symlinkSync(path.join(outside, "made-by-write.txt"), path.join(ws, "dangling")); // dangling, out
+		await run("mkfifo", [path.join(ws, "pipe")]);
+		const F = `http://localhost/api/sessions/${fsess.id}`;
+		const list = await app.request(`${F}/files?path=`, { headers: authH });
+		const names = (((await list.json()) as { entries?: Array<{ name: string; type: string }> }).entries ?? []).map((e) => `${e.name}:${e.type}`);
+		ok("list: in-root symlinks shown as their target's type", names.includes("alias:file") && names.includes("srclink:dir") && names.includes("a.txt:file"), names.join(","));
+		ok("list: symlinks pointing out (file, dir, dangling) and the FIFO are left out", !names.some((n) => /^(leak|leakrel|leakdir|dangling|pipe):/.test(n)), names.join(","));
+		ok("list through a symlinked dir that points out → 400", (await app.request(`${F}/files?path=leakdir`, { headers: authH })).status === 400);
+		const readAlias = await app.request(`${F}/file?path=alias`, { headers: authH });
+		ok("read through an in-root symlink → 200", readAlias.status === 200 && ((await readAlias.json()) as { content?: string }).content === "hello\n");
+		const reads = await Promise.all(["leak", "leakrel", "leakdir/host.env"].map(async (p) => {
+			const r = await app.request(`${F}/file?path=${encodeURIComponent(p)}`, { headers: authH });
+			const t = await r.text();
+			return { p, status: r.status, leaked: t.includes("hunter2") };
+		}));
+		ok("read through symlinks pointing out → 400, nothing leaked", reads.every((r) => r.status === 400 && !r.leaked), JSON.stringify(reads));
+		const pipeRead = await Promise.race([
+			app.request(`${F}/file?path=pipe`, { headers: authH }).then((r) => r.status),
+			new Promise<number>((r) => setTimeout(() => r(-1), 3000)),
+		]);
+		ok("read a FIFO → refused without blocking", pipeRead === 400, `got ${pipeRead}`);
+		const put = (p: string, content = "PWNED") => app.request(`${F}/file`, { method: "PUT", headers: authH, body: JSON.stringify({ path: p, content }) });
+		const writes = await Promise.all(["leak", "leakrel", "leakdir/host.env", "leakdir/new.txt", "leakdir/deep/new.txt", "dangling"].map(async (p) => ({ p, status: (await put(p)).status })));
+		ok("write through symlinks pointing out → 400", writes.every((w) => w.status === 400), JSON.stringify(writes));
+		ok("…the host file is unchanged and nothing was created outside", fs.readFileSync(secret, "utf8") === "SECRET=hunter2\n" && !fs.existsSync(path.join(outside, "new.txt")) && !fs.existsSync(path.join(outside, "deep")) && !fs.existsSync(path.join(outside, "made-by-write.txt")));
+		ok("write onto an in-root symlink → refused (never written through)", (await put("alias")).status === 400 && fs.readFileSync(path.join(ws, "a.txt"), "utf8") === "hello\n");
+		const okWrite = await put("src/new/dir/n.txt", "fine\n");
+		ok("a plain write (new parent dirs) → 200", okWrite.status === 200 && fs.readFileSync(path.join(ws, "src/new/dir/n.txt"), "utf8") === "fine\n");
+		const overWrite = await put("a.txt", "hi");
+		ok("overwrite a file with shorter content → 200, truncated", overWrite.status === 200 && fs.readFileSync(path.join(ws, "a.txt"), "utf8") === "hi");
+		ok("lexical escapes still → 400", (await put("../../escape.txt")).status === 400 && (await app.request(`${F}/file?path=${encodeURIComponent("/etc/hosts")}`, { headers: authH })).status === 400);
+		sessionStores.for("smoke-user").delete(fsess.id);
+		fs.rmSync(path.dirname(ws), { recursive: true, force: true });
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
 
 	// ── Cost per run: gateway usage → session → task → /api/me ───────────────
 	console.log("\n== cost ==");

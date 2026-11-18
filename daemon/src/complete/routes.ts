@@ -105,7 +105,8 @@ export async function completeHandler(c: Context<AppEnv>) {
     return c.json({ completion: cleanCompletion(text) });
   } catch (err) {
     if (ac.signal.aborted) return c.json({ completion: "" });
-    const messageText = err instanceof Error ? err.message : String(err);
-    return c.json({ error: "upstream error", detail: messageText }, 502);
+    // The detail (upstream status, request ids, account hints) stays in the log.
+    console.error("[complete] upstream error:", err instanceof Error ? err.message : err);
+    return c.json({ error: "upstream error" }, 502);
   }
 }

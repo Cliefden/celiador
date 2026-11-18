@@ -19,8 +19,14 @@ export function Navbar() {
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
     };
   }, [open]);
 
@@ -37,7 +43,7 @@ export function Navbar() {
           <span className="text-[15px] font-semibold tracking-tight">{site.name}</span>
         </Link>
 
-        <nav className="hidden items-center gap-8 md:flex">
+        <nav aria-label="Main" className="hidden items-center gap-8 md:flex">
           {nav.map((item) => (
             <Link
               key={item.href}
@@ -67,7 +73,10 @@ export function Navbar() {
         </div>
 
         <button
-          aria-label="Toggle menu"
+          type="button"
+          aria-label={open ? "Close menu" : "Open menu"}
+          aria-expanded={open}
+          aria-controls="mobile-menu"
           className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line text-white md:hidden"
           onClick={() => setOpen((v) => !v)}
         >
@@ -76,7 +85,7 @@ export function Navbar() {
       </Container>
 
       {open && (
-        <div className="border-t border-line bg-ink md:hidden">
+        <nav id="mobile-menu" aria-label="Menu"className="border-t border-line bg-ink md:hidden">
           <Container className="flex flex-col gap-1 py-4">
             {nav.map((item) => (
               <Link
@@ -97,7 +106,7 @@ export function Navbar() {
               </Button>
             </div>
           </Container>
-        </div>
+        </nav>
       )}
     </header>
   );

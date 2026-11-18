@@ -89,7 +89,13 @@ async function doRefresh(userId: string, taskId: string): Promise<Task | undefin
   const store = taskStores.for(userId);
   const task = store.get(taskId);
   if (!task) return undefined;
-  attempted.set(`${userId}:${taskId}`, Date.now());
+  const now = Date.now();
+  // Entries older than PR_REFRESH_MS no longer hold anything back: drop them
+  // (once the map has grown), so finished and deleted tasks don't stay forever.
+  if (attempted.size > 256) {
+    for (const [key, at] of attempted) if (now - at >= PR_REFRESH_MS) attempted.delete(key);
+  }
+  attempted.set(`${userId}:${taskId}`, now);
   const number = task.pr?.number ?? prNumberFromUrl(task.prUrl);
   let pull: any;
   if (number) {
