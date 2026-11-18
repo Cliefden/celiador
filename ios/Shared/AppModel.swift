@@ -192,6 +192,8 @@ final class AppModel {
         #endif
         Api.shared.signOut()
         pollTask?.cancel()
+        pollTask = nil
+        lastPublished = nil
         taskStream?.stop()
         taskStream = nil
         sessions = []
@@ -206,22 +208,41 @@ final class AppModel {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
+    /// Foreground ↔ background, from SwiftUI's `scenePhase`. In the background
+    /// the poll loop stops and the event streams pause (`AppLifecycle`) — push
+    /// and Live Activity pushes cover that time; back in the foreground
+    /// everything refreshes at once instead of waiting for the next tick.
+    func setActive(_ active: Bool) {
+        AppLifecycle.set(active: active)
+        guard case .signedIn = phase else { return }
+        if active {
+            if pollTask == nil { startPollLoop() }
+        } else {
+            pollTask?.cancel()
+            pollTask = nil
+        }
+    }
+
     /// The slim daemon has no global event feed, so the session *list* is polled;
     /// the live transcript of an open session streams over its own SSE channel.
     private func startPolling() {
-        pollTask?.cancel()
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.refresh()
-                await self?.refreshTasks()
-                try? await Task.sleep(for: .seconds(15))
-            }
-        }
+        startPollLoop()
         // Task changes (state, awaiting, PR stats) arrive live between polls.
         taskStream?.stop()
         let stream = TaskEventStream { [weak self] task in self?.upsert(task) }
         taskStream = stream
         stream.start()
+    }
+
+    private func startPollLoop() {
+        pollTask?.cancel()
+        pollTask = AppLifecycle.isActive ? Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                await self?.refreshTasks()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        } : nil
     }
 
     /// Re-list the queue (GET /api/tasks).
@@ -361,12 +382,25 @@ final class AppModel {
         let items = ordered.prefix(5).map {
             ChatSnapshotItem(id: $0.id, name: $0.title, bucket: bucket($0.state), detail: detail($0))
         }
-        SharedStore.writeSnapshot(ChatSnapshot(
+        let snapshot = ChatSnapshot(
             needsYou: needsYouCount,
             working: running.count,
             items: Array(items),
             updatedAt: Date()
-        ))
-        WidgetCenter.shared.reloadAllTimelines()
+        )
+        // Always write (the widget reads `updatedAt` to tell fresh from stale),
+        // but only spend a WidgetKit reload when what it shows changed — or
+        // often enough that a widget showing unchanged data isn't marked stale.
+        SharedStore.writeSnapshot(snapshot)
+        let unchanged = lastPublished.map { $0.sameContent(as: snapshot) } ?? false
+        if !unchanged || Date().timeIntervalSince(lastReload) > ChatSnapshot.staleAfter / 3 {
+            WidgetCenter.shared.reloadAllTimelines()
+            lastReload = Date()
+        }
+        lastPublished = snapshot
     }
+
+    /// The last widget snapshot written, and when WidgetKit was last told to reload.
+    private var lastPublished: ChatSnapshot?
+    private var lastReload = Date.distantPast
 }

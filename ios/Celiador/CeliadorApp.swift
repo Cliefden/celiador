@@ -6,6 +6,7 @@ import PortfolioFeedback
 struct CeliadorApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         Telemetry.configure()
@@ -21,6 +22,15 @@ struct CeliadorApp: App {
                 .environment(model)
                 .tint(Theme.accent)
                 .portfolioFeedback(Feedback.configuration)
+                .onChange(of: scenePhase) { _, phase in
+                    // Pause polling + streams in the background, refresh at once on
+                    // return. `.inactive` (app switcher, Control Center) changes nothing.
+                    switch phase {
+                    case .active: model.setActive(true)
+                    case .background: model.setActive(false)
+                    default: break
+                    }
+                }
                 .onOpenURL { url in
                     guard url.scheme == AppScheme.scheme else { return }
                     switch url.host {

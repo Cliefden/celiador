@@ -93,6 +93,21 @@ struct ChatSnapshot: Codable {
     var updatedAt: Date
 
     static let empty = ChatSnapshot(needsYou: 0, working: 0, items: [], updatedAt: .distantPast)
+
+    /// After this long without a write from the app the widget says its data is
+    /// old (the app writes every poll while open; nothing while it's closed).
+    static let staleAfter: TimeInterval = 30 * 60
+
+    /// Old data at `date`: written once, but not for `staleAfter`. The empty
+    /// placeholder (never written) isn't stale, just empty.
+    func isStale(at date: Date) -> Bool {
+        updatedAt != .distantPast && date.timeIntervalSince(updatedAt) > Self.staleAfter
+    }
+
+    /// Same counts and rows, ignoring `updatedAt`: nothing the widget shows changed.
+    func sameContent(as other: ChatSnapshot) -> Bool {
+        needsYou == other.needsYou && working == other.working && items == other.items
+    }
 }
 
 /// Read/write the widget snapshot in the shared App Group container.
