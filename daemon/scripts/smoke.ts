@@ -1378,6 +1378,28 @@ async function main(): Promise<void> {
 	// account deletion / boot sweep, not in executeServerRun's finally.
 	ok("workspace retained after run", fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-1")));
 
+	// ── Boot sweep + shutdown flush ───────────────────────────────────────────
+	console.log("\n== restart ==");
+	const { reapOrphanRuns } = await import("../src/runner/reap.ts");
+	const keptRes = await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ title: "kept", origin: "editor", runner: "editor" }) });
+	const keptSid = ((await keptRes.json()) as { session: { id: string } }).session.id;
+	fs.mkdirSync(path.join(runsRoot(), "smoke-user", keptSid, "repo"), { recursive: true });
+	fs.mkdirSync(path.join(runsRoot(), "gone-user", "gone-run", "repo"), { recursive: true });
+	const reaped = await reapOrphanRuns();
+	ok("boot sweep keeps a live session's workspace (file browsing, follow-ups)", fs.existsSync(path.join(runsRoot(), "smoke-user", keptSid, "repo")), reaped.join(","));
+	ok("boot sweep removes workspaces whose session is gone", !fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-1")) && !fs.existsSync(path.join(runsRoot(), "gone-user")) && reaped.includes("smoke-user/srv-1"), reaped.join(","));
+	await reapOrphanRuns((_u, runId) => runId !== keptSid);
+	ok("boot sweep removes a workspace idle past the TTL", !fs.existsSync(path.join(runsRoot(), "smoke-user", keptSid)));
+	// Debounced writes (event log 1 s, quota 2 s) are flushed on SIGTERM instead of lost.
+	const { flushStores } = await import("../src/shutdown.ts");
+	const { agentQuota } = await import("../src/agent/quota.ts");
+	await app.request(`http://localhost/api/sessions/${keptSid}/events`, { method: "POST", headers: authH, body: JSON.stringify({ kind: "message", role: "assistant", text: "flush-me" }) });
+	agentQuota.record("flush-user", { input: 7, output: 1, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, model: AGENT_MODEL });
+	flushStores();
+	const flushedLog = path.join(HOME, "data", "sessions", "log", "smoke-user", `${keptSid}.json`);
+	ok("flush: the last event is on disk at once", fs.existsSync(flushedLog) && fs.readFileSync(flushedLog, "utf8").includes("flush-me"));
+	const quotaFile = path.join(HOME, "data", "quota", "usage.json");
+	ok("flush: the quota's last usage is on disk at once", fs.existsSync(quotaFile) && fs.readFileSync(quotaFile, "utf8").includes("flush-user"));
 	// ── Phone file browser on a cloud workspace: symlinks never lead out of it (#83) ──
 	console.log("\n== workspace files ==");
 	{

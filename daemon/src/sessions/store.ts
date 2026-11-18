@@ -439,6 +439,17 @@ export class SessionStores {
     return store;
   }
 
+  /** Write every pending (debounced) save now — on shutdown. */
+  flushAll(): void {
+    for (const store of this.stores.values()) {
+      try {
+        store.flush();
+      } catch (err) {
+        console.error("[sessions] flush failed:", err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
   /** Forget everything stored for a user (account deletion). */
   purge(userId: string): void {
     this.stores.get(userId)?.discard();
