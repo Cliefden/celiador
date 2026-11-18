@@ -1287,6 +1287,29 @@ async function main(): Promise<void> {
 		daemon.close();
 	}
 
+	// ── Small leaks and error handling (#91) ──────────────────────────────────
+	console.log("\n== cleanups ==");
+	{
+		const { sessionBus } = await import("../src/sessions/bus.ts");
+		const detachA = sessionBus.attachRunner("fs-a", () => undefined, () => undefined);
+		const pendingFs = sessionBus.requestFs("fs-a", { kind: "fs.list", requestId: "fs-req-1", path: "" }, 5_000);
+		const fsResult = { kind: "fs.result" as const, requestId: "fs-req-1", ok: true };
+		ok("fs.result from another session can't answer a file request", sessionBus.resolveFs("fs-b", "fs-req-1", fsResult) === false);
+		ok("…its own session's can", sessionBus.resolveFs("fs-a", "fs-req-1", fsResult) === true && (await pendingFs).ok === true);
+		detachA();
+		const { isChatId } = await import("../src/db/repo.ts");
+		ok("chat ids: only uuids reach Postgres (anything else is a 404, not a 500)", isChatId("7dad8fd0-795c-4402-9202-492e76a36f09") && !isChatId("nope") && !isChatId("7dad8fd0-795c-4402-9202-492e76a36f09' or 1=1"));
+		const { agentQuota } = await import("../src/agent/quota.ts");
+		const slot = agentQuota.acquire("sweep-user");
+		if ("release" in slot) slot.release();
+		const before = agentQuota.minuteWindows();
+		agentQuota.sweepMinute(Date.now() + 61_000, true);
+		ok("quota: idle per-minute windows are dropped", before > 0 && agentQuota.minuteWindows() < before, `${before} → ${agentQuota.minuteWindows()}`);
+		const comp = await app.request("http://localhost/api/complete", { method: "POST", headers: authH, body: JSON.stringify({ prefix: "const x = ", language: "typescript" }) });
+		const compBody = (await comp.json()) as Record<string, unknown>;
+		ok("/api/complete: an upstream failure → 502 without the upstream detail", comp.status === 502 && compBody.detail === undefined && compBody.error === "upstream error", `${comp.status} ${JSON.stringify(compBody)}`);
+	}
+
 	// ── Server runner (offline local repo) ────────────────────────────────────
 	console.log("\n== server runner ==");
 	const repo = path.join(HOME, "origin");

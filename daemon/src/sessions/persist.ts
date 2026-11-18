@@ -37,6 +37,39 @@ interface StreamedReply {
 const replies = new Map<string, StreamedReply>();
 
 /**
+ * Last event per session. `chains` is dropped when a session ends, but one that
+ * never ends (a closed editor window, a crashed runner) would keep its chain and
+ * half-streamed reply forever; sessions idle this long are forgotten (a later
+ * event just upserts the chat row again).
+ */
+const lastSeen = new Map<string, number>();
+const IDLE_MS = 6 * 60 * 60 * 1000;
+const SWEEP_MS = 10 * 60 * 1000;
+let lastSweep = 0;
+
+function sweepIdle(now: number): void {
+  if (now - lastSweep < SWEEP_MS) return;
+  lastSweep = now;
+  for (const [id, at] of lastSeen) {
+    if (now - at < IDLE_MS) continue;
+    lastSeen.delete(id);
+    chains.delete(id);
+    replies.delete(id);
+  }
+}
+
+/** Sizes of the per-session maps (for the smoke test). */
+export function persistMapSizes(): { chains: number; replies: number; lastSeen: number } {
+  return { chains: chains.size, replies: replies.size, lastSeen: lastSeen.size };
+}
+
+/** Test seam: run the idle sweep as of `now`. */
+export function sweepPersistForTests(now: number): void {
+  lastSweep = 0;
+  sweepIdle(now);
+}
+
+/**
  * Queue a durable write for this event. Never throws and never blocks the relay.
  * Activity / tool events are live-only. Deltas are buffered and written as one
  * assistant message when the reply ends (the next non-delta, non-activity
@@ -45,6 +78,9 @@ const replies = new Map<string, StreamedReply>();
  */
 export function persistSession(userId: string, session: Session, event: SessionEvent): void {
   if (!getPool()) return;
+  const now = Date.now();
+  sweepIdle(now);
+  lastSeen.set(session.id, now);
   let reply: StreamedReply | undefined;
   if (event.kind === "delta") {
     const r = replies.get(session.id);
