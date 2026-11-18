@@ -27,9 +27,9 @@ export function Footer() {
 
           {footerLinks.map((col) => (
             <div key={col.heading}>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-fog-dim">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-fog-dim">
                 {col.heading}
-              </h3>
+              </h2>
               <ul className="mt-4 space-y-3">
                 {col.links.map((l) => (
                   <li key={l.label}>

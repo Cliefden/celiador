@@ -17,8 +17,14 @@ const cm = "text-fog-dim";
 const pl = "text-[#89ddff]";
 
 export function EditorMock() {
+  // A picture of the editor, not a working UI: one image to assistive tech,
+  // with no fake focusable controls inside.
   return (
-    <div className="ring-brand overflow-hidden rounded-2xl border border-line bg-surface">
+    <div
+      role="img"
+      aria-label="Illustration: the Celiador editor with code on the left and the agent's chat on the right, offering to accept or reject its diff."
+      className="ring-brand overflow-hidden rounded-2xl border border-line bg-surface"
+    >
       {/* title bar */}
       <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-4 py-3">
         <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
@@ -80,16 +86,16 @@ export function EditorMock() {
               <span className="font-mono text-brand-2">checkout.ts</span> and wired the token into{" "}
               <span className="font-mono text-brand-2">capture()</span>.
               <div className="mt-2 flex items-center gap-2">
-                <button className="rounded-lg bg-brand px-2.5 py-1 text-xs font-medium text-white">
+                <span className="rounded-lg bg-brand-fill px-2.5 py-1 text-xs font-medium text-white">
                   Accept diff
-                </button>
-                <button className="rounded-lg border border-line px-2.5 py-1 text-xs text-fog">
+                </span>
+                <span className="rounded-lg border border-line px-2.5 py-1 text-xs text-fog">
                   Reject
-                </button>
+                </span>
               </div>
             </div>
             <div className="flex items-center gap-1.5 pl-1 text-xs text-fog-dim">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand" />
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-fill" />
               2 files · 1 diff pending review
             </div>
           </div>

@@ -53,7 +53,7 @@ async function main(): Promise<void> {
 	await tick();
 	ok("new address → 202 { ok }", r1.status === 202 && (await r1.json() as { ok?: boolean }).ok === true);
 	ok("…and one confirmation mail, to the normalized address, for the asked list", sent.length === 1 && sent[0]!.email === "ada@example.com" && sent[0]!.lists.join() === "windows", JSON.stringify(sent));
-	ok("the links carry an id + token, never the address", !sent[0]!.confirmUrl.includes("ada") && /^https:\/\/smoke\.test\/api\/waitlist\/confirm\?id=[0-9a-f]{32}&t=/.test(sent[0]!.confirmUrl), sent[0]!.confirmUrl);
+	ok("the links carry an id + token, never the address", !/ada(@|%40)|example/i.test(sent[0]!.confirmUrl) && /^https:\/\/smoke\.test\/api\/waitlist\/confirm\?id=[0-9a-f]{32}&t=/.test(sent[0]!.confirmUrl), sent[0]!.confirmUrl);
 	const r2 = await post({ email: "ada@example.com", lists: ["windows"] });
 	await tick();
 	ok("same address again → the same 202, but no second mail (throttled)", r2.status === 202 && sent.length === 1);

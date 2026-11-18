@@ -17,11 +17,29 @@ on:
       - daemon/**
       - .github/workflows/ci.yml
   workflow_call:
+    inputs:
+      called:
+        # Set by every caller (deploy.yml); never set on pull_request/push,
+        # where the `inputs` context is empty.
+        description: True when another workflow calls this one
+        type: boolean
+        default: true
 
-# One in-flight run per ref; a push and its PR share a group so we don't run twice.
+# Standalone (pull_request / push to a branch): one run per PR or branch, and a
+# newer push cancels the older run.
+#
+# Called from deploy.yml: never cancelled, and in a group of its own. Inside a
+# called workflow the `github` context is the CALLER's — github.event_name is
+# push or workflow_dispatch, never 'workflow_call', and github.workflow is the
+# caller's name — so the old guard (`github.event_name != 'workflow_call'`)
+# never matched: every deploy's CI ran with cancel-in-progress on, in the group
+# "Deploy daemon-<ref>". A push-to-main deploy (group deploy-daemon-dev) and a
+# dispatch of main to test (deploy-daemon-test) then shared that CI group and
+# cancelled each other's CI, failing the deploy. The `called` input is the
+# signal that does reach the callee.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
+  group: ${{ inputs.called && format('ci-called-{0}-{1}', github.run_id, github.run_attempt) || format('ci-{0}', github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ !inputs.called }}
 
 defaults:
   run:

@@ -17,6 +17,10 @@ struct RunTone: Equatable {
     static let done = RunTone(symbol: "checkmark", color: Theme.added, label: "Done")
     static let idle = RunTone(symbol: "minus", color: .gray, label: "Idle")
 
+    /// Still going (working or waiting on you): the elapsed timer keeps counting.
+    /// A settled run's final Live Activity state hides it.
+    var isLive: Bool { self == .working || self == .needsYou }
+
     /// The widget snapshot's bucket: "needs-you" | "working" | "ready" | "error".
     static func bucket(_ bucket: String) -> RunTone {
         switch bucket {

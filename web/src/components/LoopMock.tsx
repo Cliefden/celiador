@@ -44,7 +44,11 @@ function Comment({ author, when, children }: { author: string; when: string; chi
 /** The GitHub issue, as the run leaves it. */
 export function IssueMock() {
   return (
-    <div className="ring-brand overflow-hidden rounded-2xl border border-line bg-surface">
+    <div
+      role="img"
+      aria-label="Illustration: a GitHub issue labelled celiador, with comments from Celiador saying the run was picked up on a branch and, later, that it opened a pull request that closes the issue."
+      className="ring-brand overflow-hidden rounded-2xl border border-line bg-surface"
+    >
       <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-4 py-3">
         <GithubIcon className="h-4 w-4 text-fog" />
         <span className="font-mono text-xs text-fog-dim">acme/storefront · issue #{issue.number}</span>
@@ -53,7 +57,7 @@ export function IssueMock() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[15px] font-semibold text-white">{issue.title}</span>
-            <span className="rounded-full border border-brand/40 bg-brand/15 px-2 py-0.5 font-mono text-[11px] text-brand">
+            <span className="rounded-full border border-brand/40 bg-brand/15 px-2 py-0.5 font-mono text-[11px] text-[#a397ff]">
               celiador
             </span>
           </div>
@@ -77,7 +81,11 @@ export function IssueMock() {
 /** The phone, with the pull request ready for review. */
 export function PhoneMock() {
   return (
-    <div className="mx-auto w-full max-w-[300px] rounded-[2rem] border border-line bg-surface p-2 shadow-[0_30px_80px_-30px_rgba(124,107,255,0.6)]">
+    <div
+      role="img"
+      aria-label="Illustration: the Celiador iPhone app with the agent's pull request ready for review, a summary of its change, and buttons to send a follow-up or approve and merge; another run is in progress below."
+      className="mx-auto w-full max-w-[300px] rounded-[2rem] border border-line bg-surface p-2 shadow-[0_30px_80px_-30px_rgba(124,107,255,0.6)]"
+    >
       <div className="overflow-hidden rounded-[1.6rem] border border-line bg-ink">
         <div className="flex items-center justify-between px-5 pt-4 text-[11px] text-fog-dim">
           <span>9:41</span>
@@ -102,14 +110,14 @@ export function PhoneMock() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-[12px]">
             <span className="rounded-xl border border-line px-3 py-2.5 text-center text-fog">Follow-up</span>
-            <span className="flex items-center justify-center gap-1.5 rounded-xl bg-brand px-3 py-2.5 font-medium text-white">
+            <span className="flex items-center justify-center gap-1.5 rounded-xl bg-brand-fill px-3 py-2.5 font-medium text-white">
               <CheckIcon className="h-3.5 w-3.5" />
               Approve and merge
             </span>
           </div>
           <div className="mt-4 text-xs font-medium uppercase tracking-wider text-fog-dim">Running</div>
           <div className="mt-2 flex items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2.5 text-[12px] text-fog">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand" />
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-fill" />
             <span className="truncate">#145 Rename the billing module</span>
           </div>
         </div>

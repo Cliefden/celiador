@@ -80,6 +80,12 @@ export async function updateProfile(
 
 // ── Chats & messages ─────────────────────────────────────────────────────────
 
+/** chats.id is a uuid column: anything else would make Postgres throw (a 500), not miss (a 404). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isChatId(id: string): boolean {
+  return UUID.test(id);
+}
+
 export async function listChats(userId: string, limit = 100): Promise<ChatRow[]> {
   const pool = getPool();
   if (!pool) return [];
@@ -96,7 +102,7 @@ export async function getChat(
   chatId: string
 ): Promise<{ chat: ChatRow; messages: MessageRow[] } | null> {
   const pool = getPool();
-  if (!pool) return null;
+  if (!pool || !isChatId(chatId)) return null;
   const chat = await pool.query<ChatRow>(
     `select ${CHAT_COLS} from public.chats where id = $1 and user_id = $2`,
     [chatId, userId]
@@ -113,7 +119,7 @@ export async function getChat(
 
 export async function renameChat(userId: string, chatId: string, title: string): Promise<ChatRow | null> {
   const pool = getPool();
-  if (!pool) return null;
+  if (!pool || !isChatId(chatId)) return null;
   const { rows } = await pool.query<ChatRow>(
     `update public.chats set title = $3, updated_at = now()
      where id = $1 and user_id = $2 returning ${CHAT_COLS}`,
@@ -124,32 +130,10 @@ export async function renameChat(userId: string, chatId: string, title: string):
 
 export async function deleteChat(userId: string, chatId: string): Promise<boolean> {
   const pool = getPool();
-  if (!pool) return false;
+  if (!pool || !isChatId(chatId)) return false;
   const { rowCount } = await pool.query(
     `delete from public.chats where id = $1 and user_id = $2`,
     [chatId, userId]
   );
   return (rowCount ?? 0) > 0;
-}
-
-// ── Account deletion ─────────────────────────────────────────────────────────
-
-/**
- * Delete a user from auth.users. This cascades to profiles, chats, and messages
- * via ON DELETE CASCADE foreign keys in the schema. Requires elevated privileges:
- * the daemon must connect with a role that has DELETE on auth.users.
- * 
- * Throws on error (database not configured or permission denied).
- */
-export async function deleteAuthUser(userId: string): Promise<void> {
-  const pool = getPool();
-  if (!pool) throw new Error("database not configured");
-  try {
-    await pool.query(`delete from auth.users where id = $1`, [userId]);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("permission denied")) {
-      throw new Error("database role lacks permission to delete auth users");
-    }
-    throw err;
-  }
 }

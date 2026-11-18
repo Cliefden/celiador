@@ -660,12 +660,26 @@ final class Api {
     // MARK: - Push
 
     /// APNs environment this build targets — the daemon uses it to pick the
-    /// sandbox vs production APNs host.
+    /// sandbox vs production APNs host. Comes from the `APS_ENV` build setting
+    /// (Info.plist `CELIADOR_APS_ENV`), not from DEBUG: the Dev channel is a
+    /// Debug config, yet its TestFlight builds are signed for production APNs.
     var pushEnv: String {
-        #if DEBUG
+        #if targetEnvironment(simulator)
         return "sandbox"
         #else
-        return "production"
+        let raw = (Bundle.main.object(forInfoDictionaryKey: "CELIADOR_APS_ENV") as? String)?
+            .trimmingCharacters(in: .whitespaces).lowercased()
+        switch raw {
+        case "sandbox", "development": return "sandbox"
+        case "production": return "production"
+        default:
+            // Older build without the key: the previous behaviour.
+            #if DEBUG
+            return "sandbox"
+            #else
+            return "production"
+            #endif
+        }
         #endif
     }
 
