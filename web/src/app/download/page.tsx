@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { EmailCapture } from "@/components/EmailCapture";
@@ -6,10 +7,12 @@ import { AppleIcon, CheckIcon, DownloadIcon } from "@/components/icons";
 import { site } from "@/lib/site";
 import { formatReleaseDate, latestHref, latestMacDmgHref, latestMacRelease, latestRelease, shortCommit } from "@/lib/releases";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/download",
   title: "Download",
-  description: `Download the ${site.name} editor for macOS or Linux, the nicest runner for the loop; or keep VS Code or Cursor and install Celiador Remote.`,
-};
+  description:
+    `Download the ${site.name} editor for macOS or Linux, the nicest runner for the loop; or keep VS Code or Cursor and install Celiador Remote.`,
+});
 
 export default async function DownloadPage() {
   const [release, linux] = await Promise.all([latestMacRelease(), latestRelease("linux-x64")]);
@@ -62,7 +65,7 @@ export default async function DownloadPage() {
               {release?.dmgUrl ? (
                 <a
                   href={latestMacDmgHref}
-                  className="group inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3.5 text-sm font-medium text-white shadow-[0_10px_40px_-12px_rgba(124,107,255,0.9)] transition hover:brightness-110"
+                  className="group inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand-fill px-5 py-3.5 text-sm font-medium text-white shadow-[0_10px_40px_-12px_rgba(124,107,255,0.9)] transition hover:brightness-110"
                 >
                   <DownloadIcon className="h-4 w-4" />
                   Download .dmg

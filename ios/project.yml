@@ -55,6 +55,9 @@ targets:
         # Short commit, stamped by the Build iOS workflow at archive time
         # (empty for a build from Xcode); shown on the Settings build card.
         CELIADOR_COMMIT: $(CELIADOR_COMMIT)
+        # APNs environment the daemon should push to ("sandbox"/"production");
+        # see APS_ENV in Config/*.xcconfig. Read by Api.pushEnv.
+        CELIADOR_APS_ENV: $(APS_ENV)
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         NSSupportsLiveActivities: true

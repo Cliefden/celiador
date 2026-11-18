@@ -63,18 +63,34 @@ curl -s localhost:4661/api/config
 | POST | `/api/github/account/connect` | user | `{authorizeUrl, installUrl, expiresIn}`: open one in a browser to connect GitHub (the App's user authorization) |
 | GET/POST | `/api/github/callback`, `/api/github/callback/confirm` | none (browser) | GitHub's redirect back; a confirm page ("connect @login to <email>?"), then the proof check of the user's existing links |
 | POST | `/api/github/webhook` | GitHub signature (`CELIADOR_GITHUB_WEBHOOK_SECRET` or the GitHub App's secret) | `issues` labelled `celiador`, or a collaborator's `@celiador` comment → a task, dispatched to the user's editor (`start-task` on the control stream) or, when no online editor has the repo and `CELIADOR_RUNNER_AGENT=sandbox`, run in the cloud (needs the App on the repo) — within `CELIADOR_TASK_CONCURRENCY` (default 3); a collaborator's comment on an issue whose task is `awaiting` → the answer / approve / deny, relayed to the run and acknowledged with a 👍; a merged `pull_request` on a task's branch → the task is `merged`; `pull_request` opened/synchronize/reopened, `check_suite`/`check_run` completed and `status` → the task's `pr` is refreshed; a `check_suite`/`check_run` that failed on a pr-open task → a fix follow-up (once per head sha, at most `CELIADOR_TASK_CI_FIX_ATTEMPTS` (default 2) per task) |
-| GET | `/api/github/app/new`, `/api/github/app/setup` | none (GitHub enforces org ownership) | One-time creation of the Celiador GitHub App via GitHub's manifest flow; credentials land in `data/github-app.json`. With the app installed the daemon narrates runs on the issue (picked up, plan, questions / approvals, PR opened, checks failed, failed), writes the PR body, pushes and opens PRs for cloud runs, and clones private repos |
+| GET+POST | `/api/github/app/new`, GET `/api/github/app/setup` | setup token (`CELIADOR_GITHUB_SETUP_TOKEN`; 404 when unset, 409 once an app is stored) | One-time creation of the Celiador GitHub App via GitHub's manifest flow; credentials land in `data/github-app.json`. With the app installed the daemon narrates runs on the issue (picked up, plan, questions / approvals, PR opened, checks failed, failed), writes the PR body, pushes and opens PRs for cloud runs, and clones private repos |
 | POST | `/api/agent/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Locked Claude proxy, daemon-owned 3-tool set (SSE). `X-Celiador-Mirror: <mirrorKey>` attributes the request's tokens to that relay session's `usage` |
 | POST | `/api/anthropic/v1/messages` | user JWT **or** `CELIADOR_AGENT_TOKEN` | First-party gateway: forwards caller's own system + tools; daemon keeps key/model/caps/quota (SSE). Same `X-Celiador-Mirror` attribution; a runner token's run id attributes without the header |
 | GET | `/api/anthropic/v1/models` | user JWT **or** `CELIADOR_AGENT_TOKEN` | Model list (proxied) |
+| POST | `/api/complete` | user | Inline completion ("Tab autocomplete"): `{prefix, suffix?, language?}` → `{completion}`, one non-streaming call to `CELIADOR_COMPLETE_MODEL`; its own per-user limits (`CELIADOR_COMPLETE_RPM`, `CELIADOR_COMPLETE_DAILY_OUTPUT_TOKENS`), separate from the agent budget; 429 with `retryAfter` |
 | POST | `/api/push/register` | user | Register an APNs device token |
 | DELETE | `/api/push/register` | user | Remove a device token |
 | POST | `/api/push/activity` | user | Register a Live Activity token (`activityId`) |
 | POST | `/api/push/test` | user | Send a test alert to the caller's devices |
-| * | `/api/sessions/*` | user | Agent-session relay (editor = runner, phone = watcher) |
+| PUT | `/api/presence/workspaces` | user (editor) | Editor heartbeat: `{clientId, workspaces: [{name, remoteUrl (https), branch?}]}` (≤ 50) replaces that editor's open repos; also re-runs task dispatch |
+| GET | `/api/presence/workspaces` | user (phone) | Repos open in the user's editor(s) right now, de-duped by remote URL (the phone's "from your editor" picker) |
+| GET | `/api/presence/commands` | user (editor) | The editor's control stream (SSE): `start-run` (from the phone) and `start-task` (the queue's dispatch) |
+| POST | `/api/presence/requests` | user (phone) | "Run on your editor": `{remoteUrl, name?, branch?, prompt?}` → a `start-run` to every online editor (no prompt = an idle chat); 409 when none is online |
+| POST | `/api/sessions` | user | Create a relay session `{title?, origin, runner, mirrorKey?, taskId?}`; `runner: "server"` + `{repo: {url, branch?, existingBranch?}, prompt}` starts a cloud session on a git worktree (`docs/CLOUD_RUNS.md`) |
+| GET | `/api/sessions`, `/api/sessions/:id` | user | List the user's sessions / one session |
+| DELETE | `/api/sessions/:id` | user | Delete a session (and a cloud session's worktree) |
+| GET | `/api/sessions/cloud/repos`, `/api/sessions/cloud/branches?remoteUrl=` | user | Repos a cloud session can start on (linked, whether the App can act) / one repo's branches, default first |
+| GET | `/api/sessions/:id/events` | user (watcher) | The session's event log (SSE): replay after `Last-Event-ID` / `?cursor=`, then live |
+| POST | `/api/sessions/:id/message`, `/:id/approvals/:requestId`, `/:id/answers/:requestId`, `/:id/cancel` | user (watcher) | Steer the run: a follow-up message, approve / reject, answer a question, cancel |
+| GET | `/api/sessions/:id/commands` | user (runner) | The runner's command stream (SSE) |
+| POST | `/api/sessions/:id/events` | user (runner) | Publish a batch of events (≤ 500), and `fs.result` replies to file / git requests |
+| GET/PUT | `/api/sessions/:id/files?path=`, `/api/sessions/:id/file?path=` | user (watcher) | Browse / read / write the run's working copy (a cloud run's worktree here, an editor run's via the relay) |
+| GET/POST | `/api/sessions/:id/git/{status,diff}` · `/git/{commit,revert,push,pr,merge}` | user (watcher) | Review the run's changes, then commit, push and open / merge its PR (the editor's git, or the App for a cloud session) |
 | GET/PATCH | `/api/profile` | user | Profile (DB) |
 | GET/PATCH/DELETE | `/api/chats`, `/api/chats/:id` | user | Durable chat history (DB) |
 | DELETE | `/api/account` | user (supabase mode) | Delete the caller's account (GoTrue user + DB rows + relay/push files) |
+| GET | `/api/admin/usage?days=30` | admin (`CELIADOR_ADMIN_USER_IDS` / `CELIADOR_ADMIN_EMAILS`; 404 for anyone else) | The paid key's use per UTC day (≤ 90 days, today live), per account with its email and signup date |
+| GET | `/api/extensions/control` | none | The editor's extension control manifest (`product.json` `extensionsGallery.controlUrl`): Open VSX's malicious list (cached 6 h) plus Celiador's own entries (a second AI layer = warning, Cursor-only = blocked) |
 | POST | `/api/waitlist` | none (rate limited) | The site's "get notified" form: `{email, lists?: ["early-access"\|"windows"\|"linux"]}` → always 202 `{ok:true}` (never says whether the address is known); mails a double-opt-in link. 400 bad address, 429 per-IP limit, 503 when no SMTP is configured (see §Waitlist) |
 | GET/POST | `/api/waitlist/confirm`, `/api/waitlist/unsubscribe` | link token | The mail's links: GET shows a button, POST acts (unsubscribe also takes RFC 8058 one-click) |
 | GET/DELETE | `/api/admin/waitlist` | admin | Export sign-ups (`?status=confirmed\|pending\|all`, `?list=`, `?format=csv`) / erase one (`?email=`) — `scripts/admin-waitlist.py` |
@@ -109,6 +125,11 @@ src/
   runner/        cloud runs: manager, run, sandbox (Docker, no network), workspace (clone / git helper), agent
   github/        the Celiador GitHub App (manifest setup, installation tokens) + access.ts (users' GitHub connection, proof of access per linked repo)
   open/          /api/open/* deep-link bounce pages
+  presence/      /api/presence/*: editor heartbeat (open repos) + the editor control stream
+  complete/      /api/complete (inline completion) + its own rate limiter
+  admin/         /api/admin/usage (operator view)
+  me/            /api/me
+  extensions/    /api/extensions/control (extension control manifest)
   waitlist/      the site's double-opt-in waitlist: store (data/waitlist/list.json), mailer (SMTP), routes + admin export
 ```
 

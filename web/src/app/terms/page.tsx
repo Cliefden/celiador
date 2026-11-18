@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import { LegalPage } from "../legal/legal";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/terms",
   title: "Terms of Service",
-  description: "The terms for using Celiador.",
-};
+  description:
+    "The terms for using Celiador.",
+});
 
 export default function TermsPage() {
   return (

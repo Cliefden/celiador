@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import Link from "next/link";
 import { Button, Container, Eyebrow, SectionHeading } from "@/components/ui";
 import { FAQ } from "@/components/FAQ";
@@ -6,10 +7,12 @@ import { CheckIcon } from "@/components/icons";
 import { tiers } from "@/lib/site";
 import { formatLimit, formatUsdLimit, publishedLimits } from "@/lib/limits";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/pricing",
   title: "Pricing",
-  description: "Free during early access, with the limits we enforce published as numbers.",
-};
+  description:
+    "Free during early access, with the limits we enforce published as numbers.",
+});
 
 export default async function PricingPage() {
   const published = await publishedLimits();
@@ -52,11 +55,11 @@ export default async function PricingPage() {
                 }
               >
                 {t.featured && (
-                  <span className="absolute right-6 top-6 rounded-full bg-brand px-2.5 py-1 text-xs font-medium text-white">
+                  <span className="absolute right-6 top-6 rounded-full bg-brand-fill px-2.5 py-1 text-xs font-medium text-white">
                     Today
                   </span>
                 )}
-                <h3 className="text-lg font-semibold">{t.name}</h3>
+                <h2 className="text-lg font-semibold">{t.name}</h2>
                 <div className="mt-3 flex items-baseline gap-1">
                   <span className="text-4xl font-semibold tracking-tight">{t.price}</span>
                   {t.cadence && <span className="text-sm text-fog-dim">{t.cadence}</span>}

@@ -76,7 +76,8 @@ const FS_TIMEOUT_MS = 10_000;
 class SessionBus {
   private channels = new Map<string, Channel>();
   /** Outstanding `fs.*` requests awaiting an `fs.result`, keyed by requestId. */
-  private fsWaiters = new Map<string, { resolve: (r: FsResult) => void; timer: ReturnType<typeof setTimeout> }>();
+  /** Awaiting `fs.*` / `git.*` round-trips by requestId, with the session they were sent to. */
+  private fsWaiters = new Map<string, { sessionId: string; resolve: (r: FsResult) => void; timer: ReturnType<typeof setTimeout> }>();
 
   private channel(sessionId: string): Channel {
     let ch = this.channels.get(sessionId);
@@ -185,15 +186,19 @@ class SessionBus {
         reject(new Error("timeout"));
       }, timeoutMs);
       timer.unref?.();
-      this.fsWaiters.set(command.requestId, { resolve, timer });
+      this.fsWaiters.set(command.requestId, { sessionId, resolve, timer });
       runner.send(command);
     });
   }
 
-  /** Resolve an awaiting `fs.*` request with the runner's result; false if none. */
-  resolveFs(requestId: string, result: FsResult): boolean {
+  /**
+   * Resolve an awaiting `fs.*` request with the runner's result; false if none.
+   * Only the session the request was sent to can answer it (sessions are
+   * per-user), so one runner can't answer another's file request.
+   */
+  resolveFs(sessionId: string, requestId: string, result: FsResult): boolean {
     const waiter = this.fsWaiters.get(requestId);
-    if (!waiter) return false;
+    if (!waiter || waiter.sessionId !== sessionId) return false;
     clearTimeout(waiter.timer);
     this.fsWaiters.delete(requestId);
     waiter.resolve(result);
