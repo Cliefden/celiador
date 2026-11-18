@@ -168,6 +168,73 @@ async function main(): Promise<void> {
 	const bad = await app.request(`http://localhost/api/sessions/${sid}/events`, { method: "POST", headers: authH, body: JSON.stringify([{ kind: "tool" }]) });
 	ok("invalid event → 400", bad.status === 400, `got ${bad.status}`);
 
+	// ── Session ids: only well-formed ids reach a lookup or the disk ─────────
+	console.log("\n== session ids ==");
+	{
+		const dataDir = path.join(HOME, "data");
+		const canary = path.join(dataDir, "id-canary");
+		fs.mkdirSync(canary, { recursive: true });
+		fs.writeFileSync(path.join(canary, "keep"), "x");
+		const poll = async (pred: () => boolean): Promise<boolean> => {
+			for (let i = 0; i < 100; i++) { if (pred()) return true; await new Promise((r) => setTimeout(r, 20)); }
+			return pred();
+		};
+		// Another user's session with a kept workspace: the first user must not reach either.
+		const otherH = { "content-type": "application/json", authorization: `Bearer ${userToken("smoke-other")}` };
+		const otherSid = ((await (await app.request("http://localhost/api/sessions", { method: "POST", headers: otherH, body: JSON.stringify({ title: "theirs" }) })).json()) as { session: { id: string } }).session.id;
+		const otherRun = path.join(runsRoot(), "smoke-other", otherSid, "repo");
+		fs.mkdirSync(otherRun, { recursive: true });
+		fs.writeFileSync(path.join(otherRun, "keep"), "x");
+		const badIds = ["..%2F..", "..%2F..%2Fid-canary", "..%2F..%2F..", "%2E%2E", "..%5C..", "..", "a%2F..%2F..", "x.y", "%00"];
+		const routes: Array<[string, string, string?]> = [
+			["GET", ""],
+			["DELETE", ""],
+			["GET", "/events"],
+			["POST", "/message", JSON.stringify({ text: "x" })],
+			["POST", "/cancel"],
+			["POST", "/approvals/r1", JSON.stringify({ decision: "approve" })],
+			["POST", "/answers/r1", JSON.stringify({ text: "x" })],
+			["GET", "/commands"],
+			["POST", "/events", JSON.stringify([{ kind: "done" }])],
+			["GET", "/files?path="],
+			["GET", "/file?path=keep"],
+			["PUT", "/file", JSON.stringify({ path: "keep", content: "y" })],
+			["GET", "/git/status"],
+			["GET", "/git/diff"],
+			["POST", "/git/commit", JSON.stringify({ message: "x" })],
+			["POST", "/git/revert", JSON.stringify({ paths: ["keep"] })],
+			["POST", "/git/push"],
+			["POST", "/git/pr", JSON.stringify({ title: "x" })],
+			["POST", "/git/merge", JSON.stringify({})],
+		];
+		let refused = 0;
+		const notRefused: string[] = [];
+		for (const id of badIds) {
+			for (const [method, suffix, b] of routes) {
+				const r = await app.request(`http://localhost/api/sessions/${id}${suffix}`, { method, headers: authH, ...(b ? { body: b } : {}) });
+				if (r.status === 404) refused++;
+				else notRefused.push(`${method} ${id}${suffix} → ${r.status}`);
+				await r.body?.cancel();
+			}
+		}
+		ok(`malformed / encoded-traversal ids → 404 on every /:id route (${badIds.length * routes.length} requests)`, notRefused.length === 0, notRefused.slice(0, 5).join("; "));
+		await new Promise((r) => setTimeout(r, 50));
+		ok("…the data dir and its contents survive", fs.existsSync(path.join(canary, "keep")) && fs.existsSync(path.join(dataDir, "sessions")));
+		ok("…another user's run workspace survives", fs.existsSync(path.join(otherRun, "keep")));
+		const crossDel = await app.request(`http://localhost/api/sessions/${otherSid}`, { method: "DELETE", headers: authH });
+		ok("DELETE another user's session id → ok:false", crossDel.status === 200 && ((await crossDel.json()) as { ok?: boolean }).ok === false);
+		await new Promise((r) => setTimeout(r, 50));
+		ok("…their session and workspace are untouched", fs.existsSync(path.join(otherRun, "keep")) && (await app.request(`http://localhost/api/sessions/${otherSid}`, { headers: otherH })).status === 200);
+		const unknownDel = await app.request(`http://localhost/api/sessions/00000000-0000-0000-0000-000000000000`, { method: "DELETE", headers: authH });
+		ok("DELETE an unknown id → ok:false", ((await unknownDel.json()) as { ok?: boolean }).ok === false);
+		const ownDel = await app.request(`http://localhost/api/sessions/${otherSid}`, { method: "DELETE", headers: otherH });
+		ok("the owner's DELETE → ok and the workspace is reclaimed", ((await ownDel.json()) as { ok?: boolean }).ok === true && await poll(() => !fs.existsSync(path.dirname(otherRun))));
+		const { runDir, workspaceDir: wsDir } = await import("../src/runner/workspace.ts");
+		const throws = (f: () => unknown) => { try { f(); return false; } catch { return true; } };
+		ok("runDir/workspaceDir refuse ids that aren't one path segment", throws(() => runDir("u", "..")) && throws(() => runDir("..", "x")) && throws(() => wsDir("u", "../x")) && throws(() => runDir("u", "a/b")) && throws(() => runDir("u", "")) && !throws(() => runDir("smoke-user", otherSid)));
+		fs.rmSync(canary, { recursive: true, force: true });
+	}
+
 	// ── Runner tokens: the sandbox's token is good on the Anthropic gateway only ──
 	console.log("\n== runner token scope ==");
 	const rgw = await app.request(GW, { method: "POST", headers: runnerH, body });

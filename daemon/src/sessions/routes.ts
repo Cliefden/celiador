@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppEnv } from "../auth";
 import { requireUser } from "../auth";
 import { sessionStores } from "./instance";
+import { isSessionId } from "./store";
 import { sessionBus } from "./bus";
 import { publishSessionEvent } from "./publish";
 import { cancelServerRun } from "../runner/manager";
@@ -108,6 +109,16 @@ export function sessionRoutes(): Hono<AppEnv> {
 
   app.use("*", requireUser);
 
+  // Celiador edit (id validation): every `/:id` route — and the paths derived
+  // from it (event logs, run workspaces) — only ever sees a well-formed session
+  // id. Anything else is a 404 before any lookup or disk access.
+  const validId: MiddlewareHandler<AppEnv> = async (c, next) => {
+    if (!isSessionId(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    await next();
+  };
+  app.use("/:id", validId);
+  app.use("/:id/*", validId);
+
   /** Append, fan out to watchers, and push to APNs — all best-effort (shared with the server runner). */
   const publish = (userId: string, sessionId: string, input: SessionEventInput): SessionEvent | undefined =>
     publishSessionEvent(userId, sessionId, input);
@@ -196,9 +207,11 @@ export function sessionRoutes(): Hono<AppEnv> {
     const userId = c.get("user").userId;
     const id = c.req.param("id");
     const session = stores.for(userId).get(id);
-    const ok = stores.for(userId).delete(id);
+    // Only the caller's own sessions: an unknown id deletes (and removes) nothing.
+    if (!session) return c.json({ ok: false });
+    const ok = stores.for(userId).delete(session.id);
     // Reclaim the server-run workspace we kept around for file browsing (and its worktree).
-    void removeCloudSession(userId, session, id);
+    void removeCloudSession(userId, session, session.id);
     return c.json({ ok });
   });
 

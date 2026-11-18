@@ -19,6 +19,11 @@ const LOG_DEBOUNCE_MS = 1000;
 /** Session ids are daemon-issued UUIDs; anything else never touches the disk. */
 const SAFE_ID = /^[A-Za-z0-9-]{1,64}$/;
 
+/** Whether `id` has the shape of a session id (the routes refuse anything else before any lookup). */
+export function isSessionId(id: unknown): id is string {
+  return typeof id === "string" && SAFE_ID.test(id);
+}
+
 interface MetaFile {
   sessions: Session[];
 }
