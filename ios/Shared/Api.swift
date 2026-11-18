@@ -4,8 +4,21 @@ import Security
 /// Client of the Celiador daemon + its Supabase (GoTrue) auth — hand-rolled,
 /// dependency-free. Session lives in the Keychain; access tokens refresh
 /// automatically on expiry or 401.
+///
+/// Main-actor isolated: `session`, `config` and the in-flight refresh are only
+/// touched on the main actor, so the refresh single-flight check-then-set can't
+/// interleave (two refreshes reusing one refresh token make GoTrue revoke it).
+/// Network awaits still run off the main thread.
+@MainActor
 final class Api {
-    static let shared = Api()
+    nonisolated static let shared = Api()
+
+    nonisolated private init() {}
+
+    /// Called (on the main actor) when the server definitively rejected the
+    /// stored refresh token and the local session was cleared — the app must
+    /// show the sign-in screen instead of failing every call while "signed in".
+    var onSessionRevoked: (() -> Void)?
 
     /// Daemon base URL for this build. Resolution order:
     ///   1. `CELIADOR_URL` env var (dev override, e.g. an Xcode scheme in the simulator)
@@ -13,7 +26,7 @@ final class Api {
     ///   3. prod fallback
     /// So the Dev/Test/Release configs point the app at the matching daemon
     /// environment without a code change. See celiador-ios/Config/*.xcconfig.
-    let baseURL: URL = {
+    nonisolated let baseURL: URL = {
         let fromEnv = ProcessInfo.processInfo.environment["CELIADOR_URL"]
         let fromPlist = Bundle.main.object(forInfoDictionaryKey: "CELIADOR_DAEMON_URL") as? String
         let raw = [fromEnv, fromPlist]
@@ -45,7 +58,7 @@ final class Api {
     /// Pull the most useful message out of a GoTrue / daemon error body. The body
     /// may mix string and non-string fields (e.g. `{"code":400,"msg":"…"}`), which
     /// a strict `[String:String]` decode chokes on — hiding the real reason.
-    static func errorMessage(_ data: Data, status: Int, fallback: String) -> String {
+    nonisolated static func errorMessage(_ data: Data, status: Int, fallback: String) -> String {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             for key in ["error_description", "msg", "message", "error_code", "error"] {
                 if let value = obj[key] as? String, !value.isEmpty { return value }
@@ -250,20 +263,58 @@ final class Api {
     /// (GoTrue revokes a reused refresh token, which would sign the user out).
     private var refreshTask: Task<AuthSession, Error>?
 
+    /// Refresh the access token, single-flight: every caller that arrives while a
+    /// refresh is running awaits that same refresh. All of this runs on the main
+    /// actor, and there is no suspension between the check and the assignment of
+    /// `refreshTask`, so two refreshes can never start for one refresh token.
+    ///
+    /// `rejected`: the access token the server just turned down (a 401). When the
+    /// session already holds a different, unexpired token — another caller
+    /// refreshed meanwhile — that one is returned instead of rotating again.
+    ///
+    /// A definitive rejection of the refresh token (`isRevocation`) clears the
+    /// session and calls `onSessionRevoked`; a network failure leaves it alone.
     @discardableResult
-    private func refreshSession() async throws -> AuthSession {
+    private func refreshSession(rejected: String? = nil) async throws -> AuthSession {
         if let refreshTask { return try await refreshTask.value }
-        guard let current = session ?? Keychain.load() else { throw ApiError(message: "Not signed in.") }
-        let task = Task {
-            try await self.authRequest(
+        guard let current = session ?? Keychain.load() else { throw ApiError(message: "Not signed in.", status: 401) }
+        if let rejected, current.accessToken != rejected, current.expiresAt > Date() {
+            session = current
+            return current
+        }
+        let task = Task { () throws -> AuthSession in
+            let data = try await self.gotruePost(
                 path: "token",
                 query: "grant_type=refresh_token",
                 body: ["refresh_token": current.refreshToken]
             )
+            let token = try JSONDecoder().decode(TokenResponse.self, from: data)
+            // Signed out (or into another account) while the refresh was in flight:
+            // don't resurrect the old session.
+            guard (self.session ?? Keychain.load())?.refreshToken == current.refreshToken else {
+                throw ApiError(message: "Signed out.", status: 401)
+            }
+            return self.storeSession(token, fallbackEmail: current.email)
         }
         refreshTask = task
         defer { refreshTask = nil }
-        return try await task.value
+        do {
+            return try await task.value
+        } catch let error as ApiError where Self.isRevocation(error) {
+            // Only clear the session the failed refresh was for.
+            if (session ?? Keychain.load())?.refreshToken == current.refreshToken {
+                signOut()
+                onSessionRevoked?()
+            }
+            throw error
+        }
+    }
+
+    /// GoTrue's answer to a dead refresh token (revoked, reused, user deleted) is a
+    /// 4xx. Rate limiting (429) and request timeouts (408) are not definitive.
+    nonisolated static func isRevocation(_ error: ApiError) -> Bool {
+        guard let status = error.status else { return false }
+        return (400..<500).contains(status) && status != 408 && status != 429
     }
 
     /// Restore from Keychain; refresh if stale. Returns the signed-in email, or nil.
@@ -276,9 +327,8 @@ final class Api {
         if stored.expiresAt > Date() { return stored.email }
         do {
             return try await refreshSession().email
-        } catch let error as ApiError where (400..<500).contains(error.status ?? 0) {
-            signOut()
-            return nil
+        } catch let error as ApiError where Self.isRevocation(error) {
+            return nil // refreshSession already signed out
         } catch {
             return stored.email
         }
@@ -298,12 +348,14 @@ final class Api {
 
     /// A non-expired access token, refreshing if needed — for callers that
     /// attach it manually (the SSE stream) instead of going through `request`.
-    func validAccessToken() async throws -> String {
+    /// `rejected`: a token the server just answered 401 to — refresh even though
+    /// its local `expiresAt` says it's still good (it may have been revoked).
+    func validAccessToken(rejected: String? = nil) async throws -> String {
         if let current = session ?? Keychain.load() {
             session = current
-            if current.expiresAt > Date() { return current.accessToken }
+            if current.expiresAt > Date(), current.accessToken != rejected { return current.accessToken }
         }
-        return try await refreshSession().accessToken
+        return try await refreshSession(rejected: rejected).accessToken
     }
 
     // MARK: - Daemon API
@@ -326,8 +378,13 @@ final class Api {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        if let token = session?.accessToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // A known-expired token would only earn a 401: refresh up front instead.
+        if let current = session, current.expiresAt <= Date() {
+            _ = try? await refreshSession()
+        }
+        let sentToken = session?.accessToken
+        if let sentToken {
+            request.setValue("Bearer \(sentToken)", forHTTPHeaderField: "Authorization")
         }
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -335,8 +392,8 @@ final class Api {
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ApiError(message: "No response.") }
-        if http.statusCode == 401, !retrying {
-            _ = try await refreshSession()
+        if http.statusCode == 401, !retrying, session != nil {
+            _ = try await refreshSession(rejected: sentToken)
             return try await self.request(type, path: path, method: method, query: query, body: body, retrying: true)
         }
         if http.statusCode >= 400 {
@@ -663,7 +720,7 @@ final class Api {
     /// sandbox vs production APNs host. Comes from the `APS_ENV` build setting
     /// (Info.plist `CELIADOR_APS_ENV`), not from DEBUG: the Dev channel is a
     /// Debug config, yet its TestFlight builds are signed for production APNs.
-    var pushEnv: String {
+    nonisolated var pushEnv: String {
         #if targetEnvironment(simulator)
         return "sandbox"
         #else
