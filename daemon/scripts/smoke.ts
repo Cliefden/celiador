@@ -708,6 +708,19 @@ async function main(): Promise<void> {
 	process.env.CELIADOR_TASK_CONCURRENCY = "1";
 	ok("bad signature → 401", (await hook("ping", {}, "wrong")).status === 401);
 	ok("ping → 200", (await hook("ping", {})).status === 200);
+	// X-GitHub-Delivery: a delivery seen before is acknowledged, not processed again.
+	const delivered = (id: string, payload: unknown) => {
+		const raw = JSON.stringify(payload);
+		const sig = `sha256=${crypto.createHmac("sha256", "whsec").update(raw).digest("hex")}`;
+		return app.request(WH, { method: "POST", headers: { "content-type": "application/json", "x-github-event": "issues", "x-github-delivery": id, "x-hub-signature-256": sig }, body: raw });
+	};
+	const d1 = (await (await delivered("d-1", labeled(43, "bug"))).json()) as { ignored?: string };
+	const d2 = (await (await delivered("d-1", labeled(43, "bug"))).json()) as { ignored?: string };
+	const d3 = (await (await delivered("d-2", labeled(43, "bug"))).json()) as { ignored?: string };
+	ok("a replayed X-GitHub-Delivery → acknowledged as a duplicate, not processed", /another label/.test(d1.ignored ?? "") && d2.ignored === "duplicate delivery" && /another label/.test(d3.ignored ?? ""), JSON.stringify([d1, d2, d3]));
+	const { DeliveryLog } = await import("../src/tasks/deliveries.ts");
+	const dlog = new DeliveryLog(1000, 2);
+	ok("delivery log: TTL and size cap", dlog.claim("a", 0) && !dlog.claim("a", 500) && dlog.claim("a", 1500) && dlog.claim("b", 1600) && dlog.claim("c", 1700) && dlog.claim("d", 1800) && dlog.claim("a", 1900) && dlog.claim(undefined) && dlog.claim(undefined));
 	const unlinked = (await (await hook("issues", labeled(41))).json()) as { ignored?: string };
 	ok("label on an unlinked repo is ignored", /not linked/.test(unlinked.ignored ?? ""), JSON.stringify(unlinked));
 	const link = await app.request(`${T}/repos`, { method: "POST", headers: authH, body: JSON.stringify({ remoteUrl: "https://github.com/Cliefden/smoke-repo" }) });
@@ -822,7 +835,13 @@ async function main(): Promise<void> {
 	ok("manifest: webhook + redirect on the public URL, the three events, write on issues/PRs/contents", /\/api\/github\/webhook$/.test(manifest.hook_attributes.url) && /\/api\/github\/app\/setup$/.test(manifest.redirect_url) && manifest.default_events.includes("pull_request") && manifest.default_permissions.contents === "write", JSON.stringify(manifest));
 	ok("webhook signed with the app's secret is accepted", (await hook("ping", {}, "appsec")).status === 200);
 	ok("webhook signed with a third secret is still refused", (await hook("ping", {}, "nope")).status === 401);
-	const prMerged = { action: "closed", repository: ghRepo, pull_request: { merged: true, html_url: "https://github.com/Cliefden/smoke-repo/pull/7", head: { ref: "42-fix-the-thing-42" } } };
+	const prMerged = { action: "closed", repository: ghRepo, pull_request: { number: 7, merged: true, html_url: "https://github.com/Cliefden/smoke-repo/pull/7", head: { ref: "42-fix-the-thing-42", repo: { full_name: "cliefden/Smoke-Repo" } } } };
+	// A fork's PR with the task's branch name is not the task's PR.
+	const forkMerged = (await (await hook("pull_request", { ...prMerged, pull_request: { ...prMerged.pull_request, number: 8, head: { ref: "42-fix-the-thing-42", repo: { full_name: "mallory/smoke-repo" } } } }, "appsec")).json()) as { ignored?: string; taskId?: string };
+	const notMergedYet = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; state: string }> }).tasks.find((t) => t.id === tid);
+	ok("a merged fork PR with the task's branch name → ignored, the task isn't merged", /another repository/.test(forkMerged.ignored ?? "") && notMergedYet?.state !== "merged", JSON.stringify(forkMerged));
+	const noHeadRepo = (await (await hook("pull_request", { ...prMerged, pull_request: { ...prMerged.pull_request, head: { ref: "42-fix-the-thing-42", repo: null } } }, "appsec")).json()) as { ignored?: string };
+	ok("…and one whose head repo is gone (deleted fork) too", /another repository/.test(noHeadRepo.ignored ?? ""), JSON.stringify(noHeadRepo));
 	const mergedRes = (await (await hook("pull_request", prMerged, "appsec")).json()) as { taskId?: string; state?: string };
 	const mergedTask = ((await (await app.request(T, { headers: authH })).json()) as { tasks: Array<{ id: string; state: string }> }).tasks.find((t) => t.id === tid);
 	ok("a pull_request merged on GitHub moves the task to merged", mergedRes.taskId === tid && mergedTask?.state === "merged", JSON.stringify(mergedRes));
