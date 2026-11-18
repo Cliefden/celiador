@@ -1242,6 +1242,9 @@ async function main(): Promise<void> {
 	const flag = (f: string, v?: string) => { const i = dargs.indexOf(f); return i >= 0 && (v === undefined || dargs[i + 1] === v); };
 	ok("docker run: no network, read-only, caps dropped, no-new-privileges, non-root", flag("--network", "none") && flag("--read-only") && flag("--cap-drop", "ALL") && flag("--security-opt", "no-new-privileges") && flag("--user", "1000:1000"), dargs.join(" "));
 	ok("docker run: only the workspace + gateway dir mounted; prompt passed as one argv", dargs.filter((a) => a === "-v").length === 2 && flag("-p", "fix it"));
+	const { dockerRunEnv } = await import("../src/runner/sandbox.ts");
+	const denv = dockerRunEnv("tok", { PATH: "/bin", ANTHROPIC_AUTH_TOKEN: "daemon-own" });
+	ok("docker run: the run token is not in argv (ps), only named; docker reads it from its env", !dargs.some((a) => a.includes("tok")) && dargs.some((a, i) => a === "ANTHROPIC_AUTH_TOKEN" && dargs[i - 1] === "-e") && denv.ANTHROPIC_AUTH_TOKEN === "tok" && denv.PATH === "/bin", dargs.join(" "));
 	const notActive = await app.request(`http://localhost/api/sessions/${sid}/cancel`, { method: "POST", headers: authH });
 	ok("cancel on an editor session without a runner → 409 (unchanged)", notActive.status === 409, `got ${notActive.status}`);
 
