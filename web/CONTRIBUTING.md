@@ -6,6 +6,6 @@ Write the issue the way you would brief a colleague: what to change, where, and 
 
 Before you open or merge a pull request:
 
-- `npm run build` passes (it type-checks the site).
+- `npm run lint`, `npm run typecheck` and `npm run build` pass.
 - Copy follows the rule in the README: nothing is presented as live that isn't. Pricing numbers come from the live limits endpoint, not from copy.
 - Legal pages (`/privacy`, `/terms`, `/conduct`) are changed only with Stefan's sign-off.
