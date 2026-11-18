@@ -61,9 +61,14 @@ private final class SessionTranscript {
     /// tool callId → transcript item id, so a toolResult can mark its tool line done.
     private var toolItemByCallId: [String: Int] = [:]
     private var reportedStreamFailure = false
+    /// Highest event seq folded in so far. `onAppear`/`onDisappear` fire on every
+    /// tab switch, so a restart resumes from here instead of replaying the whole
+    /// stream on top of what's already shown (duplicate ids, doubled diffs).
+    private var lastSeq = 0
 
     func start(sessionId: String, model: AppModel) {
         guard stream == nil else { return }
+        if sessionId != self.sessionId { reset() }
         self.sessionId = sessionId
         self.model = model
         // runnerConnected isn't carried by the event stream, so keep polling it:
@@ -81,7 +86,7 @@ private final class SessionTranscript {
                 try? await Task.sleep(for: .seconds(10))
             }
         }
-        let s = SessionEventStream(sessionId: sessionId, since: 0, onEvent: { [weak self] event in
+        let s = SessionEventStream(sessionId: sessionId, since: lastSeq, onEvent: { [weak self] event in
             self?.ingest(event)
         }, onFailure: { [weak self] error in
             // Once per open session: the stream retries with backoff on its own.
@@ -100,7 +105,27 @@ private final class SessionTranscript {
         statusTask = nil
     }
 
+    /// Forget everything folded in for the previous session.
+    private func reset() {
+        items = []
+        diffs = []
+        toolItemByCallId = [:]
+        streamingId = nil
+        lastSeq = 0
+        liveLine = ""
+        pendingApproval = nil
+        pendingQuestion = nil
+        truncated = false
+        reportedStreamFailure = false
+    }
+
     private func ingest(_ e: SessionEvent) {
+        // Stored events carry a strictly increasing seq; synthetic ones (e.g.
+        // `truncated`) have seq 0. Never fold the same stored event twice.
+        if e.seq > 0 {
+            guard e.seq > lastSeq else { return }
+            lastSeq = e.seq
+        }
         switch e.kind {
         case "message":
             let role: TranscriptItem.Role = e.role == "user" ? .user : .assistant

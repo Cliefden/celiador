@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import { Button, Container, Eyebrow } from "@/components/ui";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/about",
   title: "About",
-  description: "Why we're building Celiador: work should start as a GitHub issue and end as a pull request you review from wherever you are.",
-};
+  description:
+    "Why we're building Celiador: work should start as a GitHub issue and end as a pull request you review from wherever you are.",
+});
 
 const values = [
   {
@@ -73,7 +76,7 @@ export default function AboutPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             {values.map((v) => (
               <div key={v.title} className="card rounded-2xl p-7">
-                <h3 className="text-lg font-semibold tracking-tight">{v.title}</h3>
+                <h2 className="text-lg font-semibold tracking-tight">{v.title}</h2>
                 <p className="mt-2 text-sm leading-relaxed text-fog">{v.body}</p>
               </div>
             ))}

@@ -121,6 +121,7 @@ class AgentQuota {
   private historyFile = path.join(ROOT, "data", "quota", "history.json");
   private usage: UsageFile;
   private minute = new Map<string, number[]>();
+  private lastMinuteSweep = 0;
   private active = new Map<string, number>();
   private saveTimer: NodeJS.Timeout | null = null;
 
@@ -228,6 +229,7 @@ class AgentQuota {
     if (l.concurrency && (this.active.get(userId) ?? 0) >= l.concurrency) {
       return { error: "Too many concurrent agent requests.", retryAfter: 5 };
     }
+    this.sweepMinute(now);
     const window = (this.minute.get(userId) ?? []).filter((t) => now - t < 60_000);
     if (l.rpm && window.length >= l.rpm) {
       this.minute.set(userId, window);
@@ -257,6 +259,24 @@ class AgentQuota {
    * the daily counters reset (next UTC midnight). Pure: unlike {@link acquire},
    * it never mutates counters or inserts a user entry — safe for a `/api/me` poll.
    */
+  /**
+   * Drop per-minute windows with nothing in the last minute (at most once a
+   * minute, or now with `force` — a test seam), so every user who ever made a
+   * request doesn't keep an entry.
+   */
+  sweepMinute(now: number, force = false): void {
+    if (!force && now - this.lastMinuteSweep < 60_000) return;
+    this.lastMinuteSweep = now;
+    for (const [userId, window] of this.minute) {
+      if (window.length === 0 || now - window[window.length - 1]! >= 60_000) this.minute.delete(userId);
+    }
+  }
+
+  /** Users with a live per-minute window (for the smoke test). */
+  minuteWindows(): number {
+    return this.minute.size;
+  }
+
   snapshot(userId: string): { usage: DayUsage; limits: UserLimits; resetsAt: string } {
     this.rollover();
     const d = this.usage.day;
@@ -280,18 +300,26 @@ class AgentQuota {
 
   private scheduleSave(): void {
     if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      try {
-        fs.mkdirSync(path.dirname(this.file), { recursive: true });
-        const tmp = `${this.file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(this.usage));
-        fs.renameSync(tmp, this.file);
-      } catch (err) {
-        console.error("[quota] save failed:", err instanceof Error ? err.message : err);
-      }
-    }, SAVE_DEBOUNCE_MS);
+    this.saveTimer = setTimeout(() => this.saveNow(), SAVE_DEBOUNCE_MS);
     this.saveTimer.unref?.();
+  }
+
+  private saveNow(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      const tmp = `${this.file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.usage));
+      fs.renameSync(tmp, this.file);
+    } catch (err) {
+      console.error("[quota] save failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Write a pending (debounced) save now — on shutdown, so a deploy loses no usage. */
+  flush(): void {
+    if (this.saveTimer) this.saveNow();
   }
 }
 

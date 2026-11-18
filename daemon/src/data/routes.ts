@@ -24,6 +24,11 @@ const requireDb: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+/** Caps on what a profile PATCH may store (settings is a JSONB blob the clients own). */
+export const MAX_SETTINGS_BYTES = 16 * 1024;
+const MAX_DISPLAY_NAME = 200;
+const MAX_AVATAR_URL = 2048;
+
 export function profileRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   app.use("*", requireUser);
@@ -38,10 +43,22 @@ export function profileRoutes(): Hono<AppEnv> {
   app.patch("/", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const patch: { display_name?: string; avatar_url?: string; settings?: Record<string, unknown> } = {};
-    if (typeof body.display_name === "string") patch.display_name = body.display_name;
-    if (typeof body.avatar_url === "string") patch.avatar_url = body.avatar_url;
-    if (body.settings && typeof body.settings === "object") patch.settings = body.settings;
-    const profile = await updateProfile(c.get("user").userId, patch);
+    if (typeof body.display_name === "string") {
+      if (body.display_name.length > MAX_DISPLAY_NAME) return c.json({ error: "display_name too long" }, 400);
+      patch.display_name = body.display_name;
+    }
+    if (typeof body.avatar_url === "string") {
+      if (body.avatar_url.length > MAX_AVATAR_URL) return c.json({ error: "avatar_url too long" }, 400);
+      patch.avatar_url = body.avatar_url;
+    }
+    if (body.settings && typeof body.settings === "object" && !Array.isArray(body.settings)) {
+      if (Buffer.byteLength(JSON.stringify(body.settings), "utf8") > MAX_SETTINGS_BYTES) {
+        return c.json({ error: `settings too large (max ${MAX_SETTINGS_BYTES} bytes)` }, 413);
+      }
+      patch.settings = body.settings;
+    }
+    const profile = await updateProfile(c.get("user").userId, patch, MAX_SETTINGS_BYTES);
+    if (profile === "too-large") return c.json({ error: `settings too large (max ${MAX_SETTINGS_BYTES} bytes)` }, 413);
     if (!profile) return c.json({ error: "profile not found" }, 404);
     return c.json({ profile });
   });

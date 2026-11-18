@@ -5,6 +5,14 @@ import { FAQ } from "@/components/FAQ";
 import { EmailCapture } from "@/components/EmailCapture";
 import { iconMap, ArrowIcon, CheckIcon, SparkIcon } from "@/components/icons";
 import { features, steps, tiers } from "@/lib/site";
+import type { Metadata } from "next";
+
+// Title, description and Open Graph come from the root layout; only the
+// canonical is page-specific (it is not set in the layout, or the 404 page
+// would inherit it).
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
+};
 
 export default function HomePage() {
   return (
@@ -186,7 +194,7 @@ export default function HomePage() {
                 }
               >
                 {t.featured && (
-                  <span className="absolute right-6 top-6 rounded-full bg-brand px-2.5 py-1 text-xs font-medium text-white">
+                  <span className="absolute right-6 top-6 rounded-full bg-brand-fill px-2.5 py-1 text-xs font-medium text-white">
                     Popular
                   </span>
                 )}

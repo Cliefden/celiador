@@ -1,14 +1,17 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/metadata";
 import Link from "next/link";
 import { Container, Eyebrow } from "@/components/ui";
 import { formatLimit, formatUsdLimit, publishedLimits } from "@/lib/limits";
 import { latestMacDmgHref, latestMacRelease } from "@/lib/releases";
 import { site } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/docs",
   title: "Docs",
-  description: "Getting started with Celiador: the loop, the runners, install, sign in, the agent, the iPhone companion, Workspace Trust, limits, updates and your data.",
-};
+  description:
+    "Getting started with Celiador: the loop, the runners, install, sign in, the agent, the iPhone companion, Workspace Trust, limits, updates and your data.",
+});
 
 const sections: { id: string; title: string }[] = [
   { id: "loop", title: "The loop" },

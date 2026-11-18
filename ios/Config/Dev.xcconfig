@@ -8,3 +8,6 @@ BUNDLE_ID_SUFFIX = .dev
 APP_NAME = Celiador Dev
 URL_SCHEME = celiador-dev
 CELIADOR_DAEMON_URL = https:/$()/dev.celiador.ai
+// Dev signs with aps-environment development (Celiador.entitlements) when run
+// from Xcode → sandbox tokens. Its TestFlight archive stays production (Base).
+APS_ENV_build = sandbox

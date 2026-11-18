@@ -64,7 +64,7 @@ export function ContactForm() {
       </Field>
       <button
         type="submit"
-        className="w-full rounded-xl bg-brand px-5 py-3 text-sm font-medium text-white transition hover:brightness-110 sm:w-auto"
+        className="w-full rounded-xl bg-brand-fill px-5 py-3 text-sm font-medium text-white transition hover:brightness-110 sm:w-auto"
       >
         Compose email
       </button>

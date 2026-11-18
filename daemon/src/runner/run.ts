@@ -100,5 +100,6 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<IServer
   }
   // The workspace is intentionally retained after the run so the phone can browse
   // its files; it's reclaimed when the session is deleted (see DELETE /:id),
-  // on account deletion (purgeUserRuns), and swept at daemon boot (reapOrphanRuns).
+  // on account deletion (purgeUserRuns), and swept at daemon boot once its session
+  // is gone or idle past the TTL (runner/reap.ts).
 }
