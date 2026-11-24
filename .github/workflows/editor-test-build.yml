@@ -1,0 +1,48 @@
+name: Editor test build
+
+# A train tag (vX.Y.Z, from scripts/release.sh) also starts a test-channel
+# build of the editor: this sends a repository_dispatch ("celiador-release",
+# payload {tag}) to Cliefden/celiador-editor, whose release-macos.yml builds
+# its main as "Celiador Test", labels the icon with the tag and publishes it to
+# test.celiador.ai (celiador-editor CHANNELS.md, docs/RELEASING.md).
+#
+# Needs the repository secret EDITOR_DISPATCH_TOKEN: a fine-grained token for
+# Cliefden/celiador-editor only, "Contents: read and write". Without it this
+# warns and succeeds — the daemon, web and iOS release don't depend on it.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Train tag to build the editor for (vX.Y.Z)
+        required: true
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Start the editor test build
+    if: github.repository == 'Cliefden/celiador'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Send repository_dispatch to celiador-editor
+        env:
+          GH_TOKEN: ${{ secrets.EDITOR_DISPATCH_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$TAG is not a vX.Y.Z train tag"
+            exit 1
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::EDITOR_DISPATCH_TOKEN is not set; no editor test build for $TAG. Start it from celiador-editor (docs/RELEASING.md § Channels)."
+            exit 0
+          fi
+          gh api repos/Cliefden/celiador-editor/dispatches \
+            -f event_type=celiador-release \
+            -f "client_payload[tag]=$TAG"
+          echo "::notice::Editor test build requested for $TAG: https://github.com/Cliefden/celiador-editor/actions/workflows/release-macos.yml"
