@@ -304,6 +304,7 @@ struct TaskRunView: View {
                 }
                 .padding(16)
             }
+            .readableWidth()
         }
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar(task) }
@@ -590,6 +591,7 @@ struct TaskRunView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 8)
+            .readableWidth()
             .background(alignment: .top) {
                 Theme.panel
                     .ignoresSafeArea(edges: .bottom)

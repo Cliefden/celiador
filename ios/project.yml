@@ -60,6 +60,18 @@ targets:
         CELIADOR_APS_ENV: $(APS_ENV)
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        # Universal app (TARGETED_DEVICE_FAMILY 1,2). iPad multitasking (Split
+        # View, Stage Manager) requires all four iPad orientations, or App Store
+        # validation rejects the build.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSSupportsLiveActivities: true
         UIBackgroundModes: [remote-notification]
         CFBundleURLTypes:
@@ -82,7 +94,7 @@ targets:
         # Full data-race checking (warnings in Swift 5 mode; the build is clean).
         # Keep it warning-free; the next step is SWIFT_VERSION 6.
         SWIFT_STRICT_CONCURRENCY: complete
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         MARKETING_VERSION: "0.2.5"
         CURRENT_PROJECT_VERSION: "1"
       configs:
@@ -107,7 +119,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: CeliadorWidgets/CeliadorWidgets.entitlements
         SWIFT_VERSION: "5.9"
         SWIFT_STRICT_CONCURRENCY: complete
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         MARKETING_VERSION: "0.2.5"
         CURRENT_PROJECT_VERSION: "1"
     dependencies:
@@ -133,7 +145,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.9"
         SWIFT_STRICT_CONCURRENCY: complete
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
   CeliadorWatch:
     type: application

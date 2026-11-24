@@ -17,6 +17,11 @@ merge; `scripts/release.sh` rolls the section into a version on release.
   worktree** of a per-user cached mirror of the repo instead of a fresh clone, so
   a repo is fetched once and then incrementally, and no two runs share a branch.
 - iPhone app: cloud sessions no longer show "editor offline" in the list.
+- **iPad.** The app is now universal and runs natively on iPad instead of in
+  the scaled iPhone window: the tabs become a sidebar, and transcripts, the
+  task run screen and sign-in keep a readable width.
+- Daemon: the phone file API keeps out of `.git`, and server-side sessions
+  follow the cloud-runs switch.
 
 ## [0.2.5] - 2026-10-30
 
