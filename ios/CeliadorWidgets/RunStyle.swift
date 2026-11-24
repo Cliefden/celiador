@@ -51,13 +51,17 @@ struct RunTone: Equatable {
 struct RunBadge: View {
     var tone: RunTone
     var size: CGFloat = 28
+    /// Follows Dynamic Type (1 at the default size), capped so a badge can't
+    /// crowd out the text beside it in a small widget or the Dynamic Island.
+    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
 
     var body: some View {
+        let side = size * min(scale, 1.5)
         Image(systemName: tone.symbol)
-            .font(.system(size: size * 0.46, weight: .semibold))
+            .font(.system(size: side * 0.46, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(tone.color, in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
+            .frame(width: side, height: side)
+            .background(tone.color, in: RoundedRectangle(cornerRadius: side * 0.26, style: .continuous))
             .widgetAccentable()
             .accessibilityLabel(tone.label)
     }

@@ -6,6 +6,9 @@
      Analytics: TelemetryDeck (Telemetry.swift) sends usage signals keyed to the SDK's salted hash of
      identifierForVendor; it never sets the signed-in user or email, so "Product Interaction" is
      declared NOT linked. The SDK's own manifest adds Device ID (not linked, Analytics).
+     Diagnostics: `celiador/error` signals (domain / operation / an error-type code, never a
+     message; docs/TELEMETRY.md) are "Other Diagnostic Data", not linked, Analytics. There is no
+     crash reporter, so no Crash Data.
      No location, camera, IAP, or tracking.
      See ../../_standard/PORTFOLIO_STANDARD.md §2. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -67,6 +70,18 @@
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherDiagnosticData</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
 			<false/>
 			<key>NSPrivacyCollectedDataTypeTracking</key>

@@ -59,7 +59,7 @@ struct SettingsView: View {
             } header: {
                 Text("Preferences")
             } footer: {
-                Text("Usage data is which features get used and what crashes — never your code, prompts, chat, repository names or email. Details at celiador.ai/privacy.")
+                Text("Usage data is which features get used and which requests fail — never your code, prompts, chat, repository names or email. Details at celiador.ai/privacy.")
             }
             .listRowBackground(Theme.panel)
 

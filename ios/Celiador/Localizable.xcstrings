@@ -1,0 +1,587 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "" : {
+
+    },
+    "“%@” merges into %@'s default branch on GitHub." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "“%1$@” merges into %2$@'s default branch on GitHub."
+          }
+        }
+      }
+    },
+    "%@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "%@ · %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$lld"
+          }
+        }
+      }
+    },
+    "%@ · unlimited" : {
+
+    },
+    "%@ / %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ / %2$@"
+          }
+        }
+      }
+    },
+    "%@ build" : {
+
+    },
+    "%lld" : {
+
+    },
+    "%lld file%@ ready to commit" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld file%2$@ ready to commit"
+          }
+        }
+      }
+    },
+    "%lld more file%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld more file%2$@"
+          }
+        }
+      }
+    },
+    "+%lld" : {
+
+    },
+    "−%lld" : {
+
+    },
+    "✓" : {
+
+    },
+    "✗" : {
+
+    },
+    "About" : {
+
+    },
+    "Account" : {
+
+    },
+    "Activity" : {
+
+    },
+    "Agent pull requests" : {
+
+    },
+    "Agent spend, last 7 days" : {
+
+    },
+    "Allow" : {
+
+    },
+    "Answer" : {
+
+    },
+    "Answer…" : {
+
+    },
+    "Any repo" : {
+
+    },
+    "Approve and merge" : {
+
+    },
+    "Asks: “%@”" : {
+
+    },
+    "Back" : {
+
+    },
+    "Branch" : {
+
+    },
+    "Can't reach Celiador" : {
+
+    },
+    "Cancel" : {
+
+    },
+    "Celiador" : {
+
+    },
+    "Changes" : {
+
+    },
+    "Chat with %@" : {
+
+    },
+    "Choose run" : {
+
+    },
+    "Cloud" : {
+
+    },
+    "Commit" : {
+
+    },
+    "Commit message" : {
+
+    },
+    "Commit…" : {
+
+    },
+    "Commits all %lld changed file%@ on %@, %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Commits all %1$lld changed file%2$@ on %3$@, %4$@."
+          }
+        }
+      }
+    },
+    "Committed on %@" : {
+
+    },
+    "Continue with GitHub" : {
+
+    },
+    "Copy build info" : {
+
+    },
+    "Copy diff" : {
+
+    },
+    "Cost %@" : {
+
+    },
+    "Create account" : {
+
+    },
+    "Daemon" : {
+
+    },
+    "Delete" : {
+
+    },
+    "Delete account" : {
+
+    },
+    "Delete your Celiador account?" : {
+
+    },
+    "Deletes the new file %@ from the working copy." : {
+
+    },
+    "Deleting account…" : {
+
+    },
+    "Deny" : {
+
+    },
+    "Description" : {
+
+    },
+    "Details (optional)" : {
+
+    },
+    "Discard %@" : {
+
+    },
+    "Discard changes to %@" : {
+
+    },
+    "Discard changes?" : {
+
+    },
+    "Display name" : {
+
+    },
+    "Documentation" : {
+
+    },
+    "Done" : {
+
+    },
+    "Earlier history isn't available." : {
+
+    },
+    "Edit" : {
+
+    },
+    "Email" : {
+
+    },
+    "Email me a sign-in link" : {
+
+    },
+    "Files" : {
+
+    },
+    "Full transcript" : {
+
+    },
+    "Have an account? Sign in" : {
+
+    },
+    "Install the Celiador GitHub App on this repo and add it to your repos to push and open pull requests from the cloud." : {
+
+    },
+    "Label an issue `celiador`, or comment `@celiador` as a collaborator, and the agent picks it up. Needs the repo's Celiador webhook." : {
+
+    },
+    "Large file — showing the first part. Editing is disabled." : {
+
+    },
+    "Live review unavailable — showing the run's streamed diffs. (%@)" : {
+
+    },
+    "Loading the run…" : {
+
+    },
+    "Mac" : {
+
+    },
+    "Merge" : {
+
+    },
+    "Merge pull request #%lld?" : {
+
+    },
+    "Merge the pull request?" : {
+
+    },
+    "Merged, last 7 days" : {
+
+    },
+    "Message…" : {
+
+    },
+    "Needs your approval" : {
+
+    },
+    "New Cloud Run" : {
+
+    },
+    "New here? Create an account" : {
+
+    },
+    "New task" : {
+
+    },
+    "No messages in this chat." : {
+
+    },
+    "No sessions match “%@”." : {
+
+    },
+    "No steps recorded for this run." : {
+
+    },
+    "No tool steps recorded yet." : {
+
+    },
+    "Nothing yet — it starts when %@ picks it up." : {
+
+    },
+    "Notifications" : {
+
+    },
+    "On %@ — switch the editor to a feature branch to open a pull request." : {
+
+    },
+    "On your Mac" : {
+
+    },
+    "One account for the editor, the phone and the agent." : {
+
+    },
+    "Open" : {
+
+    },
+    "Open PR…" : {
+
+    },
+    "Open pull request %lld on GitHub" : {
+
+    },
+    "Open run" : {
+
+    },
+    "Open the repo in Celiador on your Mac first." : {
+
+    },
+    "Open the run" : {
+
+    },
+    "Opens a chat with the editor. Runs on your local copy, no clone." : {
+
+    },
+    "Opens the full diff" : {
+
+    },
+    "Optional" : {
+
+    },
+    "Or run in the cloud" : {
+
+    },
+    "Password" : {
+
+    },
+    "Permanently deletes your Celiador account, profile, chat history and push registrations. This can't be undone." : {
+
+    },
+    "Preferences" : {
+
+    },
+    "Privacy policy" : {
+
+    },
+    "Profile" : {
+
+    },
+    "Profile, usage and pull requests" : {
+
+    },
+    "Pull Request" : {
+
+    },
+    "Pull request opened" : {
+
+    },
+    "Pull request ready" : {
+
+    },
+    "Pushes %@ from the cloud and opens the pull request against “%@” as the Celiador GitHub App." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pushes %1$@ from the cloud and opens the pull request against “%2$@” as the Celiador GitHub App."
+          }
+        }
+      }
+    },
+    "Pushes %@ from your Mac and opens the pull request with the editor's GitHub sign-in. Without one, you get a link to finish it in the browser." : {
+
+    },
+    "Queue" : {
+
+    },
+    "Queued issues become pull requests; the merged count is the one number Celiador steers by." : {
+
+    },
+    "Queued issues become pull requests; the merged count is the one number Celiador steers by. Spend is what those runs cost at Celiador's published rates." : {
+
+    },
+    "Recent repos" : {
+
+    },
+    "Repo" : {
+
+    },
+    "Repos open in Celiador on your Mac show up here." : {
+
+    },
+    "Repos open in Celiador on your Mac. Missing one? Open it there and it shows up here." : {
+
+    },
+    "Repository" : {
+
+    },
+    "Repository URL" : {
+
+    },
+    "Reverts %@ to its last committed state." : {
+
+    },
+    "Review changes" : {
+
+    },
+    "Run" : {
+
+    },
+    "Run in the cloud" : {
+
+    },
+    "Running now" : {
+
+    },
+    "Runs" : {
+
+    },
+    "Runs on Celiador's servers, no computer needed. You watch it here, send follow-ups, review the diff, then push and open the pull request from the phone. Private repos, push and pull requests need the repo in your repos with the Celiador GitHub App installed." : {
+
+    },
+    "Runs on your Mac in its own worktree and branch, and ends in a pull request." : {
+
+    },
+    "Save" : {
+
+    },
+    "Search runs" : {
+
+    },
+    "Send" : {
+
+    },
+    "Send answer" : {
+
+    },
+    "Send follow-up" : {
+
+    },
+    "Send it back with a follow-up" : {
+
+    },
+    "Settings" : {
+
+    },
+    "Share anonymous usage data" : {
+
+    },
+    "Sign in" : {
+
+    },
+    "Sign out" : {
+
+    },
+    "Signing in…" : {
+
+    },
+    "Start" : {
+
+    },
+    "Start a task" : {
+
+    },
+    "Start from" : {
+
+    },
+    "Start from (default branch)" : {
+
+    },
+    "Stop" : {
+
+    },
+    "Task" : {
+
+    },
+    "Terms of service" : {
+
+    },
+    "The agent continues %@ in its own worktree; pushing adds its commits to that branch." : {
+
+    },
+    "The agent is asking" : {
+
+    },
+    "The agent is waiting for you — open the run" : {
+
+    },
+    "The agent works in its own git worktree on a new celiador/… branch off %@, ready for a pull request." : {
+
+    },
+    "This build" : {
+
+    },
+    "Title" : {
+
+    },
+    "Today's usage" : {
+
+    },
+    "Transcript" : {
+
+    },
+    "Try again" : {
+
+    },
+    "Usage data is which features get used and which requests fail — never your code, prompts, chat, repository names or email. Details at celiador.ai/privacy." : {
+
+    },
+    "Use the account you created in the Celiador editor, or make one here." : {
+
+    },
+    "View" : {
+
+    },
+    "View on GitHub" : {
+
+    },
+    "Waiting for review" : {
+
+    },
+    "Waiting for your answer" : {
+
+    },
+    "Waiting for your answer in the run" : {
+
+    },
+    "Watched repos" : {
+
+    },
+    "What changed?" : {
+
+    },
+    "What does this change?" : {
+
+    },
+    "What should change?" : {
+
+    },
+    "What should the agent do?" : {
+
+    },
+    "What's new" : {
+
+    },
+    "Work directly on this branch" : {
+
+    },
+    "Working directly on %@ — there's no pull request to open." : {
+
+    },
+    "Your account, profile and chat history are permanently deleted. This can't be undone." : {
+
+    },
+    "Your answer" : {
+
+    },
+    "Your code stays on your machine. Agents run locally; the daemon only relays what you send and never trains on your code." : {
+
+    },
+    "Your name" : {
+
+    },
+    "Your repos" : {
+
+    }
+  },
+  "version" : "1.0"
+}
