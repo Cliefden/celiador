@@ -6,6 +6,8 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
 - **Cloud sessions on GitHub repos, from the phone.** New Run → pick one of
   your repos (or paste any public one) and a branch, and the agent works on it on
   Celiador's servers, no computer needed: on a new `celiador/…` branch off the

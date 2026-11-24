@@ -95,7 +95,7 @@ targets:
         # Keep it warning-free; the next step is SWIFT_VERSION 6.
         SWIFT_STRICT_CONCURRENCY: complete
         TARGETED_DEVICE_FAMILY: "1,2"
-        MARKETING_VERSION: "0.2.5"
+        MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "1"
       configs:
         Test:
@@ -120,7 +120,7 @@ targets:
         SWIFT_VERSION: "5.9"
         SWIFT_STRICT_CONCURRENCY: complete
         TARGETED_DEVICE_FAMILY: "1,2"
-        MARKETING_VERSION: "0.2.5"
+        MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "1"
     dependencies:
       - sdk: WidgetKit.framework
@@ -167,7 +167,7 @@ targets:
         SWIFT_VERSION: "5.9"
         SWIFT_STRICT_CONCURRENCY: complete
         TARGETED_DEVICE_FAMILY: "4"
-        MARKETING_VERSION: "0.2.5"
+        MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "1"
     scheme: {}
 
