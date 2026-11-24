@@ -108,6 +108,7 @@ struct LoginView: View {
                 Spacer(minLength: 32)
             }
             .padding(.horizontal, 24)
+            .readableWidth(480)
             .animation(Theme.snappy, value: error)
             .animation(Theme.snappy, value: info)
         }

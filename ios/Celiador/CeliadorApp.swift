@@ -214,6 +214,9 @@ struct TabShell: View {
             }
             .badge(BuildInfo.channel == .prod ? nil : Text(BuildInfo.channel.label))
         }
+        // iPhone: the usual tab bar. iPad: a sidebar the user can collapse back
+        // into a top tab bar.
+        .tabViewStyle(.sidebarAdaptable)
         .modifier(TabBarBehaviour())
     }
 }

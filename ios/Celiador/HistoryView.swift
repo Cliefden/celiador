@@ -128,6 +128,7 @@ struct ChatTranscriptView: View {
                         }
                     }
                     .padding()
+                    .readableWidth()
                 } else if let error {
                     EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load chat", message: error)
                         .padding(.top, 60)

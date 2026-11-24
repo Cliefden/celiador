@@ -110,6 +110,14 @@ extension View {
     func brandGround() -> some View {
         self.scrollContentBackground(.hidden).background(CeliadorBackground())
     }
+
+    /// Caps a column at a comfortable reading width and centres it. A no-op on
+    /// iPhone; on iPad it keeps transcripts, forms and action bars from
+    /// stretching edge to edge. Apply inside a ScrollView (so the scroll
+    /// indicator stays at the screen edge) and before any full-bleed background.
+    func readableWidth(_ maxWidth: CGFloat = 760) -> some View {
+        self.frame(maxWidth: maxWidth).frame(maxWidth: .infinity)
+    }
 }
 
 // MARK: - Status

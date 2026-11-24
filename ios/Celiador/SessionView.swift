@@ -317,6 +317,7 @@ struct SessionView: View {
                         }
                     }
                     .padding(16)
+                    .readableWidth()
                     .animation(Theme.spring, value: transcript.items.count)
                 }
                 .onChange(of: transcript.items.count) {
@@ -338,6 +339,7 @@ struct SessionView: View {
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
+            .readableWidth()
         }
         .toast($toast)
         .navigationTitle(title)
