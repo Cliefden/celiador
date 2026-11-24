@@ -1449,9 +1449,28 @@ async function main(): Promise<void> {
 		const overWrite = await put("a.txt", "hi");
 		ok("overwrite a file with shorter content → 200, truncated", overWrite.status === 200 && fs.readFileSync(path.join(ws, "a.txt"), "utf8") === "hi");
 		ok("lexical escapes still → 400", (await put("../../escape.txt")).status === 400 && (await app.request(`${F}/file?path=${encodeURIComponent("/etc/hosts")}`, { headers: authH })).status === 400);
+		// The workspace's .git is the host's: a gitdir redirect or core.fsmonitor written
+		// there would run on the host's next git call. Never readable or writable.
+		fs.mkdirSync(path.join(ws, ".git"), { recursive: true });
+		fs.writeFileSync(path.join(ws, ".git", "config"), "[core]\n");
+		fs.symlinkSync(".git", path.join(ws, "g"));
+		const gitWrites = await Promise.all([".git", ".git/config", ".GIT/config", ".git/hooks/pre-commit", "g/config", "src/.git", "src/.git/config"].map(async (p) => ({ p, status: (await put(p, "[core]\n\tfsmonitor = touch /tmp/pwned\n")).status })));
+		ok("write .git (any depth, any case, or through a symlink to it) → 400", gitWrites.every((w) => w.status === 400), JSON.stringify(gitWrites));
+		ok("…the workspace's git config is unchanged and nothing was planted", fs.readFileSync(path.join(ws, ".git", "config"), "utf8") === "[core]\n" && !fs.existsSync(path.join(ws, ".git", "hooks")) && !fs.existsSync(path.join(ws, "src", ".git")));
+		const gitReads = await Promise.all([".git/config", "g/config"].map(async (p) => (await app.request(`${F}/file?path=${encodeURIComponent(p)}`, { headers: authH })).status));
+		ok("read .git (directly or through a symlink) → 400", gitReads.every((s) => s === 400), JSON.stringify(gitReads));
+		ok("list .git → 400", (await app.request(`${F}/files?path=.git`, { headers: authH })).status === 400);
+		const listed = (((await (await app.request(`${F}/files?path=`, { headers: authH })).json()) as { entries?: Array<{ name: string }> }).entries ?? []).map((e) => e.name);
+		ok("list: .git and a symlink to it are left out", !listed.includes(".git") && !listed.includes("g"), listed.join(","));
+		ok("a file merely named like it (.gitignore) is still writable", (await put(".gitignore", "node_modules\n")).status === 200);
 		sessionStores.for("smoke-user").delete(fsess.id);
 		fs.rmSync(path.dirname(ws), { recursive: true, force: true });
 		fs.rmSync(outside, { recursive: true, force: true });
+		// Cloud sessions run on this host: off unless cloud runs are on (no override here).
+		if (process.env.CELIADOR_RUNNER_AGENT !== "sandbox") {
+			const off = await app.request("http://localhost/api/sessions", { method: "POST", headers: authH, body: JSON.stringify({ origin: "phone", runner: "server", prompt: "x", repo: { url: "https://github.com/octocat/Hello-World" } }) });
+			ok("a cloud session with cloud runs off → 503", off.status === 503, `got ${off.status}`);
+		}
 	}
 
 	// ── Cost per run: gateway usage → session → task → /api/me ───────────────

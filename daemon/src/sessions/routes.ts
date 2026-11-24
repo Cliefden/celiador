@@ -8,7 +8,7 @@ import { sessionStores } from "./instance";
 import { isSessionId } from "./store";
 import { sessionBus } from "./bus";
 import { publishSessionEvent } from "./publish";
-import { cancelServerRun } from "../runner/manager";
+import { cancelServerRun, cloudRunsEnabled } from "../runner/manager";
 import { cloudBranches, cloudGit, cloudRepos, cloudSessionFollowUp, removeCloudSession, repoAccess, startCloudSession, validBranch } from "./cloudSession";
 import { taskStores } from "../tasks/dispatch";
 import { publishTaskChange } from "../tasks/events";
@@ -130,6 +130,10 @@ export function sessionRoutes(): Hono<AppEnv> {
     const { title, origin, runner, repo, prompt, taskId } = body;
     const userId = c.get("user").userId;
     const isServer = runner === "server";
+    // Cloud sessions run on this host, so they're off unless cloud runs are (the
+    // sandboxed agent, CELIADOR_RUNNER_AGENT=sandbox) — the same switch queued
+    // tasks use.
+    if (isServer && !cloudRunsEnabled()) return c.json({ error: "cloud runs are off on this server" }, 503);
 
     // A server (cloud) run executes on the daemon (no desktop needed) — it must name
     // a repo and a prompt. Validate before creating the session so a bad request
@@ -270,6 +274,7 @@ export function sessionRoutes(): Hono<AppEnv> {
     if (text.length > 50_000) return c.json({ error: "text too long" }, 413);
     // A cloud session's runner is the daemon: a follow-up is another turn in its worktree.
     if (session.runner === "server") {
+      if (!cloudRunsEnabled()) return c.json({ error: "cloud runs are off on this server" }, 503);
       const sent = await cloudSessionFollowUp(userId, session, text.trim());
       return "error" in sent ? c.json({ error: sent.error }, sent.status) : c.json({ ok: true });
     }

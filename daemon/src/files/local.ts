@@ -24,24 +24,38 @@ export class OutsideRootError extends Error {
 }
 
 /**
+ * Whether `rel` (relative to a workspace root) names `.git` or anything under
+ * one, at any depth. The workspace's git metadata is the daemon's, not the
+ * phone's: host git runs in this tree, so a `.git` file or config written here
+ * (a `gitdir:` redirect, `core.fsmonitor`, a hook) would run commands on the
+ * host. Case-insensitive, for case-insensitive filesystems.
+ */
+function touchesGitDir(rel: string): boolean {
+  return rel.split(/[\\/]/).some((segment) => segment.toLowerCase() === ".git");
+}
+
+/**
  * Resolve `rel` under `root` and return the absolute path only if it stays inside
- * `root` (defeats `../` escapes and absolute-path injection). Returns null otherwise.
- * Lexical only — the I/O helpers below also confine the *real* path.
+ * `root` (defeats `../` escapes and absolute-path injection) and stays out of the
+ * workspace's `.git`. Returns null otherwise. Lexical only — the I/O helpers
+ * below also confine the *real* path.
  */
 export function resolveInside(root: string, rel: string): string | null {
   const normRoot = path.resolve(root);
   const abs = path.resolve(normRoot, rel ?? "");
-  if (abs === normRoot || abs.startsWith(normRoot + path.sep)) return abs;
-  return null;
+  if (abs !== normRoot && !abs.startsWith(normRoot + path.sep)) return null;
+  if (touchesGitDir(path.relative(normRoot, abs))) return null;
+  return abs;
 }
 
 function within(realRoot: string, real: string): boolean {
-  return real === realRoot || real.startsWith(realRoot + path.sep);
+  return (real === realRoot || real.startsWith(realRoot + path.sep)) && !touchesGitDir(path.relative(realRoot, real));
 }
 
 /**
  * The real path of `abs` (symlinks resolved), only if it is inside `root`'s real
- * path; throws OutsideRootError otherwise, and ENOENT when it doesn't exist.
+ * path and not in its `.git` (a symlink like `g -> .git` is refused too); throws
+ * OutsideRootError otherwise, and ENOENT when it doesn't exist.
  */
 export async function realInside(root: string, abs: string): Promise<string> {
   const realRoot = await fs.realpath(root);
@@ -151,6 +165,7 @@ export async function writeFileSafe(abs: string, content: string, root: string):
   await realInside(root, existing);
   await fs.mkdir(parent, { recursive: true });
   const realParent = await realInside(root, parent);
+  if (touchesGitDir(path.basename(abs))) throw new OutsideRootError();
   let handle: fs.FileHandle;
   try {
     handle = await fs.open(path.join(realParent, path.basename(abs)), constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o644);
