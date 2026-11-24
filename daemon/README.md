@@ -45,6 +45,12 @@ curl -s localhost:4661/api/config
 
 ## API
 
+The full contract — every route's request and response shapes, errors, auth
+and SSE payloads — is the OpenAPI spec in
+[`packages/client/openapi.yaml`](../packages/client/openapi.yaml). Changing a
+route means updating it (and regenerating the types) in the same pull request;
+changes must be additive. See [`packages/client/README.md`](../packages/client/README.md).
+
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/api/health` | none | Liveness + version |

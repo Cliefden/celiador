@@ -1,0 +1,3354 @@
+openapi: 3.1.0
+info:
+  title: Celiador daemon API
+  version: 0.3.0
+  summary: The HTTP contract between the Celiador daemon and its clients.
+  description: |
+    The daemon (`daemon/` in this repository) is the hub every Celiador client
+    talks to: the editor's built-in `celiador-ai` extension, the
+    `celiador-remote` extension for stock VS Code / Cursor, and the iOS app.
+
+    This document is derived from the route handlers in `daemon/src` (start at
+    `daemon/src/app.ts`). When a handler changes, this file changes in the same
+    pull request.
+
+    **Released clients can't be updated in lockstep, so every change here is
+    additive**: never remove or rename a route or a field, never make an
+    optional field required, and make every new field optional. See
+    `packages/client/README.md`.
+
+    Conventions:
+
+    - Authenticated routes take `Authorization: Bearer <token>`: a Supabase
+      access token (the normal case), or the environment's shared token when
+      the daemon runs in token mode. Which mode a daemon runs in is reported by
+      `GET /api/config` (`authMode`).
+    - Errors are JSON `{ "error": "<message>" }` unless stated otherwise. The
+      agent endpoints answer refusals with Anthropic's error envelope
+      (`AnthropicError`) so SDK clients surface the reason.
+    - Request bodies are parsed leniently: unknown fields are ignored.
+    - Every `/api/*` request body is capped (1 MB by default; larger caps on
+      the agent, webhook, relay-event and file-write routes). Over the cap: 413.
+    - Server-Sent Events routes (`text/event-stream`) send a heartbeat event
+      named `ping` with empty data every 15-25 s. The payload schemas of each
+      stream's events are listed in `x-sse-events` on the response and defined
+      in `components.schemas`.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - url: https://celiador.ai
+    description: Production
+  - url: https://test.celiador.ai
+    description: Test
+  - url: https://dev.celiador.ai
+    description: Dev
+  - url: http://127.0.0.1:4661
+    description: Local daemon (`npm run dev`)
+
+tags:
+  - name: meta
+    description: Health, boot configuration and published limits. No auth.
+  - name: agent
+    description: Anthropic-backed endpoints. The daemon holds the key, picks the model and meters usage.
+  - name: sessions
+    description: |
+      Agent-session relay. A runner (the editor, or the daemon itself for a
+      cloud session) publishes an ordered event log; watchers (the phone)
+      observe it over SSE and steer the run with commands.
+  - name: presence
+    description: Repos open in the user's editor(s), and the editor control stream.
+  - name: tasks
+    description: The agent task queue (GitHub issue in, pull request out).
+  - name: data
+    description: Profile and durable chat history (needs the daemon's database).
+  - name: account
+    description: Signed-in account summary and self-service.
+  - name: push
+    description: APNs device and Live Activity registration.
+  - name: github
+    description: The user's GitHub connection and the GitHub webhook.
+  - name: releases
+    description: Editor update feed and public release downloads. No auth.
+  - name: extensions
+    description: The editor's extension control manifest. No auth.
+  - name: waitlist
+    description: The website's waitlist (double opt-in). No auth.
+  - name: admin
+    description: Operator views. Answer 404 to anyone who isn't an operator.
+  - name: browser
+    description: HTML pages opened in a browser (deep-link bounces, GitHub flows, mail links). Not called by app code.
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- meta
+  /api/health:
+    get:
+      tags: [meta]
+      operationId: getHealth
+      summary: Liveness and build identity
+      description: Clients check compatibility here; deploys verify `env` and `commit`.
+      security: []
+      responses:
+        "200":
+          description: The daemon is up.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /api/config:
+    get:
+      tags: [meta]
+      operationId: getConfig
+      summary: What a client needs to boot
+      description: |
+        Auth mode, the Supabase client configuration and which sign-in methods
+        are on. `signIn` is absent when the auth server can't be reached (or on
+        an older daemon): show every sign-in button then.
+      security: []
+      responses:
+        "200":
+          description: Boot configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Config" }
+
+  /api/limits:
+    get:
+      tags: [meta]
+      operationId: getLimits
+      summary: The per-user limits and rates in force
+      description: Public; the same `limits` object `GET /api/me` returns. `0` means unlimited. Cached for 5 minutes.
+      security: []
+      responses:
+        "200":
+          description: Limits and prices.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Limits" }
+
+  # ---------------------------------------------------------------- agent
+  /api/agent/messages:
+    post:
+      tags: [agent]
+      operationId: postAgentMessages
+      summary: Locked agent proxy (SSE)
+      description: |
+        The daemon owns the model, `max_tokens` cap, system prompt and tool set;
+        the client sends only the conversation (and optionally a lower
+        `max_tokens`). Any `system`, `tools` or `model` it sends is ignored.
+        The upstream Anthropic stream is relayed as SSE: each `data:` line is
+        one Anthropic stream event (`AnthropicStreamEvent`), or
+        `AgentStreamError` when the upstream request failed.
+
+        Accepts a user token or the environment's shared agent token. Body cap: 8 MB.
+      parameters:
+        - $ref: "#/components/parameters/MirrorHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentMessagesRequest" }
+      responses:
+        "200":
+          description: The model's stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE frames; `data` is JSON (see `x-sse-events`).
+              x-sse-events:
+                message: { $ref: "#/components/schemas/AnthropicStreamEvent" }
+                error: { $ref: "#/components/schemas/AgentStreamError" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AgentRefusal" }
+        "403": { $ref: "#/components/responses/AgentRefusal" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "429": { $ref: "#/components/responses/AgentRateLimited" }
+        "503": { $ref: "#/components/responses/AgentRefusal" }
+
+  /api/anthropic/v1/messages:
+    post:
+      tags: [agent]
+      operationId: postAnthropicMessages
+      summary: Anthropic-compatible gateway
+      description: |
+        A Messages API endpoint for clients built on the Claude Agent SDK
+        (point `ANTHROPIC_BASE_URL` at `<daemon>/api/anthropic` and send the
+        Celiador token as the bearer). The caller's system prompt, tools and
+        other fields are forwarded; the daemon sets the model (an allowlisted
+        requested model, else the agent model) and caps `max_tokens`.
+
+        With `stream: true` the upstream SSE bytes pass through unchanged;
+        otherwise the upstream status and JSON body are returned as they are.
+        Body cap: 32 MB.
+      parameters:
+        - $ref: "#/components/parameters/MirrorHeader"
+        - name: anthropic-version
+          in: header
+          required: false
+          description: Forwarded upstream (default `2023-06-01`).
+          schema: { type: string }
+        - name: anthropic-beta
+          in: header
+          required: false
+          description: Forwarded upstream, filtered to the values the daemon allows.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GatewayMessagesRequest" }
+      responses:
+        "200":
+          description: Upstream's reply, passed through.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: An Anthropic Messages API `Message`.
+                additionalProperties: true
+            text/event-stream:
+              schema:
+                type: string
+                description: Anthropic's SSE stream, passed through unchanged.
+              x-sse-events:
+                message: { $ref: "#/components/schemas/AnthropicStreamEvent" }
+        "400":
+          description: A malformed request (`{ error }`), or upstream's own 400 passed through.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Error"
+                  - $ref: "#/components/schemas/AnthropicError"
+        "401": { $ref: "#/components/responses/AgentRefusal" }
+        "403":
+          description: Refused (Anthropic envelope), or gateway mode is off on this server (`{ error }`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/AnthropicError"
+                  - $ref: "#/components/schemas/Error"
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "429": { $ref: "#/components/responses/AgentRateLimited" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "503": { $ref: "#/components/responses/AgentRefusal" }
+        default:
+          description: Any other upstream status, passed through with upstream's body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AnthropicError" }
+
+  /api/anthropic/v1/models:
+    get:
+      tags: [agent]
+      operationId: listAnthropicModels
+      summary: Model list for SDK clients
+      description: Anthropic's `GET /v1/models` passed through (status and body).
+      responses:
+        "200":
+          description: Upstream's model list.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401": { $ref: "#/components/responses/AgentRefusal" }
+        "403": { $ref: "#/components/responses/AgentRefusal" }
+        "429": { $ref: "#/components/responses/AgentRateLimited" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "503": { $ref: "#/components/responses/AgentRefusal" }
+
+  /api/complete:
+    post:
+      tags: [agent]
+      operationId: postComplete
+      summary: Inline completion
+      description: |
+        A small, fast, non-streaming completion at the caret. `prefix` keeps its
+        last 4000 characters, `suffix` its first 1000; a `language` that isn't a
+        plain language id is dropped. Rate limited per user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompleteRequest" }
+      responses:
+        "200":
+          description: The text to insert (may be empty).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompleteResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429":
+          description: Rate limited.
+          headers:
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  retryAfter: { type: number, description: "Seconds." }
+        "502": { $ref: "#/components/responses/Upstream" }
+
+  # ---------------------------------------------------------------- sessions
+  /api/sessions:
+    get:
+      tags: [sessions]
+      operationId: listSessions
+      summary: The caller's sessions
+      responses:
+        "200":
+          description: Sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [sessions]
+      operationId: createSession
+      summary: Create a session
+      description: |
+        An editor mirror (`runner` absent or `"editor"`): the editor then
+        attaches `GET /:id/commands` and publishes to `POST /:id/events`.
+        `mirrorKey` keeps one mirror per agent session: when another window
+        already mirrors it, the answer is 409 with that `session`.
+
+        A cloud session (`runner: "server"`): the daemon checks out
+        `repo.url` and runs `prompt` itself. Needs cloud runs to be on (503
+        otherwise).
+
+        `taskId` links an agent task to the new (or, on 409, the existing) session.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSessionRequest" }
+      responses:
+        "200":
+          description: The new session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: Another window already mirrors this agent session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MirrorConflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/sessions/cloud/repos:
+    get:
+      tags: [sessions]
+      operationId: listCloudRepos
+      summary: Repos a cloud session can start on
+      description: The user's linked repos, with whether the Celiador GitHub App can act on each.
+      responses:
+        "200":
+          description: Repos.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repos]
+                properties:
+                  repos:
+                    type: array
+                    items: { $ref: "#/components/schemas/CloudRepo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/sessions/cloud/branches:
+    get:
+      tags: [sessions]
+      operationId: listCloudBranches
+      summary: A linked repo's branches
+      description: The first 100 branches, default branch first.
+      parameters:
+        - name: remoteUrl
+          in: query
+          required: true
+          schema: { type: string, maxLength: 2048 }
+      responses:
+        "200":
+          description: Branches.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudBranches" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: getSession
+      summary: One session
+      responses:
+        "200":
+          description: The session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionEnvelope" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [sessions]
+      operationId: deleteSession
+      summary: Delete a session
+      description: "An id the caller doesn't own deletes nothing and answers `{ ok: false }` with 200."
+      responses:
+        "200":
+          description: Whether a session was deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFlag" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/sessions/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: streamSessionEvents
+      summary: "Watcher: the session's event log (SSE)"
+      description: |
+        Replays the log after the cursor, then streams live events. Each frame's
+        `id` is the event's `seq`; resume with `Last-Event-ID` (or `?cursor=`).
+        When the requested part of the log is gone, a `truncated` event comes
+        first (with no `id`).
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string }
+        - name: cursor
+          in: query
+          required: false
+          description: Used when `Last-Event-ID` is absent. Default 0 (the whole log).
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: The event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE frames; unnamed frames carry a `SessionEvent`, `ping` frames are empty.
+              x-sse-events:
+                message: { $ref: "#/components/schemas/SessionEvent" }
+                ping: { type: string, const: "" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [sessions]
+      operationId: publishSessionEvents
+      summary: "Runner: publish events"
+      description: |
+        One event or an array of up to 500. The daemon assigns `seq` and `at`.
+        `fs.result` frames are replies to file/git requests: they resolve the
+        waiting request and are never logged. The batch is validated as a
+        whole; one bad event rejects it. Body cap: 8 MB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/RunnerFrame"
+                - type: array
+                  maxItems: 500
+                  items: { $ref: "#/components/schemas/RunnerFrame" }
+      responses:
+        "200":
+          description: Published.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, lastSeq]
+                properties:
+                  ok: { type: boolean, const: true }
+                  lastSeq: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+
+  /api/sessions/{id}/commands:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: streamSessionCommands
+      summary: "Runner: the command channel (SSE)"
+      description: |
+        The runner holds this stream while it runs the session; watchers'
+        commands arrive here. A newer stream for the same session replaces the
+        older one. When the runner stays away for a few seconds mid-run, the
+        session ends `cancelled`.
+      responses:
+        "200":
+          description: The command stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE frames; unnamed frames carry a `SessionCommand`, `ping` frames are empty.
+              x-sse-events:
+                message: { $ref: "#/components/schemas/SessionCommand" }
+                ping: { type: string, const: "" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/sessions/{id}/message:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: sendSessionMessage
+      summary: "Watcher: send a message (another turn)"
+      description: |
+        Logged as the user's turn and relayed to the runner as `instruct`. On a
+        cloud session it is another turn in its worktree.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TextRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/sessions/{id}/approvals/{requestId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/RequestId"
+    post:
+      tags: [sessions]
+      operationId: resolveSessionApproval
+      summary: "Watcher: approve or reject"
+      description: Any `decision` other than `"reject"` approves.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Runner offline, or the request was already resolved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/sessions/{id}/answers/{requestId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/RequestId"
+    post:
+      tags: [sessions]
+      operationId: answerSessionQuestion
+      summary: "Watcher: answer a question"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TextRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Runner offline, or the question was already answered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+
+  /api/sessions/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: cancelSession
+      summary: "Watcher: cancel the run"
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Runner offline, or the cloud run isn't active.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/sessions/{id}/files:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: listSessionFiles
+      summary: "Watcher: list a workspace directory"
+      description: |
+        Served from the daemon's checkout for a cloud session, round-tripped to
+        the editor for an editor session.
+      parameters:
+        - name: path
+          in: query
+          required: false
+          description: Workspace-relative directory; empty for the root.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Directory entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/FsEntry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/sessions/{id}/file:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: readSessionFile
+      summary: "Watcher: read a workspace file"
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: The file (possibly truncated).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "415":
+          description: A binary file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+    put:
+      tags: [sessions]
+      operationId: writeSessionFile
+      summary: "Watcher: write a workspace file"
+      description: Body cap 7 MB; `content` at most 2,000,000 characters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WriteFileRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/sessions/{id}/git/status:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: getSessionGitStatus
+      summary: "Review: changed files"
+      responses:
+        "200":
+          description: Branch and changed files.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/sessions/{id}/git/diff:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: getSessionGitDiff
+      summary: "Review: a diff"
+      parameters:
+        - name: path
+          in: query
+          required: false
+          description: One file; absent for the whole working copy.
+          schema: { type: string, maxLength: 4096 }
+      responses:
+        "200":
+          description: A unified diff.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [patch]
+                properties:
+                  patch: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/sessions/{id}/git/commit:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: commitSession
+      summary: "Review: commit"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1, maxLength: 5000 }
+                paths:
+                  description: Only these files; absent for every change.
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { type: string, minLength: 1, maxLength: 4096 }
+      responses:
+        "200":
+          description: Committed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: true }
+                  sha: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/sessions/{id}/git/revert:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: revertSession
+      summary: "Review: revert files"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths]
+              properties:
+                paths:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { type: string, minLength: 1, maxLength: 4096 }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/sessions/{id}/git/push:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: pushSession
+      summary: "Review: push the branch"
+      responses:
+        "200":
+          description: Pushed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, branch]
+                properties:
+                  ok: { type: boolean, const: true }
+                  branch: { type: [string, "null"] }
+                  remote: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/sessions/{id}/git/pr:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: openSessionPullRequest
+      summary: "Review: open a pull request"
+      description: |
+        `created: false` means the pull request was already open, or the
+        editor has no GitHub sign-in and `url` is a compare link to finish in
+        a browser.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 500 }
+                body: { type: string, maxLength: 60000 }
+                base: { type: string, minLength: 1, maxLength: 300 }
+      responses:
+        "200":
+          description: The pull request (or compare) URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, created]
+                properties:
+                  url: { type: string, format: uri }
+                  created: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/EditorOffline" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/sessions/{id}/git/merge:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: mergeSession
+      summary: "Review: merge the pull request"
+      description: When the session runs an agent task, the task moves to `merged` and its id is returned.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MergeRequest" }
+      responses:
+        "200":
+          description: Merged.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, merged]
+                properties:
+                  ok: { type: boolean, const: true }
+                  merged: { type: boolean, const: true }
+                  sha: { type: string }
+                  url: { type: string }
+                  taskId: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Not merged (checks, conflicts, no GitHub sign-in), or the editor is offline.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  # ---------------------------------------------------------------- presence
+  /api/presence/workspaces:
+    get:
+      tags: [presence]
+      operationId: listEditorWorkspaces
+      summary: "Phone: repos open in the user's editors"
+      description: De-duplicated by remote URL; entries age out about 90 s after an editor's last heartbeat.
+      responses:
+        "200":
+          description: Open workspaces.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workspaces]
+                properties:
+                  workspaces:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkspaceEntry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      tags: [presence]
+      operationId: putEditorWorkspaces
+      summary: "Editor: heartbeat its open workspaces"
+      description: Replaces this editor instance's set. Invalid entries are dropped, not rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientId, workspaces]
+              properties:
+                clientId: { type: string, minLength: 1, maxLength: 200 }
+                workspaces:
+                  type: array
+                  maxItems: 50
+                  items: { $ref: "#/components/schemas/WorkspaceEntry" }
+      responses:
+        "200":
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, count]
+                properties:
+                  ok: { type: boolean, const: true }
+                  count: { type: integer, description: "How many entries were kept." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+
+  /api/presence/commands:
+    get:
+      tags: [presence]
+      operationId: streamEditorCommands
+      summary: "Editor: the control stream (SSE)"
+      description: Run requests from the phone and queued agent tasks arrive here.
+      responses:
+        "200":
+          description: The control stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE frames; unnamed frames carry an `EditorCommand`, `ping` frames are empty.
+              x-sse-events:
+                message: { $ref: "#/components/schemas/EditorCommand" }
+                ping: { type: string, const: "" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/presence/requests:
+    post:
+      tags: [presence]
+      operationId: requestEditorRun
+      summary: "Phone: start a run in the user's editor"
+      description: |
+        The editor matches `remoteUrl` against its open workspaces and starts a
+        local session. Without a `prompt` it opens an idle session. `prompt` is
+        cut to 8000 characters, `name` and `branch` to 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [remoteUrl]
+              properties:
+                remoteUrl: { type: string, pattern: "^https://" }
+                name: { type: string }
+                branch: { type: string }
+                prompt: { type: string }
+      responses:
+        "200":
+          description: Delivered to at least one editor.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, requestId, delivered]
+                properties:
+                  ok: { type: boolean, const: true }
+                  requestId: { type: string }
+                  delivered: { type: integer, description: "How many editors received it." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: No editor is online.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # ---------------------------------------------------------------- tasks
+  /api/tasks:
+    get:
+      tags: [tasks]
+      operationId: listTasks
+      summary: The task queue
+      responses:
+        "200":
+          description: Tasks and linked repos.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [tasks]
+      operationId: createTask
+      summary: Create a task by hand
+      description: |
+        From a repo + title (+ details), or from a GitHub issue of that repo.
+        An open task for the same issue comes back with `deduped: true` and
+        status 200 instead of 201.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTaskRequest" }
+      responses:
+        "200":
+          description: An open task for this issue already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskEnvelope" }
+        "201":
+          description: Created and queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/tasks/stream:
+    get:
+      tags: [tasks]
+      operationId: streamTasks
+      summary: Live task changes (SSE)
+      responses:
+        "200":
+          description: One `task` event per change, carrying the whole task.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE frames named `task` (data is a `Task`) and `ping` (empty).
+              x-sse-events:
+                task: { $ref: "#/components/schemas/Task" }
+                ping: { type: string, const: "" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/tasks/repos:
+    post:
+      tags: [tasks]
+      operationId: linkTaskRepo
+      summary: Link a repo
+      description: |
+        Issues of a linked repo become tasks for this user. The link is
+        verified when the user's connected GitHub account can write to the
+        repo. When a repo can't be linked, `needs` says what the user should do.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemoteUrlRequest" }
+      responses:
+        "200":
+          description: Linked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RepoLinkResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Refused; `needs` names the missing step.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RepoLinkRefusal" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [tasks]
+      operationId: unlinkTaskRepo
+      summary: Unlink a repo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemoteUrlRequest" }
+      responses:
+        "200":
+          description: The remaining links.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RepoLinks" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/tasks/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    post:
+      tags: [tasks]
+      operationId: cancelTask
+      summary: Cancel a task
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskEnvelope" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/tasks/{id}/status:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    post:
+      tags: [tasks]
+      operationId: reportTaskStatus
+      summary: "Editor: report progress on a task it runs"
+      description: |
+        `running` may follow `pr-open` (a follow-up turn) and `pr-open` may be
+        re-sent; both are idempotent. `pr-open` needs a `prUrl` unless the task
+        already has one. A `running` or `pr-open` report without `error`
+        clears the previous error. With `pr-open`, `summary` (the run's final
+        message) becomes the pull request's description.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskStatusReport" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/tasks/{id}/merge:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    post:
+      tags: [tasks]
+      operationId: mergeTask
+      summary: Merge the task's pull request
+      description: Needs a task in `pr-open`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MergeRequest" }
+      responses:
+        "200":
+          description: Merged.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, merged, url]
+                properties:
+                  ok: { type: boolean, const: true }
+                  merged: { type: boolean, const: true }
+                  sha: { type: string }
+                  url: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "504": { $ref: "#/components/responses/EditorTimeout" }
+
+  /api/tasks/{id}/followup:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    post:
+      tags: [tasks]
+      operationId: followUpTask
+      summary: Send the run back with an instruction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TextRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  # ---------------------------------------------------------------- data
+  /api/profile:
+    get:
+      tags: [data]
+      operationId: getProfile
+      summary: The caller's profile
+      responses:
+        "200":
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileEnvelope" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    patch:
+      tags: [data]
+      operationId: updateProfile
+      summary: Update the profile
+      description: |
+        Fields not sent are left alone. `settings` is merged into the stored
+        object; the merged object may be at most 16 KiB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfilePatch" }
+      responses:
+        "200":
+          description: The updated profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/chats:
+    get:
+      tags: [data]
+      operationId: listChats
+      summary: Chat history, newest first
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Default 100, clamped to 1-500.
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: Chats.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chats]
+                properties:
+                  chats:
+                    type: array
+                    items: { $ref: "#/components/schemas/Chat" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/chats/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [data]
+      operationId: getChat
+      summary: One chat with its messages
+      responses:
+        "200":
+          description: The chat.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chat, messages]
+                properties:
+                  chat: { $ref: "#/components/schemas/Chat" }
+                  messages:
+                    type: array
+                    items: { $ref: "#/components/schemas/ChatMessage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    patch:
+      tags: [data]
+      operationId: renameChat
+      summary: Rename a chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: The renamed chat.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chat]
+                properties:
+                  chat: { $ref: "#/components/schemas/Chat" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [data]
+      operationId: deleteChat
+      summary: Delete a chat
+      description: "An unknown id answers `{ ok: false }` with 200."
+      responses:
+        "200":
+          description: Whether a chat was deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFlag" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  # ---------------------------------------------------------------- account
+  /api/me:
+    get:
+      tags: [account]
+      operationId: getMe
+      summary: Account summary
+      description: Identity, plan, today's agent usage against the limits, and the task summary.
+      responses:
+        "200":
+          description: The summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/account:
+    delete:
+      tags: [account]
+      operationId: deleteAccount
+      summary: Delete the account permanently
+      description: Only in `supabase` auth mode (400 otherwise). Removes the account and everything the daemon keeps for it.
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "502": { $ref: "#/components/responses/Upstream" }
+
+  # ---------------------------------------------------------------- push
+  /api/push/register:
+    post:
+      tags: [push]
+      operationId: registerPushDevice
+      summary: Register an APNs device token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushRegistration" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    delete:
+      tags: [push]
+      operationId: unregisterPushDevice
+      summary: Forget an APNs device token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/push/activity:
+    post:
+      tags: [push]
+      operationId: registerLiveActivity
+      summary: Register a Live Activity push token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PushRegistration"
+                - type: object
+                  required: [activityId]
+                  properties:
+                    activityId: { type: string, minLength: 1, maxLength: 64 }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/push/test:
+    post:
+      tags: [push]
+      operationId: sendTestPush
+      summary: Send a test alert to the caller's devices
+      responses:
+        "200":
+          description: Sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, sent, devices]
+                properties:
+                  ok: { type: boolean, const: true }
+                  sent: { type: integer }
+                  devices: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  # ---------------------------------------------------------------- github
+  /api/github/account:
+    get:
+      tags: [github]
+      operationId: getGitHubAccount
+      summary: The user's GitHub connection
+      responses:
+        "200":
+          description: Connection state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitHubAccount" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    delete:
+      tags: [github]
+      operationId: disconnectGitHubAccount
+      summary: Disconnect GitHub
+      responses:
+        "200":
+          description: Disconnected.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, connected]
+                properties:
+                  ok: { type: boolean, const: true }
+                  connected: { type: boolean, const: false }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/github/account/connect:
+    post:
+      tags: [github]
+      operationId: connectGitHubAccount
+      summary: Start connecting GitHub
+      description: |
+        Returns the URLs to open in a browser: `authorizeUrl` (authorize only)
+        or `installUrl` (install the Celiador GitHub App and authorize). They
+        are valid for `expiresIn` seconds. Afterwards poll `GET /api/github/account`.
+      responses:
+        "200":
+          description: The browser URLs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizeUrl, installUrl, expiresIn]
+                properties:
+                  authorizeUrl: { type: string, format: uri }
+                  installUrl: { type: string, format: uri }
+                  expiresIn: { type: integer, description: "Seconds." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/github/callback:
+    get:
+      tags: [browser]
+      operationId: githubCallbackPage
+      summary: GitHub's redirect after authorization (HTML)
+      security: []
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string } }
+        - { name: state, in: query, required: false, schema: { type: string } }
+        - { name: setup_action, in: query, required: false, schema: { type: string } }
+        - { name: installation_id, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "400": { $ref: "#/components/responses/Html" }
+        "502": { $ref: "#/components/responses/Html" }
+
+  /api/github/callback/confirm:
+    post:
+      tags: [browser]
+      operationId: githubCallbackConfirm
+      summary: The connect page's confirm button (HTML form)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                confirm: { type: string }
+                action: { type: string, enum: [connect, cancel] }
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "400": { $ref: "#/components/responses/Html" }
+        "409": { $ref: "#/components/responses/Html" }
+
+  /api/github/app/new:
+    get:
+      tags: [browser]
+      operationId: githubAppSetupPage
+      summary: Operator setup of the Celiador GitHub App (HTML)
+      description: 404 unless the environment's operator has turned setup on.
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Html" }
+    post:
+      tags: [browser]
+      operationId: githubAppSetupSubmit
+      summary: Operator setup form (HTML)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "403": { $ref: "#/components/responses/Html" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Html" }
+
+  /api/github/app/setup:
+    get:
+      tags: [browser]
+      operationId: githubAppSetupReturn
+      summary: GitHub's redirect after the app is created (HTML)
+      security: []
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string } }
+        - { name: state, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "400": { $ref: "#/components/responses/Html" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Html" }
+        "502": { $ref: "#/components/responses/Html" }
+
+  /api/github/webhook:
+    post:
+      tags: [github]
+      operationId: githubWebhook
+      summary: GitHub webhook deliveries
+      description: |
+        Sent by GitHub (the Celiador GitHub App, or a repository webhook), signed
+        with `X-Hub-Signature-256`. Not called by Celiador clients. Body cap: 25 MB.
+      security: []
+      parameters:
+        - { name: X-GitHub-Event, in: header, required: true, schema: { type: string } }
+        - { name: X-GitHub-Delivery, in: header, required: false, schema: { type: string } }
+        - { name: X-Hub-Signature-256, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Handled or ignored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+        "201":
+          description: A task was created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/open/task/{id}:
+    get:
+      tags: [browser]
+      operationId: openTaskPage
+      summary: Bounce page to `celiador://task/<id>` (HTML)
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "404": { $ref: "#/components/responses/Html" }
+
+  /api/open/queue:
+    get:
+      tags: [browser]
+      operationId: openQueuePage
+      summary: Bounce page to `celiador://queue` (HTML)
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+
+  # ---------------------------------------------------------------- releases
+  /api/update/{platform}/{quality}/{commit}:
+    get:
+      tags: [releases]
+      operationId: getEditorUpdate
+      summary: The editor's update feed
+      description: 204 when there is nothing newer (or the commit isn't a published build).
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Platform"
+        - $ref: "#/components/parameters/Quality"
+        - name: commit
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{7,40}$" }
+      responses:
+        "200":
+          description: The newest build.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EditorUpdate" }
+        "204":
+          description: Up to date.
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/releases:
+    get:
+      tags: [releases]
+      operationId: listReleases
+      summary: Every published build
+      security: []
+      responses:
+        "200":
+          description: Releases.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [releases]
+                properties:
+                  releases:
+                    type: array
+                    items: { $ref: "#/components/schemas/Release" }
+
+  /api/releases/latest/{platform}/{quality}:
+    get:
+      tags: [releases]
+      operationId: getLatestRelease
+      summary: The newest build for a platform and quality
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Platform"
+        - $ref: "#/components/parameters/Quality"
+      responses:
+        "200":
+          description: The release.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Release" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/releases/latest/{platform}/{quality}/{kind}:
+    get:
+      tags: [releases]
+      operationId: downloadLatestRelease
+      summary: Redirect to the newest artifact of a kind
+      description: "`kind` is `archive`, `dmg`, or any key of the release's `assets`."
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Platform"
+        - $ref: "#/components/parameters/Quality"
+        - name: kind
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,40}$" }
+      responses:
+        "302":
+          description: Redirect to the artifact.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/releases/{file}:
+    parameters:
+      - name: file
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$" }
+    get:
+      tags: [releases]
+      operationId: downloadRelease
+      summary: A published artifact
+      security: []
+      responses:
+        "200":
+          description: The file.
+          content:
+            application/octet-stream:
+              schema: { type: string, contentMediaType: application/octet-stream }
+        "404": { $ref: "#/components/responses/NotFound" }
+    head:
+      tags: [releases]
+      operationId: headRelease
+      summary: A published artifact's headers
+      security: []
+      responses:
+        "200":
+          description: The file exists.
+        "404":
+          description: Not found.
+
+  # ---------------------------------------------------------------- extensions
+  /api/extensions/control:
+    get:
+      tags: [extensions]
+      operationId: getExtensionControl
+      summary: The extension control manifest
+      description: Open VSX's manifest with Celiador's own `deprecated` entries merged in. Cached for an hour.
+      security: []
+      responses:
+        "200":
+          description: The manifest.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExtensionControl" }
+
+  # ---------------------------------------------------------------- waitlist
+  /api/waitlist:
+    post:
+      tags: [waitlist]
+      operationId: joinWaitlist
+      summary: Sign up for the waitlist
+      description: |
+        Double opt-in: the address gets a confirmation mail. The answer is the
+        same 202 whether the address is new or already known. Body cap 4 KiB.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WaitlistSignup" }
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "429":
+          description: Too many sign-ups from this client.
+          headers:
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/waitlist/confirm:
+    get:
+      tags: [browser]
+      operationId: waitlistConfirmPage
+      summary: The confirmation link (HTML page with a button)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/WaitlistLinkId"
+        - $ref: "#/components/parameters/WaitlistLinkToken"
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "400": { $ref: "#/components/responses/Html" }
+    post:
+      tags: [browser]
+      operationId: waitlistConfirm
+      summary: Confirm the sign-up (HTML)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/WaitlistLinkId"
+        - $ref: "#/components/parameters/WaitlistLinkToken"
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "400": { $ref: "#/components/responses/Html" }
+
+  /api/waitlist/unsubscribe:
+    get:
+      tags: [browser]
+      operationId: waitlistUnsubscribePage
+      summary: The unsubscribe link (HTML page with a button)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/WaitlistLinkId"
+        - $ref: "#/components/parameters/WaitlistLinkToken"
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "400": { $ref: "#/components/responses/Html" }
+    post:
+      tags: [browser]
+      operationId: waitlistUnsubscribe
+      summary: Unsubscribe (HTML; also RFC 8058 one-click)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/WaitlistLinkId"
+        - $ref: "#/components/parameters/WaitlistLinkToken"
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "400": { $ref: "#/components/responses/Html" }
+
+  # ---------------------------------------------------------------- admin
+  /api/admin/usage:
+    get:
+      tags: [admin]
+      operationId: getAdminUsage
+      summary: Agent usage per day and account
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 90, default: 30 }
+      responses:
+        "200":
+          description: Usage, newest day first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUsage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/waitlist:
+    get:
+      tags: [admin]
+      operationId: listWaitlist
+      summary: Waitlist export
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [confirmed, pending, all], default: confirmed }
+        - name: list
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/WaitlistName" }
+        - name: format
+          in: query
+          required: false
+          schema: { type: string, enum: [json, csv], default: json }
+      responses:
+        "200":
+          description: Entries, as JSON or CSV.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count, entries]
+                properties:
+                  count: { type: integer }
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/WaitlistExportRow" }
+            text/csv:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [admin]
+      operationId: eraseWaitlistAddress
+      summary: Erase an address
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+      responses:
+        "200":
+          description: Whether it was on the list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [removed]
+                properties:
+                  removed: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: A Supabase access token (or the environment's shared token in token mode).
+
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[A-Za-z0-9-]{1,64}$" }
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string }
+    TaskId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Platform:
+      name: platform
+      in: path
+      required: true
+      description: e.g. `darwin-arm64`.
+      schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,40}$" }
+    Quality:
+      name: quality
+      in: path
+      required: true
+      description: e.g. `stable`.
+      schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,40}$" }
+    MirrorHeader:
+      name: X-Celiador-Mirror
+      in: header
+      required: false
+      description: The editor's agent-session key; the request's usage is attributed to the session mirroring it.
+      schema: { type: string }
+    WaitlistLinkId:
+      name: id
+      in: query
+      required: true
+      schema: { type: string, pattern: "^[0-9a-f]{32}$" }
+    WaitlistLinkToken:
+      name: t
+      in: query
+      required: true
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{20,64}$" }
+
+  headers:
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema: { type: string }
+
+  responses:
+    Ok:
+      description: Done.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Ok" }
+    BadRequest:
+      description: The request is malformed or missing a field.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: No valid token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: The token isn't valid for this route.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No such resource.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: The resource's state doesn't allow this now; `error` says why.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooLarge:
+      description: The body, or one of its fields, is over its cap.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: The feature isn't configured or turned on in this environment.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ServerError:
+      description: Internal error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Upstream:
+      description: A service the daemon relies on (Anthropic, GitHub, the auth server, the editor) failed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    EditorOffline:
+      description: The session's editor isn't connected (or review isn't available for this cloud run).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    EditorTimeout:
+      description: The editor didn't answer in time.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    AgentRefusal:
+      description: Refused, in Anthropic's error envelope.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AnthropicError" }
+    AgentRateLimited:
+      description: Over a per-user limit, in Anthropic's error envelope.
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AnthropicError" }
+    Html:
+      description: An HTML page.
+      content:
+        text/html:
+          schema: { type: string }
+
+  schemas:
+    # ---------------------------------------------------------- common
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    Ok:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
+    OkFlag:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+    TextRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1, maxLength: 50000 }
+    RemoteUrlRequest:
+      type: object
+      required: [remoteUrl]
+      properties:
+        remoteUrl:
+          type: string
+          description: "`https://github.com/<owner>/<name>` (optionally `.git`)."
+          maxLength: 2048
+    MergeRequest:
+      type: object
+      properties:
+        method: { type: string, enum: [merge, squash, rebase] }
+    AnthropicError:
+      type: object
+      description: Anthropic's error envelope.
+      required: [type, error]
+      properties:
+        type: { type: string, const: error }
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type:
+              type: string
+              description: "`authentication_error`, `permission_error`, `rate_limit_error`, `overloaded_error`, or upstream's own."
+            message: { type: string }
+        request_id: { type: [string, "null"] }
+
+    # ---------------------------------------------------------- meta
+    FailureCounter:
+      type: object
+      required: [count, lastAt]
+      properties:
+        count: { type: integer }
+        lastAt: { type: [string, "null"], format: date-time }
+    Health:
+      type: object
+      required: [ok, name, version, env, commit, pid, failures]
+      properties:
+        ok: { type: boolean, const: true }
+        name: { type: string, const: celiador-daemon }
+        version: { type: string }
+        env: { type: string, description: "`dev`, `test`, `prod` or `local`." }
+        commit: { type: [string, "null"] }
+        pid: { type: integer }
+        failures:
+          type: object
+          description: Background failure counters since the process started.
+          required: [since, persist, push]
+          properties:
+            since: { type: string, format: date-time }
+            persist: { $ref: "#/components/schemas/FailureCounter" }
+            push: { $ref: "#/components/schemas/FailureCounter" }
+    AuthMode:
+      type: string
+      enum: [supabase, token, none]
+    SignInMethods:
+      type: object
+      required: [password, magicLink, github]
+      properties:
+        password: { type: boolean }
+        magicLink: { type: boolean }
+        github: { type: boolean }
+    Config:
+      type: object
+      required: [authMode, supabaseUrl, supabaseAnonKey]
+      properties:
+        authMode: { $ref: "#/components/schemas/AuthMode" }
+        supabaseUrl: { type: [string, "null"] }
+        supabaseAnonKey: { type: [string, "null"] }
+        signIn: { $ref: "#/components/schemas/SignInMethods" }
+    UserLimits:
+      type: object
+      description: Per-user limits; 0 means unlimited.
+      required: [rpm, concurrency, dailyRequests, dailyUsd, dailyInput, dailyOutput]
+      properties:
+        rpm: { type: number, description: "Requests per minute." }
+        concurrency: { type: number, description: "Agent requests in flight at once." }
+        dailyRequests: { type: number }
+        dailyUsd: { type: number, description: "Daily budget in USD at the published rates." }
+        dailyInput: { type: number, description: "Daily input tokens." }
+        dailyOutput: { type: number, description: "Daily output tokens." }
+    Prices:
+      type: object
+      description: USD per million tokens.
+      required: [currency, model, inputPerMtok, cacheWritePerMtok, cacheWrite1hPerMtok, cacheReadPerMtok, outputPerMtok]
+      properties:
+        currency: { type: string, const: USD }
+        model: { type: string }
+        inputPerMtok: { type: number }
+        cacheWritePerMtok: { type: number, description: "5-minute cache TTL." }
+        cacheWrite1hPerMtok: { type: number, description: "1-hour cache TTL." }
+        cacheReadPerMtok: { type: number }
+        outputPerMtok: { type: number }
+    Limits:
+      type: object
+      required: [plan, model, limits, tasks, prices, modelPrices, window]
+      properties:
+        plan: { type: string }
+        model: { type: string, description: "The agent model." }
+        limits: { $ref: "#/components/schemas/UserLimits" }
+        tasks:
+          type: object
+          required: [concurrency]
+          properties:
+            concurrency: { type: integer, description: "Agent tasks running at once per user." }
+        prices: { $ref: "#/components/schemas/Prices" }
+        modelPrices:
+          type: object
+          description: Rate cards for every model the gateway runs, by model id.
+          additionalProperties: { $ref: "#/components/schemas/Prices" }
+        window: { type: string }
+
+    # ---------------------------------------------------------- agent
+    AnthropicMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [user, assistant] }
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                required: [type]
+                properties:
+                  type: { type: string }
+                additionalProperties: true
+    AgentMessagesRequest:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/AnthropicMessage" }
+        max_tokens:
+          type: integer
+          description: Lowers the daemon's cap; can't raise it.
+    GatewayMessagesRequest:
+      type: object
+      description: |
+        An Anthropic Messages API request. `model` is honoured only when the
+        daemon allows it; `max_tokens` is capped. Messages may also carry the
+        `system` role. Server-side tools and some fields are refused (400).
+      required: [messages]
+      properties:
+        model: { type: string }
+        max_tokens: { type: integer }
+        stream: { type: boolean }
+        system:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: object, additionalProperties: true }
+        tools:
+          type: array
+          items:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string }
+              type: { type: string }
+            additionalProperties: true
+        messages:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role: { type: string, enum: [user, assistant, system] }
+              content:
+                oneOf:
+                  - type: string
+                  - type: array
+                    items: { type: object, additionalProperties: true }
+      additionalProperties: true
+    AnthropicStreamEvent:
+      type: object
+      description: One Anthropic Messages stream event (`message_start`, `content_block_delta`, ...), relayed as is.
+      required: [type]
+      properties:
+        type: { type: string }
+      additionalProperties: true
+    AgentStreamError:
+      type: object
+      description: Sent on the agent proxy's stream when the upstream request failed.
+      required: [type, error]
+      properties:
+        type: { type: string, const: error }
+        error:
+          type: object
+          required: [message]
+          properties:
+            message: { type: string }
+    CompleteRequest:
+      type: object
+      properties:
+        prefix: { type: string, description: "Code before the caret." }
+        suffix: { type: string, description: "Code after the caret." }
+        language: { type: string, description: "A language id such as `typescript`." }
+    CompleteResponse:
+      type: object
+      required: [completion]
+      properties:
+        completion: { type: string }
+
+    # ---------------------------------------------------------- sessions
+    SessionOrigin:
+      type: string
+      enum: [editor, phone]
+    SessionRunner:
+      type: string
+      description: "`editor`: the user's editor runs it. `server`: a cloud session the daemon runs."
+      enum: [editor, server]
+    SessionState:
+      type: string
+      enum: [idle, running, awaiting, done, error, cancelled]
+    Usage:
+      type: object
+      description: Model usage at the daemon's published rates.
+      required: [requests, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, costUsd]
+      properties:
+        requests: { type: integer }
+        inputTokens: { type: integer, description: "Total input, cache reads and writes included." }
+        cacheReadTokens: { type: integer }
+        cacheWriteTokens: { type: integer }
+        outputTokens: { type: integer }
+        costUsd: { type: number }
+    SessionRepo:
+      type: object
+      description: A cloud session's checkout.
+      required: [url, branch, base, existingBranch, pushable, remoteSha]
+      properties:
+        url: { type: string }
+        owner: { type: string }
+        name: { type: string }
+        branch: { type: string, description: "Where commits and pushes go." }
+        base: { type: string, description: "What `branch` started from; the pull request's base." }
+        existingBranch: { type: boolean }
+        pushable: { type: boolean, description: "Whether push / pull request / merge are available." }
+        remoteSha: { type: string }
+        pr:
+          type: object
+          required: [number, url]
+          properties:
+            number: { type: integer }
+            url: { type: string }
+    Session:
+      type: object
+      required: [id, userId, title, origin, runner, state, runnerConnected, lastSeq, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        title: { type: string }
+        origin: { $ref: "#/components/schemas/SessionOrigin" }
+        runner: { $ref: "#/components/schemas/SessionRunner" }
+        state: { $ref: "#/components/schemas/SessionState" }
+        runnerConnected: { type: boolean }
+        lastSeq: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        mirrorKey: { type: string }
+        usage: { $ref: "#/components/schemas/Usage" }
+        repo: { $ref: "#/components/schemas/SessionRepo" }
+    SessionEnvelope:
+      type: object
+      required: [session]
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+    MirrorConflict:
+      type: object
+      required: [error, session]
+      properties:
+        error: { type: string }
+        session: { $ref: "#/components/schemas/Session" }
+    CreateSessionRequest:
+      type: object
+      properties:
+        title: { type: string }
+        origin: { $ref: "#/components/schemas/SessionOrigin" }
+        runner: { $ref: "#/components/schemas/SessionRunner" }
+        mirrorKey:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Editor sessions only.
+        taskId: { type: string, maxLength: 100 }
+        prompt:
+          type: string
+          description: Required for `runner = server`.
+        repo:
+          type: object
+          description: Required for `runner = server`.
+          required: [url]
+          properties:
+            url: { type: string, maxLength: 2048, pattern: "^https?://" }
+            branch: { type: string, description: "Start from (or with `existingBranch`, work on) this branch." }
+            existingBranch: { type: boolean }
+    CloudRepo:
+      type: object
+      required: [url, owner, name, app, verified]
+      properties:
+        url: { type: string }
+        owner: { type: string }
+        name: { type: string }
+        app: { type: boolean, description: "Whether the Celiador GitHub App can act on it for this user." }
+        verified: { type: boolean, description: "Whether the user's link carries proof of their GitHub access." }
+        defaultBranch: { type: string }
+        private: { type: boolean }
+    CloudBranches:
+      type: object
+      required: [branches]
+      properties:
+        branches:
+          type: array
+          items: { type: string }
+        defaultBranch: { type: string }
+
+    SessionEvent:
+      description: |
+        One entry of a session's log. `seq` is monotonic per session (and the
+        SSE frame id); `at` is an ISO timestamp. Discriminated by `kind`.
+        Clients must ignore kinds they don't know: new kinds are additive.
+      oneOf:
+        - $ref: "#/components/schemas/SessionEventActivity"
+        - $ref: "#/components/schemas/SessionEventDelta"
+        - $ref: "#/components/schemas/SessionEventMessage"
+        - $ref: "#/components/schemas/SessionEventTool"
+        - $ref: "#/components/schemas/SessionEventToolResult"
+        - $ref: "#/components/schemas/SessionEventApproval"
+        - $ref: "#/components/schemas/SessionEventQuestion"
+        - $ref: "#/components/schemas/SessionEventDiff"
+        - $ref: "#/components/schemas/SessionEventState"
+        - $ref: "#/components/schemas/SessionEventDone"
+        - $ref: "#/components/schemas/SessionEventError"
+        - $ref: "#/components/schemas/SessionEventTruncated"
+      discriminator:
+        propertyName: kind
+        mapping:
+          activity: "#/components/schemas/SessionEventActivity"
+          delta: "#/components/schemas/SessionEventDelta"
+          message: "#/components/schemas/SessionEventMessage"
+          tool: "#/components/schemas/SessionEventTool"
+          toolResult: "#/components/schemas/SessionEventToolResult"
+          approval: "#/components/schemas/SessionEventApproval"
+          question: "#/components/schemas/SessionEventQuestion"
+          diff: "#/components/schemas/SessionEventDiff"
+          state: "#/components/schemas/SessionEventState"
+          done: "#/components/schemas/SessionEventDone"
+          error: "#/components/schemas/SessionEventError"
+          truncated: "#/components/schemas/SessionEventTruncated"
+    SessionEventBase:
+      type: object
+      required: [seq, at]
+      properties:
+        seq: { type: integer }
+        at: { type: string, format: date-time }
+    SessionEventActivity:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventActivity"
+    SessionEventDelta:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventDelta"
+    SessionEventMessage:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventMessage"
+    SessionEventTool:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventTool"
+    SessionEventToolResult:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventToolResult"
+    SessionEventApproval:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventApproval"
+    SessionEventQuestion:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventQuestion"
+    SessionEventDiff:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventDiff"
+    SessionEventState:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventState"
+    SessionEventDone:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventDone"
+    SessionEventError:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - $ref: "#/components/schemas/RunnerEventError"
+    SessionEventTruncated:
+      allOf:
+        - $ref: "#/components/schemas/SessionEventBase"
+        - type: object
+          description: The log before `from` is gone; replay starts later than asked. Sent with `seq` 0 and no SSE id.
+          required: [kind, from]
+          properties:
+            kind: { type: string, const: truncated }
+            from: { type: integer }
+
+    RunnerEvent:
+      description: An event as the runner publishes it (the daemon adds `seq` and `at`).
+      oneOf:
+        - $ref: "#/components/schemas/RunnerEventActivity"
+        - $ref: "#/components/schemas/RunnerEventDelta"
+        - $ref: "#/components/schemas/RunnerEventMessage"
+        - $ref: "#/components/schemas/RunnerEventTool"
+        - $ref: "#/components/schemas/RunnerEventToolResult"
+        - $ref: "#/components/schemas/RunnerEventApproval"
+        - $ref: "#/components/schemas/RunnerEventQuestion"
+        - $ref: "#/components/schemas/RunnerEventDiff"
+        - $ref: "#/components/schemas/RunnerEventState"
+        - $ref: "#/components/schemas/RunnerEventDone"
+        - $ref: "#/components/schemas/RunnerEventError"
+      discriminator:
+        propertyName: kind
+        mapping:
+          activity: "#/components/schemas/RunnerEventActivity"
+          delta: "#/components/schemas/RunnerEventDelta"
+          message: "#/components/schemas/RunnerEventMessage"
+          tool: "#/components/schemas/RunnerEventTool"
+          toolResult: "#/components/schemas/RunnerEventToolResult"
+          approval: "#/components/schemas/RunnerEventApproval"
+          question: "#/components/schemas/RunnerEventQuestion"
+          diff: "#/components/schemas/RunnerEventDiff"
+          state: "#/components/schemas/RunnerEventState"
+          done: "#/components/schemas/RunnerEventDone"
+          error: "#/components/schemas/RunnerEventError"
+    RunnerEventActivity:
+      type: object
+      description: A one-line status ("Reading src/app.ts").
+      required: [kind, text]
+      properties:
+        kind: { type: string, const: activity }
+        text: { type: string, maxLength: 200000 }
+    RunnerEventDelta:
+      type: object
+      description: Streamed assistant text.
+      required: [kind, text]
+      properties:
+        kind: { type: string, const: delta }
+        text: { type: string, maxLength: 200000 }
+    RunnerEventMessage:
+      type: object
+      required: [kind, role, text]
+      properties:
+        kind: { type: string, const: message }
+        role: { type: string, enum: [user, assistant] }
+        text: { type: string, maxLength: 200000 }
+    RunnerEventTool:
+      type: object
+      required: [kind, callId, name]
+      properties:
+        kind: { type: string, const: tool }
+        callId: { type: string, maxLength: 200 }
+        name: { type: string, maxLength: 200 }
+        input: {}
+    RunnerEventToolResult:
+      type: object
+      required: [kind, callId, ok]
+      properties:
+        kind: { type: string, const: toolResult }
+        callId: { type: string, maxLength: 200 }
+        ok: { type: boolean }
+    RunnerEventApproval:
+      type: object
+      description: The run waits for approve/reject (`POST /approvals/{requestId}`).
+      required: [kind, requestId, approvalKind]
+      properties:
+        kind: { type: string, const: approval }
+        requestId: { type: string, maxLength: 200 }
+        approvalKind: { type: string, maxLength: 200, description: "The tool kind: `write_file`, `edit`, `bash`, ..." }
+        title: { type: string, maxLength: 400 }
+        path: { type: string, maxLength: 4096 }
+        preview: { type: string, maxLength: 200000 }
+    RunnerEventQuestion:
+      type: object
+      description: The run waits for an answer (`POST /answers/{requestId}`).
+      required: [kind, requestId, prompt]
+      properties:
+        kind: { type: string, const: question }
+        requestId: { type: string, maxLength: 200 }
+        prompt: { type: string, maxLength: 200000 }
+        choices:
+          type: array
+          maxItems: 20
+          items: { type: string, maxLength: 1000 }
+    RunnerEventDiff:
+      type: object
+      required: [kind, path, patch]
+      properties:
+        kind: { type: string, const: diff }
+        path: { type: string, maxLength: 4096 }
+        patch: { type: string, maxLength: 200000 }
+    RunnerEventState:
+      type: object
+      required: [kind, state]
+      properties:
+        kind: { type: string, const: state }
+        state: { $ref: "#/components/schemas/SessionState" }
+    RunnerEventDone:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, const: done }
+    RunnerEventError:
+      type: object
+      required: [kind, message]
+      properties:
+        kind: { type: string, const: error }
+        message: { type: string, maxLength: 10000 }
+    RunnerFrame:
+      description: What a runner may post to `POST /api/sessions/{id}/events`.
+      oneOf:
+        - $ref: "#/components/schemas/RunnerEvent"
+        - $ref: "#/components/schemas/FsResultFrame"
+
+    SessionCommand:
+      description: |
+        A command relayed to the runner over `GET /api/sessions/{id}/commands`.
+        The `fs.*` and `git.*` kinds are requests: the runner answers each with
+        an `fs.result` frame carrying the same `requestId`. Runners must ignore
+        kinds they don't know.
+      oneOf:
+        - $ref: "#/components/schemas/CommandInstruct"
+        - $ref: "#/components/schemas/CommandApprove"
+        - $ref: "#/components/schemas/CommandReject"
+        - $ref: "#/components/schemas/CommandAnswer"
+        - $ref: "#/components/schemas/CommandCancel"
+        - $ref: "#/components/schemas/CommandFsList"
+        - $ref: "#/components/schemas/CommandFsRead"
+        - $ref: "#/components/schemas/CommandFsWrite"
+        - $ref: "#/components/schemas/CommandGitStatus"
+        - $ref: "#/components/schemas/CommandGitDiff"
+        - $ref: "#/components/schemas/CommandGitCommit"
+        - $ref: "#/components/schemas/CommandGitRevert"
+        - $ref: "#/components/schemas/CommandGitPush"
+        - $ref: "#/components/schemas/CommandGitPr"
+        - $ref: "#/components/schemas/CommandGitMerge"
+      discriminator:
+        propertyName: kind
+        mapping:
+          instruct: "#/components/schemas/CommandInstruct"
+          approve: "#/components/schemas/CommandApprove"
+          reject: "#/components/schemas/CommandReject"
+          answer: "#/components/schemas/CommandAnswer"
+          cancel: "#/components/schemas/CommandCancel"
+          fs.list: "#/components/schemas/CommandFsList"
+          fs.read: "#/components/schemas/CommandFsRead"
+          fs.write: "#/components/schemas/CommandFsWrite"
+          git.status: "#/components/schemas/CommandGitStatus"
+          git.diff: "#/components/schemas/CommandGitDiff"
+          git.commit: "#/components/schemas/CommandGitCommit"
+          git.revert: "#/components/schemas/CommandGitRevert"
+          git.push: "#/components/schemas/CommandGitPush"
+          git.pr: "#/components/schemas/CommandGitPr"
+          git.merge: "#/components/schemas/CommandGitMerge"
+    CommandInstruct:
+      type: object
+      required: [kind, text]
+      properties:
+        kind: { type: string, const: instruct }
+        text: { type: string }
+    CommandApprove:
+      type: object
+      required: [kind, requestId]
+      properties:
+        kind: { type: string, const: approve }
+        requestId: { type: string }
+    CommandReject:
+      type: object
+      required: [kind, requestId]
+      properties:
+        kind: { type: string, const: reject }
+        requestId: { type: string }
+    CommandAnswer:
+      type: object
+      required: [kind, requestId, text]
+      properties:
+        kind: { type: string, const: answer }
+        requestId: { type: string }
+        text: { type: string }
+    CommandCancel:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, const: cancel }
+    CommandFsList:
+      type: object
+      required: [kind, requestId, path]
+      properties:
+        kind: { type: string, const: fs.list }
+        requestId: { type: string }
+        path: { type: string }
+    CommandFsRead:
+      type: object
+      required: [kind, requestId, path]
+      properties:
+        kind: { type: string, const: fs.read }
+        requestId: { type: string }
+        path: { type: string }
+    CommandFsWrite:
+      type: object
+      required: [kind, requestId, path, content]
+      properties:
+        kind: { type: string, const: fs.write }
+        requestId: { type: string }
+        path: { type: string }
+        content: { type: string }
+    CommandGitStatus:
+      type: object
+      required: [kind, requestId]
+      properties:
+        kind: { type: string, const: git.status }
+        requestId: { type: string }
+    CommandGitDiff:
+      type: object
+      required: [kind, requestId]
+      properties:
+        kind: { type: string, const: git.diff }
+        requestId: { type: string }
+        path: { type: string }
+    CommandGitCommit:
+      type: object
+      required: [kind, requestId, message]
+      properties:
+        kind: { type: string, const: git.commit }
+        requestId: { type: string }
+        message: { type: string }
+        paths:
+          type: array
+          items: { type: string }
+    CommandGitRevert:
+      type: object
+      required: [kind, requestId, paths]
+      properties:
+        kind: { type: string, const: git.revert }
+        requestId: { type: string }
+        paths:
+          type: array
+          items: { type: string }
+    CommandGitPush:
+      type: object
+      required: [kind, requestId]
+      properties:
+        kind: { type: string, const: git.push }
+        requestId: { type: string }
+    CommandGitPr:
+      type: object
+      required: [kind, requestId, title]
+      properties:
+        kind: { type: string, const: git.pr }
+        requestId: { type: string }
+        title: { type: string }
+        body: { type: string }
+        base: { type: string }
+    CommandGitMerge:
+      type: object
+      required: [kind, requestId]
+      properties:
+        kind: { type: string, const: git.merge }
+        requestId: { type: string }
+        method: { type: string, enum: [merge, squash, rebase] }
+        head:
+          type: string
+          description: Merge the open pull request of this branch instead of the run's own (an agent task's merge).
+
+    FsEntry:
+      type: object
+      required: [name, type]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [file, dir] }
+        size: { type: integer }
+    GitFileStatus:
+      type: object
+      required: [path, status]
+      properties:
+        path: { type: string }
+        status:
+          type: string
+          description: Porcelain-style code ("M", "A", "D", "R", "U", ...).
+    FsResult:
+      type: object
+      description: The runner's answer to an `fs.*` or `git.*` command (one envelope for all of them).
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        error: { type: string }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/FsEntry" }
+        content: { type: string }
+        encoding: { type: string }
+        truncated: { type: boolean }
+        branch: { type: string }
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/GitFileStatus" }
+        patch: { type: string }
+        sha: { type: string }
+        remote: { type: string, description: "git.push: the remote the branch went to." }
+        url: { type: string, description: "git.pr / git.merge: the pull request's URL (or a compare link)." }
+        created: { type: boolean, description: "git.pr: whether this call created the pull request." }
+        merged: { type: boolean, description: "git.merge: whether GitHub reports it merged." }
+    FsResultFrame:
+      description: A runner's reply to a command, posted on the event channel. Never logged.
+      allOf:
+        - type: object
+          required: [kind, requestId]
+          properties:
+            kind: { type: string, const: fs.result }
+            requestId: { type: string }
+        - $ref: "#/components/schemas/FsResult"
+    FileContent:
+      type: object
+      required: [path, content, encoding, truncated]
+      properties:
+        path: { type: string }
+        content: { type: string }
+        encoding: { type: string }
+        truncated: { type: boolean }
+    WriteFileRequest:
+      type: object
+      required: [path, content]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 4096 }
+        content: { type: string, maxLength: 2000000 }
+    GitStatus:
+      type: object
+      required: [branch, files]
+      properties:
+        branch: { type: [string, "null"] }
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/GitFileStatus" }
+
+    # ---------------------------------------------------------- presence
+    WorkspaceEntry:
+      type: object
+      required: [name, remoteUrl]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 400 }
+        remoteUrl: { type: string, maxLength: 2048, pattern: "^https://" }
+        branch: { type: string, minLength: 1, maxLength: 400 }
+    EditorCommand:
+      description: A command pushed to an editor. Editors must ignore kinds they don't know.
+      oneOf:
+        - $ref: "#/components/schemas/EditorRunRequest"
+        - $ref: "#/components/schemas/EditorTaskRequest"
+      discriminator:
+        propertyName: kind
+        mapping:
+          start-run: "#/components/schemas/EditorRunRequest"
+          start-task: "#/components/schemas/EditorTaskRequest"
+    EditorRunRequest:
+      type: object
+      description: Start a session on an open workspace (the phone's "Run on your editor").
+      required: [kind, requestId, remoteUrl, prompt]
+      properties:
+        kind: { type: string, const: start-run }
+        requestId: { type: string }
+        remoteUrl: { type: string }
+        name: { type: string }
+        branch: { type: string }
+        prompt: { type: string, description: "Empty for an idle session." }
+    EditorTaskRequest:
+      type: object
+      description: Run a queued agent task in its own worktree.
+      required: [kind, taskId, remoteUrl, branch, prompt, title]
+      properties:
+        kind: { type: string, const: start-task }
+        taskId: { type: string }
+        remoteUrl: { type: string }
+        name: { type: string }
+        branch: { type: string, description: "The new branch (and worktree) the run works on." }
+        prompt: { type: string }
+        title: { type: string }
+        issue:
+          type: object
+          required: [number, url]
+          properties:
+            number: { type: integer }
+            url: { type: string }
+        commented:
+          type: boolean
+          description: The daemon already posted the "picked up" comment; the editor must not.
+
+    # ---------------------------------------------------------- tasks
+    TaskState:
+      type: string
+      enum: [queued, dispatched, running, pr-open, merged, failed, cancelled]
+    TaskRepo:
+      type: object
+      required: [owner, name, url]
+      properties:
+        owner: { type: string }
+        name: { type: string }
+        url: { type: string, description: "`https://github.com/<owner>/<name>.git`" }
+    TaskIssue:
+      type: object
+      required: [number, title, url]
+      properties:
+        number: { type: integer, minimum: 1 }
+        title: { type: string, minLength: 1, maxLength: 400 }
+        url: { type: string, description: "`https://github.com/<owner>/<name>/issues/<number>`" }
+    TaskAwaiting:
+      type: object
+      description: What the linked session is blocked on.
+      required: [kind, requestId, text]
+      properties:
+        kind: { type: string, enum: [permission, question] }
+        requestId: { type: string, description: "For the session's approve/reject/answer routes." }
+        text: { type: string }
+        preview: { type: string }
+        choices:
+          type: array
+          items: { type: string }
+    TaskChecks:
+      type: string
+      enum: [passing, failing, pending, none, unknown]
+    TaskPullRequest:
+      type: object
+      required: [number, url, updatedAt]
+      properties:
+        number: { type: integer }
+        url: { type: string }
+        additions: { type: integer }
+        deletions: { type: integer }
+        changedFiles: { type: integer }
+        checks: { $ref: "#/components/schemas/TaskChecks" }
+        mergeable: { type: boolean, description: "False when the pull request has conflicts; absent while GitHub computes it." }
+        updatedAt: { type: string, format: date-time }
+    Task:
+      type: object
+      required: [id, repo, title, prompt, branch, source, state, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        repo: { $ref: "#/components/schemas/TaskRepo" }
+        issue: { $ref: "#/components/schemas/TaskIssue" }
+        title: { type: string }
+        prompt: { type: string, description: "What the agent is told." }
+        branch: { type: string }
+        source: { type: string, enum: [issue-label, issue-comment, manual] }
+        state: { $ref: "#/components/schemas/TaskState" }
+        sessionId: { type: string }
+        prUrl: { type: string }
+        error: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        runner:
+          type: string
+          description: "`mac`: an editor took it. `cloud`: the daemon runs it."
+          enum: [mac, cloud]
+        dispatchedAt: { type: string, format: date-time }
+        dispatches: { type: integer }
+        machine: { type: string, description: "The editor's computer name." }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        activity: { type: string, description: "The linked session's latest one-line activity." }
+        awaiting: { $ref: "#/components/schemas/TaskAwaiting" }
+        pr: { $ref: "#/components/schemas/TaskPullRequest" }
+        usage: { $ref: "#/components/schemas/Usage" }
+    TaskEnvelope:
+      type: object
+      required: [task]
+      properties:
+        task: { $ref: "#/components/schemas/Task" }
+        deduped: { type: boolean, const: true }
+    RepoLink:
+      type: object
+      required: [url, verified]
+      properties:
+        url: { type: string }
+        verified: { type: boolean, description: "Whether the link carries proof of the user's GitHub access." }
+        login: { type: string, description: "The GitHub account that proved it." }
+    RepoLinks:
+      type: object
+      required: [repos, repoLinks]
+      properties:
+        repos:
+          type: array
+          description: Linked repo URLs (the same as `repoLinks[].url`).
+          items: { type: string }
+        repoLinks:
+          type: array
+          items: { $ref: "#/components/schemas/RepoLink" }
+    RepoLinkResult:
+      allOf:
+        - $ref: "#/components/schemas/RepoLinks"
+        - type: object
+          required: [verified]
+          properties:
+            verified: { type: boolean }
+            message: { type: string, description: "Why the link isn't verified, when it isn't." }
+    RepoLinkRefusal:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        needs: { type: string, enum: [github-connect, write-access] }
+    TaskList:
+      allOf:
+        - $ref: "#/components/schemas/RepoLinks"
+        - type: object
+          required: [tasks, concurrency]
+          properties:
+            tasks:
+              type: array
+              items: { $ref: "#/components/schemas/Task" }
+            concurrency: { type: integer }
+    CreateTaskRequest:
+      type: object
+      required: [remoteUrl]
+      properties:
+        remoteUrl: { type: string, maxLength: 2048, description: "`https://github.com/<owner>/<name>`" }
+        title: { type: string, maxLength: 400, description: "Required unless `issue` is given." }
+        details: { type: string, description: "Kept up to 20000 characters." }
+        issue: { $ref: "#/components/schemas/TaskIssue" }
+    TaskStatusReport:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [running, pr-open, merged, failed] }
+        sessionId: { type: string }
+        prUrl: { type: string, pattern: "^https://" }
+        error: { type: string }
+        machine: { type: string }
+        pr:
+          type: object
+          properties:
+            number: { type: integer }
+            additions: { type: integer }
+            deletions: { type: integer }
+            changedFiles: { type: integer }
+        summary: { type: string, description: "The run's final message (pr-open)." }
+    WebhookResult:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        pong: { type: boolean }
+        ignored: { type: string }
+        taskId: { type: string }
+        state: { $ref: "#/components/schemas/TaskState" }
+        refreshed:
+          type: array
+          description: Ids of the tasks whose pull request was refreshed.
+          items: { type: string }
+        fixing:
+          type: array
+          items: { type: string }
+        answered: { type: string, enum: [approve, reject, answer] }
+        requestId: { type: string }
+      additionalProperties: true
+
+    # ---------------------------------------------------------- data
+    Profile:
+      type: object
+      required: [id, email, display_name, avatar_url, plan, settings, created_at, updated_at]
+      properties:
+        id: { type: string }
+        email: { type: [string, "null"] }
+        display_name: { type: [string, "null"] }
+        avatar_url: { type: [string, "null"] }
+        plan: { type: string }
+        settings:
+          type: object
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ProfileEnvelope:
+      type: object
+      required: [profile]
+      properties:
+        profile: { $ref: "#/components/schemas/Profile" }
+    ProfilePatch:
+      type: object
+      properties:
+        display_name: { type: string, maxLength: 200 }
+        avatar_url: { type: string, maxLength: 2048 }
+        settings:
+          type: object
+          description: Merged into the stored settings.
+          additionalProperties: true
+    Chat:
+      type: object
+      required: [id, title, origin, status, created_at, updated_at, last_message_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: [string, "null"] }
+        origin: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_message_at: { type: [string, "null"], format: date-time }
+    ChatMessage:
+      type: object
+      required: [id, role, content, seq, created_at]
+      properties:
+        id: { type: string }
+        role: { type: string }
+        content: {}
+        seq: { type: [integer, "null"] }
+        created_at: { type: string, format: date-time }
+
+    # ---------------------------------------------------------- account
+    DayUsage:
+      type: object
+      required: [requests, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd]
+      properties:
+        requests: { type: integer }
+        inputTokens: { type: integer, description: "Cache reads and writes included." }
+        outputTokens: { type: integer }
+        cacheReadTokens: { type: integer }
+        cacheWriteTokens: { type: integer }
+        costUsd: { type: number }
+    Me:
+      type: object
+      required: [userId, email, plan, usage, limits, resetsAt, tasks]
+      properties:
+        userId: { type: string }
+        email: { type: [string, "null"] }
+        plan:
+          type: [string, "null"]
+          description: Null without a database (token / no-auth mode) or before the profile exists.
+        usage: { $ref: "#/components/schemas/DayUsage" }
+        limits: { $ref: "#/components/schemas/UserLimits" }
+        resetsAt: { type: string, format: date-time }
+        tasks:
+          type: object
+          required: [running, prOpen, mergedLast7Days, costUsdLast7Days, concurrency]
+          properties:
+            running: { type: integer }
+            prOpen: { type: integer }
+            mergedLast7Days: { type: integer }
+            costUsdLast7Days: { type: number }
+            concurrency: { type: integer }
+    PushRegistration:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, description: "An APNs token (hex)." }
+        env:
+          type: string
+          enum: [production, sandbox]
+          description: Anything other than `production` is treated as `sandbox`.
+    GitHubAccount:
+      type: object
+      required: [app, connected]
+      properties:
+        app: { type: boolean, description: "Whether the Celiador GitHub App is set up on this server." }
+        connected: { type: boolean }
+        login: { type: string }
+        connectedAt: { type: string, format: date-time }
+
+    # ---------------------------------------------------------- releases
+    ReleaseAsset:
+      type: object
+      required: [file, sha256]
+      properties:
+        file: { type: string }
+        sha256: { type: string }
+    Release:
+      type: object
+      required: [platform, quality, version, productVersion, timestamp, archive, archiveSha256, archiveUrl]
+      properties:
+        platform: { type: string, description: "e.g. `darwin-arm64`." }
+        quality: { type: string, description: "e.g. `stable`." }
+        version: { type: string, description: "The build's commit." }
+        productVersion: { type: string, description: "e.g. `1.138.0`." }
+        timestamp: { type: integer, description: "Build time, ms since epoch." }
+        archive: { type: string }
+        archiveSha256: { type: string }
+        dmg: { type: string }
+        dmgSha256: { type: string }
+        assets:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ReleaseAsset" }
+        notes: { type: string, description: "Markdown." }
+        archiveUrl: { type: string, format: uri }
+        dmgUrl: { type: string, format: uri }
+        assetUrls:
+          type: object
+          additionalProperties: { type: string, format: uri }
+    EditorUpdate:
+      type: object
+      description: The update descriptor the editor's built-in updater reads.
+      required: [url, name, notes, pub_date, version, productVersion, timestamp, sha256hash]
+      properties:
+        url: { type: string, format: uri }
+        name: { type: string }
+        notes: { type: string }
+        pub_date: { type: string, format: date-time }
+        version: { type: string }
+        productVersion: { type: string }
+        timestamp: { type: integer }
+        sha256hash: { type: string }
+    ExtensionControl:
+      type: object
+      required: [malicious, deprecated, search]
+      properties:
+        malicious:
+          type: array
+          items: {}
+        deprecated:
+          type: object
+          additionalProperties: true
+        search:
+          type: array
+          items: {}
+      additionalProperties: true
+
+    # ---------------------------------------------------------- waitlist + admin
+    WaitlistName:
+      type: string
+      enum: [early-access, windows, linux]
+    WaitlistSignup:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+        lists:
+          description: Unknown names are dropped; none left means `early-access`.
+          oneOf:
+            - $ref: "#/components/schemas/WaitlistName"
+            - type: array
+              items: { $ref: "#/components/schemas/WaitlistName" }
+        website:
+          type: string
+          description: Leave empty (a field people never fill).
+    WaitlistExportRow:
+      type: object
+      required: [email, lists, pending, createdAt, confirmedAt, unsubscribeUrl]
+      properties:
+        email: { type: string }
+        lists:
+          type: array
+          items: { $ref: "#/components/schemas/WaitlistName" }
+        pending:
+          type: array
+          items: { $ref: "#/components/schemas/WaitlistName" }
+        createdAt: { type: string, format: date-time }
+        confirmedAt: { type: [string, "null"], format: date-time }
+        unsubscribeUrl: { type: [string, "null"] }
+    AdminUsage:
+      type: object
+      required: [days]
+      properties:
+        days:
+          type: array
+          items:
+            type: object
+            required: [day, total, accounts, users]
+            properties:
+              day: { type: string, format: date }
+              total: { $ref: "#/components/schemas/DayUsage" }
+              accounts: { type: integer }
+              users:
+                type: array
+                items:
+                  allOf:
+                    - $ref: "#/components/schemas/DayUsage"
+                    - type: object
+                      required: [userId, email, createdAt]
+                      properties:
+                        userId: { type: string }
+                        email: { type: [string, "null"] }
+                        createdAt: { type: [string, "null"], format: date-time }

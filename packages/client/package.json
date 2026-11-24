@@ -1,0 +1,31 @@
+{
+  "name": "@celiador/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Celiador daemon's client contract: the OpenAPI spec and the TypeScript types generated from it.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./src/schema.ts",
+  "exports": {
+    ".": {
+      "types": "./src/schema.ts"
+    },
+    "./openapi.yaml": "./openapi.yaml"
+  },
+  "files": [
+    "openapi.yaml",
+    "src"
+  ],
+  "scripts": {
+    "generate": "openapi-typescript openapi.yaml --output src/schema.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "openapi-typescript openapi.yaml --output src/schema.ts --check && tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

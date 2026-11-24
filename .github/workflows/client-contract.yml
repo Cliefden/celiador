@@ -1,0 +1,89 @@
+name: Client contract
+
+# The daemon's client contract (packages/client): the OpenAPI spec and the
+# TypeScript types generated from it. Checks that the committed types match
+# the spec, that they compile, and — on pull requests — that the spec only
+# changed additively against the base branch (released clients can't be
+# updated in lockstep; see packages/client/README.md).
+on:
+  pull_request:
+    paths:
+      - packages/client/**
+      - daemon/src/**
+      - .github/workflows/client-contract.yml
+  push:
+    branches-ignore: [main]
+    paths:
+      - packages/client/**
+      - daemon/src/**
+      - .github/workflows/client-contract.yml
+
+concurrency:
+  group: client-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned: the release and the sha256 of its linux_amd64 archive (checksums.txt).
+  OASDIFF_VERSION: 1.36.0
+  OASDIFF_SHA256: dba65661f6d0f178a3e4884c309f19527a849388bb9df0e81545db76dbb697d6
+
+jobs:
+  types:
+    name: generated types up to date
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/client/package-lock.json
+
+      - run: npm ci
+
+      # Regenerates from openapi.yaml and fails when src/schema.ts differs,
+      # then typechecks the generated file.
+      - run: npm run check
+
+  breaking:
+    name: no breaking API changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Spec on the base branch
+        id: base
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          if git cat-file -e "origin/${BASE_REF}:packages/client/openapi.yaml" 2>/dev/null; then
+            git show "origin/${BASE_REF}:packages/client/openapi.yaml" > "$RUNNER_TEMP/base-openapi.yaml"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No spec on ${BASE_REF} yet; nothing to compare."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install oasdiff
+        if: steps.base.outputs.exists == 'true'
+        run: |
+          archive="oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/$archive"
+          echo "${OASDIFF_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/oasdiff"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/oasdiff" oasdiff
+
+      - name: Breaking changes
+        if: steps.base.outputs.exists == 'true'
+        run: |
+          "$RUNNER_TEMP/oasdiff/oasdiff" breaking "$RUNNER_TEMP/base-openapi.yaml" packages/client/openapi.yaml --fail-on ERR
