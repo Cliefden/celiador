@@ -81,7 +81,8 @@ Migrations only go forward, so rolling back code leaves the schema as it is.
 
 | Workflow | Runs on | Does |
 | --- | --- | --- |
-| `ci.yml` | pull requests and pushes to other branches touching `daemon/`, and from Deploy daemon | `npm run typecheck` + `npm run smoke` in `daemon/` on Node 20 and 22 |
+| `ci.yml` | pull requests touching `daemon/` once ready for review (a draft runs nothing), and from Deploy daemon | `npm run typecheck` + `npm run smoke` in `daemon/` on Node 20 and 22 |
+| `web-ci.yml`, `ios-ci.yml`, `client-contract.yml` | pull requests touching `web/`, `ios/`, `packages/client/` or `daemon/src/`, once ready for review | the site's lint + typecheck + build; an unsigned simulator build; the client types match the spec and the spec changed only additively |
 | `deploy.yml` (Deploy daemon) | `main` pushes touching `daemon/`, `vX.Y.Z` tags, manual runs | CI, then rsync `daemon/` to `~/envs/<env>/daemon`, `npm ci`, `BUILD_INFO`, migrate, restart `celiador-daemon@<env>`, and a health gate: `/api/health` through Caddy must report this `env` and this `commit`. Mails the result. |
 | `web-deploy.yml` (Deploy web) | `main` pushes touching `web/`, `vX.Y.Z` tags, manual runs | `next build`, rsync `web/` + `.next` to `~/envs/<env>/web`, `npm ci`, restart `celiador-web@<env>`, check the page through the public host. Mails the result. |
 | `ios.yml` (Build iOS) | `main` pushes touching `ios/`, `vX.Y.Z` tags, manual runs | On a macOS runner: XcodeGen, icon banner, `xcodebuild archive` of the channel's scheme with **manual** signing (a CI-only Apple Distribution certificate from the repository secrets and the channel's two App Store profiles, fetched with the App Store Connect API key), then `-exportArchive` with `destination=upload` to App Store Connect (TestFlight). `main` → the Dev app, tag → the Test build, manual `prod` → the App Store build behind the `prod` reviewer. Mails the result. `ios/TESTFLIGHT.md`. |
@@ -132,4 +133,7 @@ JWT secret, the database password and the anon key are generated on the box.
 
 `main` is not protected: `scripts/release.sh` commits to it directly, and a
 push to it deploys dev, as on Celindor. Feature work goes through pull
-requests (the issue → run → PR loop), releases through the script.
+requests (the issue → run → PR loop), releases through the script. PRs open
+as drafts (`wb pr`) and land in merge trains (`wb train build`, then `wb train
+land <train PR>` once it is green — a fast-forward push to `main`): one CI
+run and one dev deploy for the whole train instead of one per PR.
