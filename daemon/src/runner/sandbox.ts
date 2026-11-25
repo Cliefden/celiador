@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import readline from "node:readline";
 import { promisify } from "node:util";
-import { mintRunnerToken } from "../auth";
+import { mintRunnerToken, revokeRunnerToken } from "../auth";
 import { HOST, PORT } from "../config";
 import type { SessionEventInput } from "../sessions/types";
 import type { RunnerAgent } from "./agent";
@@ -24,8 +24,9 @@ const execFileP = promisify(execFile);
  *   127.0.0.1:8080, and the daemon side (openGatewaySocket) forwards only
  *   /api/anthropic/* requests to the daemon's own Anthropic gateway. So the
  *   agent can talk to the model and nothing else.
- * - Auth to the gateway is a runner token minted for this user and run (2 h),
- *   so model usage meters against the user's quota like any other request. The
+ * - Auth to the gateway is a runner token minted for this user and run, and
+ *   revoked when the run ends (auth.ts, #80), so model usage meters against
+ *   the user's quota like any other request, and only while the run lasts. The
  *   daemon accepts runner tokens on the gateway only (auth.ts), so a token the
  *   agent leaks can't start sessions, push, merge or touch the account.
  * - Read-only root filesystem, tmpfs for /tmp and $HOME, all capabilities
@@ -274,9 +275,18 @@ export async function sandboxAvailable(): Promise<string | undefined> {
 export const sandboxAgent: RunnerAgent = async (ctx) => {
   const unavailable = await sandboxAvailable();
   if (unavailable) throw new Error(unavailable);
-  const token = mintRunnerToken(ctx.userId, ctx.runId, 2 * 60 * 60);
+  // Outlives the wall-clock limit a little; revoked as soon as the run ends (finally below).
+  const token = mintRunnerToken(ctx.userId, ctx.runId, Math.ceil(TIMEOUT_MS / 1000) + 10 * 60);
   if (!token) throw new Error("cloud runs need SUPABASE_JWT_SECRET to mint a runner token");
+  try {
+    await runInSandbox(ctx, token);
+  } finally {
+    // The run is over (done, failed, cancelled or timed out): its token stops working now (#80).
+    revokeRunnerToken(token);
+  }
+};
 
+async function runInSandbox(ctx: Parameters<RunnerAgent>[0], token: string): Promise<void> {
   const runDir = path.dirname(ctx.workspaceDir);
   const gatewayDir = path.join(runDir, "gw");
   await fs.promises.mkdir(gatewayDir, { recursive: true, mode: 0o700 });
@@ -340,4 +350,4 @@ export const sandboxAgent: RunnerAgent = async (ctx) => {
     server.closeAllConnections();
     await fs.promises.rm(gatewayDir, { recursive: true, force: true });
   }
-};
+}

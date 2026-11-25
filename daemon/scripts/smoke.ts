@@ -298,6 +298,25 @@ async function main(): Promise<void> {
 	}
 	const lockedProxy = await app.request("http://localhost/api/agent/messages", { method: "POST", headers: runnerH, body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }) });
 	ok("runner token on the locked agent proxy → 403", lockedProxy.status === 403, `got ${lockedProxy.status}`);
+	// #80: a runner token works only while its run does — revoked at the run's end, and unknown to a later process.
+	{
+		const { revokeRunnerToken } = await import("../src/auth.ts");
+		const ended = mintRunnerToken("smoke-user", "ended-run", 7200)!;
+		const endedH = { "content-type": "application/json", authorization: `Bearer ${ended}` };
+		const live = await app.request(GW, { method: "POST", headers: endedH, body });
+		await live.text();
+		revokeRunnerToken(ended);
+		const after = await app.request(GW, { method: "POST", headers: endedH, body });
+		await after.text();
+		ok("a revoked runner token (its run ended) → 401 on the gateway, though its exp is hours away", live.status === 200 && after.status === 401, `${live.status} → ${after.status}`);
+		const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
+		const now = Math.floor(Date.now() / 1000);
+		const input = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: "smoke-user", role: "authenticated", aud: "authenticated", celiador_runner: true, celiador_run: "old-run", iat: now, exp: now + 7200 })}`;
+		const foreign = `${input}.${createHmac("sha256", process.env.SUPABASE_JWT_SECRET!).update(input).digest("base64url")}`;
+		const fr = await app.request(GW, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${foreign}` }, body });
+		await fr.text();
+		ok("a validly signed runner token this process didn't mint (an earlier daemon's run) → 401", fr.status === 401, `got ${fr.status}`);
+	}
 	ok("…the session it tried to drive is untouched (a user token still sees it)", (await app.request(`http://localhost/api/sessions/${sid}`, { headers: authH })).status === 200);
 
 	// ── Deleted accounts: a still-valid token is refused everywhere, across restarts ──
@@ -1355,11 +1374,18 @@ async function main(): Promise<void> {
 	await run("git", ["-C", repo, "add", "-A"]);
 	await run("git", ["-C", repo, "commit", "-q", "-m", "init"]);
 
+	// Callers prepare the checkout (#80: executeServerRun no longer clones); only github.com URLs are checked out.
+	const { addWorktree: addWt } = await import("../src/runner/worktrees.ts");
+	const SRVREPO = "https://github.com/smoke/origin.git";
+	let nonGitHub = "";
+	await addWt({ userId: "smoke-user", url: `file://${repo}`, dir: path.join(runsRoot(), "smoke-user", "srv-x", "repo"), branch: "x" }).catch((err: Error) => { nonGitHub = err.message; });
+	ok("addWorktree refuses a non-github.com URL", /github\.com repositories only/.test(nonGitHub) && !fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-x")), nonGitHub);
+	await addWt({ userId: "smoke-user", url: SRVREPO, remote: `file://${repo}`, dir: path.join(runsRoot(), "smoke-user", "srv-1", "repo"), branch: "celiador/run-srv-1" });
 	const runEvents: Array<Record<string, unknown>> = [];
 	await executeServerRun({
 		userId: "smoke-user",
 		sessionId: "srv-1",
-		repo: { url: `file://${repo}` },
+		repo: { url: SRVREPO },
 		prompt: "leave a note",
 		publish: (e) => runEvents.push(e as Record<string, unknown>),
 	});
@@ -1388,6 +1414,8 @@ async function main(): Promise<void> {
 	const reaped = await reapOrphanRuns();
 	ok("boot sweep keeps a live session's workspace (file browsing, follow-ups)", fs.existsSync(path.join(runsRoot(), "smoke-user", keptSid, "repo")), reaped.join(","));
 	ok("boot sweep removes workspaces whose session is gone", !fs.existsSync(path.join(runsRoot(), "smoke-user", "srv-1")) && !fs.existsSync(path.join(runsRoot(), "gone-user")) && reaped.includes("smoke-user/srv-1"), reaped.join(","));
+	const { mirrorDir: srvMirrorDir } = await import("../src/runner/worktrees.ts");
+	ok("…and then the mirror no workspace uses any more (#80)", !fs.existsSync(srvMirrorDir("smoke-user", SRVREPO)) && reaped.some((r) => r.startsWith("mirror smoke-user/")), reaped.join(","));
 	await reapOrphanRuns((_u, runId) => runId !== keptSid);
 	ok("boot sweep removes a workspace idle past the TTL", !fs.existsSync(path.join(runsRoot(), "smoke-user", keptSid)));
 	// Debounced writes (event log 1 s, quota 2 s) are flushed on SIGTERM instead of lost.
@@ -1972,6 +2000,92 @@ async function main(): Promise<void> {
 	ok("…and the App was never asked for a token for it", !csCalls.some((c) => c.path.includes("public-repo")));
 	const pubPr = await app.request(`${S}/${pubS.id}/git/pr`, { method: "POST", headers: authH, body: JSON.stringify({ title: "nope" }) });
 	ok("…so a pull request is refused with the reason", pubPr.status === 400 && /GitHub App/.test(((await pubPr.json()) as { error?: string }).error ?? ""));
+	ok("a cloud session on a non-github.com URL → 400, nothing fetched", (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", prompt: "x", repo: { url: "https://gitlab.example/a/b.git" } }) })).status === 400);
+
+	console.log("\n== cloud sessions: races, delete, disk (#80) ==");
+	{
+		const { withMirror, sweepMirrors, gitFetch, mirrorsRoot } = await import("../src/runner/worktrees.ts");
+		const errOf = async (r: Response) => ((await r.json()) as { error?: string }).error ?? "";
+		const msg = (id: string, text: string) => app.request(`${S}/${id}/message`, { method: "POST", headers: authH, body: JSON.stringify({ text }) });
+		const holdMirror = (url: string) => {
+			let open!: () => void;
+			const gate = new Promise<void>((r) => (open = r));
+			const held = withMirror(mirrorDir("smoke-user", url), () => gate);
+			return async () => { open(); await held; };
+		};
+		// Two follow-ups: the first is still syncing with GitHub (its mirror is busy) when the second arrives.
+		const turns0 = csTurns.length;
+		let release = holdMirror(PUB);
+		const fu1 = await msg(pubS.id, "one");
+		const fu2 = await msg(pubS.id, "two");
+		const fu2Err = await errOf(fu2);
+		ok("a second follow-up while the first is still preparing → 409, not a second checkout under the first run", fu1.status === 200 && fu2.status === 409 && /still working/.test(fu2Err), `${fu1.status} ${fu2.status} ${fu2Err}`);
+		const cmBusy = await errOf(await app.request(`${S}/${pubS.id}/git/commit`, { method: "POST", headers: authH, body: JSON.stringify({ message: "x" }) }));
+		const mgBusy = await errOf(await app.request(`${S}/${pubS.id}/git/merge`, { method: "POST", headers: authH, body: JSON.stringify({}) }));
+		ok("…review writes are busy meanwhile, merge included", /still working; commit/.test(cmBusy) && /still working; merge/.test(mgBusy), `${cmBusy} | ${mgBusy}`);
+		await release();
+		ok("…and the first follow-up runs exactly one turn", await until(() => csTurns.length === turns0 + 1) && await until(async () => (await getCs(pubS.id))?.state === "done") && await tick(100).then(() => csTurns.length === turns0 + 1), String(csTurns.length - turns0));
+		// A follow-up before the first checkout finished; then the session is deleted while it checks out.
+		release = holdMirror(PUB);
+		const prepS = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt: "Prep one", repo: { url: PUB } }) })).json()) as { session: { id: string } }).session;
+		const early = await msg(prepS.id, "too early");
+		const earlyErr = await errOf(early);
+		ok("a follow-up before the first checkout finished → 409 that says so", early.status === 409 && /still checking out/.test(earlyErr), `${early.status} ${earlyErr}`);
+		await app.request(`${S}/${prepS.id}`, { method: "DELETE", headers: authH });
+		const turns1 = csTurns.length;
+		await release();
+		const prepGone = await until(async () => !fs.existsSync(path.dirname(workspaceDir("smoke-user", prepS.id))) && !(await run("git", ["-C", mirrorDir("smoke-user", PUB), "worktree", "list"])).stdout.includes(prepS.id));
+		ok("deleted while checking out → no turn runs; its worktree and workspace are removed", prepGone && await tick(100).then(() => csTurns.length === turns1), String(csTurns.length - turns1));
+		// Delete during a run: the run is cancelled before its directory goes.
+		let started = false;
+		let existedAtAbort: boolean | undefined;
+		overrideServerRunnerForTests({
+			agent: ((ctx: { workspaceDir: string; signal: AbortSignal }) => new Promise<void>((_, reject) => {
+				started = true;
+				ctx.signal.addEventListener("abort", () => { existedAtAbort = fs.existsSync(ctx.workspaceDir); reject(new Error("killed")); });
+			})) as never,
+		});
+		const longS = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt: "Long run", repo: { url: PUB } }) })).json()) as { session: { id: string } }).session;
+		await until(() => started);
+		await app.request(`${S}/${longS.id}`, { method: "DELETE", headers: authH });
+		ok("DELETE during a run → the run is cancelled first (its workspace still there when stopped), then the workspace goes", started && await until(() => existedAtAbort !== undefined) && existedAtAbort === true && await until(() => !fs.existsSync(path.dirname(workspaceDir("smoke-user", longS.id)))), String(existedAtAbort));
+		overrideServerRunnerForTests({ agent: (async (ctx: { workspaceDir: string }) => { fs.writeFileSync(path.join(ctx.workspaceDir, "q.ts"), "export const q = 1;\n"); }) as never });
+		// The last session on a repo goes → so does the mirror; other repos' mirrors stay.
+		await app.request(`${S}/${pubS.id}`, { method: "DELETE", headers: authH });
+		ok("deleting the last session on a repo removes its mirror (#80); a mirror in use stays", await until(() => !fs.existsSync(mirrorDir("smoke-user", PUB))) && fs.existsSync(mirrorDir("smoke-user", CSREPO)));
+		// The per-user cap: an unused mirror is evicted to make room; past the cap with nothing to evict, the run is refused.
+		const fakeOld = path.join(mirrorsRoot(), "smoke-user", "0000-unused.git");
+		fs.mkdirSync(fakeOld, { recursive: true });
+		fs.writeFileSync(path.join(fakeOld, "big.pack"), Buffer.alloc(3 * 1024 * 1024));
+		process.env.CELIADOR_MIRROR_QUOTA_MB = "2";
+		const Q1 = "https://github.com/Cliefden/quota-one.git";
+		const q1 = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt: "Quota one", repo: { url: Q1 } }) })).json()) as { session: { id: string } }).session;
+		ok("over the mirror cap → the user's least recently fetched unused mirror is evicted and the run goes ahead", await until(async () => (await getCs(q1.id))?.state === "done") && !fs.existsSync(fakeOld) && fs.existsSync(mirrorDir("smoke-user", CSREPO)), JSON.stringify({ s: (await getCs(q1.id))?.state, err: lastError(q1.id) }));
+		process.env.CELIADOR_MIRROR_QUOTA_MB = "0.001";
+		const Q2 = "https://github.com/Cliefden/quota-two.git";
+		const q2 = ((await (await app.request(S, { method: "POST", headers: authH, body: JSON.stringify({ runner: "server", origin: "phone", prompt: "Quota two", repo: { url: Q2 } }) })).json()) as { session: { id: string } }).session;
+		ok("…and with nothing left to evict, the checkout is refused with the reason and its new mirror removed; mirrors in use stay", await until(async () => (await getCs(q2.id))?.state === "error") && /limit is|MB limit/.test(lastError(q2.id)) && !fs.existsSync(mirrorDir("smoke-user", Q2)) && fs.existsSync(mirrorDir("smoke-user", Q1)) && fs.existsSync(mirrorDir("smoke-user", CSREPO)), lastError(q2.id));
+		delete process.env.CELIADOR_MIRROR_QUOTA_MB;
+		// A failed fetch removes the temporary pack it left; the boot sweep drops stale ones but not a fetch's in flight.
+		const kf = path.join(HOME, "killed-fetch.git");
+		await run("git", ["init", "-q", "--bare", kf]);
+		const killer = path.join(HOME, "killer.sh");
+		fs.writeFileSync(killer, `#!/bin/sh\ntouch '${path.join(kf, "objects", "pack", "tmp_pack_killed")}'\nexit 1\n`, { mode: 0o755 });
+		fs.writeFileSync(path.join(kf, "objects", "pack", "tmp_pack_before"), "x");
+		const fetchErr = await gitFetch(kf, [`--upload-pack=${killer}`, `file://${csBare}`, "+refs/heads/*:refs/remotes/origin/*"]).then(() => "", (e: Error) => e.message);
+		ok("a failed fetch: its own tmp_pack_* is removed, one that was there before isn't touched", !!fetchErr && !fs.existsSync(path.join(kf, "objects", "pack", "tmp_pack_killed")) && fs.existsSync(path.join(kf, "objects", "pack", "tmp_pack_before")), fetchErr);
+		const packDir = path.join(fs.realpathSync(mirrorDir("smoke-user", CSREPO)), "objects", "pack");
+		fs.mkdirSync(packDir, { recursive: true });
+		const oldTmp = path.join(packDir, "tmp_pack_stale");
+		const newTmp = path.join(packDir, "tmp_pack_fresh");
+		fs.writeFileSync(oldTmp, "x");
+		fs.writeFileSync(newTmp, "x");
+		const longAgo = new Date(Date.now() - 2 * 60 * 60_000);
+		fs.utimesSync(oldTmp, longAgo, longAgo);
+		await sweepMirrors("smoke-user");
+		ok("boot sweep: a stale tmp_pack_* is removed, a fresh one kept, the mirror in use kept", !fs.existsSync(oldTmp) && fs.existsSync(newTmp) && fs.existsSync(mirrorDir("smoke-user", CSREPO)));
+		fs.rmSync(newTmp, { force: true });
+	}
 
 	console.log("\n== host git vs. a hostile workspace (#78) ==");
 	// The agent writes whatever it likes in its workspace — and, mounted read-write

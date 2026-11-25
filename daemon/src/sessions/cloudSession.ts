@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import { hasProvenLink } from "../github/access";
 import { installationToken, openPullRequest, appRequest } from "../github/app";
-import { hasActiveServerRun, runServerRun } from "../runner/manager";
+import { cancelServerRun, hasActiveServerRun, runServerRun, serverRunEnded } from "../runner/manager";
 import { git, gitAddAll, gitlinkExcludes, removeWorkspace, workspaceDir } from "../runner/workspace";
-import { addWorktree, fetchBranch, hasCheckout, isAncestor, removeWorktree } from "../runner/worktrees";
+import { addWorktree, fetchBranch, hasCheckout, isAncestor, releaseMirror, removeWorktree } from "../runner/worktrees";
 import { cloudFollowUp } from "../tasks/cloud";
 import { taskStores } from "../tasks/dispatch";
 import { sessionStores } from "./instance";
@@ -94,10 +94,40 @@ export interface ICloudSessionStart {
 }
 
 /**
+ * Celiador edit (#80): the window between accepting a turn and its run being
+ * registered (runner/manager.ts) — the first checkout, or a follow-up's
+ * re-checkout / sync with GitHub — where `hasActiveServerRun` is still false.
+ * One such preparation per session at a time, so a second follow-up can't
+ * remove the worktree under the first one's run; review commands that write
+ * count it as busy; and deleting the session waits for it.
+ */
+const preparing = new Map<string, { readonly what: "start" | "follow-up"; readonly done: Promise<void> }>();
+
+/** Run `work` as the session's preparation (see `preparing`). `work` must not throw. */
+function prepare(sessionId: string, what: "start" | "follow-up", work: () => Promise<void>): Promise<void> {
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => (release = resolve));
+  preparing.set(sessionId, { what, done });
+  return work().finally(() => {
+    preparing.delete(sessionId);
+    release();
+  });
+}
+
+/** Whether the session still exists (it may be deleted while its checkout runs). */
+function stillThere(userId: string, sessionId: string): boolean {
+  return !!sessionStores.for(userId).get(sessionId);
+}
+
+/**
  * Prepare the session's worktree and run the first turn. Resolves once the
  * run is launched; progress and failure go to the session's relay log.
  */
-export async function startCloudSession(userId: string, session: Session, p: ICloudSessionStart): Promise<void> {
+export function startCloudSession(userId: string, session: Session, p: ICloudSessionStart): Promise<void> {
+  return prepare(session.id, "start", () => startCloudSessionNow(userId, session, p));
+}
+
+async function startCloudSessionNow(userId: string, session: Session, p: ICloudSessionStart): Promise<void> {
   const publish = (e: Parameters<typeof publishSessionEvent>[2]) => publishSessionEvent(userId, session.id, e);
   try {
     publish({ kind: "state", state: "running" });
@@ -140,7 +170,9 @@ export async function startCloudSession(userId: string, session: Session, p: ICl
     publish({ kind: "state", state: "error" });
     return;
   }
-  void runServerRun({ userId, sessionId: session.id, repo: { url: p.url }, prompt: p.prompt, workspaceReady: true });
+  // Deleted while checking out: removeCloudSession is waiting for us to finish, then cleans up.
+  if (!stillThere(userId, session.id)) return;
+  void runServerRun({ userId, sessionId: session.id, repo: { url: p.url }, prompt: p.prompt });
 }
 
 /**
@@ -151,11 +183,13 @@ export async function startCloudSession(userId: string, session: Session, p: ICl
 export async function cloudSessionFollowUp(userId: string, session: Session, text: string): Promise<{ ok: true } | { error: string; status: 409 | 503 }> {
   const task = taskStores.for(userId).forSession(session.id);
   if (task) return cloudFollowUp(userId, task.id, text);
-  if (hasActiveServerRun(session.id)) return { error: "the cloud run is still working; wait for it to finish", status: 409 };
+  const prep = preparing.get(session.id);
+  if (prep?.what === "start") return { error: "the session is still checking out the repo; send the follow-up once the first turn has started", status: 409 };
+  if (prep || hasActiveServerRun(session.id)) return { error: "the cloud run is still working; wait for it to finish", status: 409 };
   const repo = session.repo;
-  if (!repo) return { error: "this cloud run can't take follow-ups (it was started before they existed)", status: 409 };
+  if (!repo) return { error: "this cloud session has no checkout to continue (its first checkout failed, or it was started before follow-ups existed); start a new session", status: 409 };
   publishSessionEvent(userId, session.id, { kind: "message", role: "user", text });
-  void (async () => {
+  void prepare(session.id, "follow-up", async () => {
     const dir = workspaceDir(userId, session.id);
     const fail = (message: string) => {
       publishSessionEvent(userId, session.id, { kind: "error", message });
@@ -164,9 +198,10 @@ export async function cloudSessionFollowUp(userId: string, session: Session, tex
     publishSessionEvent(userId, session.id, { kind: "state", state: "running" });
     if (!hasCheckout(dir)) {
       // The workspace went with a server restart: pick the branch up again — from
-      // GitHub if it was pushed, else from its base (unpushed work is gone).
+      // GitHub if it was pushed, else from its base (unpushed work is gone). The
+      // agent's $HOME (its conversation) went with it, so this turn starts fresh.
       try {
-        publishSessionEvent(userId, session.id, { kind: "activity", text: "The workspace was reset by a server restart; checking the branch out again…" });
+        publishSessionEvent(userId, session.id, { kind: "activity", text: "The workspace was reset by a server restart; checking the branch out again (the agent starts a new conversation)…" });
         const token = repo.pushable ? await tokenFor(userId, repo.url) : undefined;
         const wt = await addWorktree({ userId, url: repo.url, remote: remoteFor(repo.url, token), token, dir, branch: repo.branch, base: repo.base });
         // A branch the session had on GitHub that is gone now: don't quietly start it over from the base.
@@ -180,8 +215,14 @@ export async function cloudSessionFollowUp(userId: string, session: Session, tex
       if (!synced.ok) return fail(synced.error);
       if (synced.note) publishSessionEvent(userId, session.id, { kind: "activity", text: synced.note });
     }
-    await runServerRun({ userId, sessionId: session.id, repo: { url: repo.url }, prompt: text, workspaceReady: true, continueConversation: true });
-  })();
+    // Deleted meanwhile: removeCloudSession is waiting for us to finish, then cleans up.
+    if (!stillThere(userId, session.id)) return;
+    // Registered synchronously: from here on hasActiveServerRun guards the session.
+    void runServerRun({ userId, sessionId: session.id, repo: { url: repo.url }, prompt: text, continueConversation: true });
+  }).catch((err) => {
+    publishSessionEvent(userId, session.id, { kind: "error", message: scrub(err) });
+    publishSessionEvent(userId, session.id, { kind: "state", state: "error" });
+  });
   return { ok: true };
 }
 
@@ -244,13 +285,27 @@ export async function syncWithRemote(userId: string, session: Session, repo: Ses
   return { ok: true, repo: updated, note };
 }
 
-/** Delete-time cleanup: detach the worktree from the mirror and drop the run's directory. */
+/**
+ * Delete-time cleanup (#80): stop the session's run first — cancel it (kills
+ * the sandbox) and wait for a checkout in progress and the run to end — so
+ * nothing keeps working in a directory being removed; then detach the worktree
+ * from the mirror, drop the run's directory, and remove the mirror when no
+ * other workspace uses it. Cloud sessions and cloud tasks' sessions alike
+ * (the caller has already removed the session from its store).
+ */
 export async function removeCloudSession(userId: string, session: Session | undefined, sessionId: string): Promise<void> {
-  if (session?.repo) {
+  cancelServerRun(sessionId);
+  await preparing.get(sessionId)?.done;
+  // A run launched just before the session was deleted (the preparation checks).
+  cancelServerRun(sessionId);
+  await serverRunEnded(sessionId);
+  const url = session?.repo?.url ?? taskStores.for(userId).forSession(sessionId)?.repo.url;
+  if (url) {
     // An existing branch the user continued is theirs on the remote — only our local ref goes.
-    await removeWorktree(userId, session.repo.url, workspaceDir(userId, sessionId), session.repo.branch);
+    await removeWorktree(userId, url, workspaceDir(userId, sessionId), session?.repo?.branch);
   }
   await removeWorkspace(userId, sessionId);
+  if (url) await releaseMirror(userId, url);
 }
 
 // ---- Review: the editor's git.* commands, served from the worktree ----------
@@ -341,7 +396,8 @@ export async function cloudGit(userId: string, session: Session, command: GitCom
   if (!repo) return { ok: false, error: "review isn't available for this cloud run" };
   const dir = workspaceDir(userId, session.id);
   if (!fs.existsSync(dir) || !hasCheckout(dir)) return { ok: false, error: "the workspace is gone (server restart); send a follow-up to check the branch out again" };
-  const busy = hasActiveServerRun(session.id);
+  // A run, or a follow-up's checkout / fast-forward before it, is changing the worktree.
+  const busy = hasActiveServerRun(session.id) || preparing.has(session.id);
   try {
     switch (command.kind) {
       case "git.status": {
@@ -395,6 +451,7 @@ export async function cloudGit(userId: string, session: Session, command: GitCom
         return { ok: true, url: pr.url, created: true };
       }
       case "git.merge": {
+        if (busy) return { ok: false, error: "the agent is still working; merge when it's done" };
         const gh = parseGitHub(repo.url);
         if (!gh || !repo.pushable) return { ok: false, error: `merging ${NEEDS_PROOF}` };
         if (!repo.pr) return { ok: false, error: "open the pull request first" };

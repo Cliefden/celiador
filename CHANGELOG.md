@@ -6,6 +6,15 @@ merge; `scripts/release.sh` rolls the section into a version on release.
 
 ## [Unreleased]
 
+- Daemon: cloud sessions take one turn at a time — a follow-up sent while an
+  earlier one is still checking out is refused instead of breaking the session,
+  one sent before the first checkout finished says so, and merge waits for the
+  agent like the other review actions. Deleting a session stops its cloud run
+  before removing its workspace. Cloud runs check out github.com repositories
+  only; cached repo mirrors are removed once no session uses them and are
+  capped per user (`CELIADOR_MIRROR_QUOTA_MB`). A cloud run's model token stops
+  working when the run ends.
+
 ## [0.3.0] - 2026-11-24
 
 - **Cloud sessions on GitHub repos, from the phone.** New Run → pick one of

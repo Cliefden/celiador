@@ -420,7 +420,10 @@ paths:
       tags: [sessions]
       operationId: deleteSession
       summary: Delete a session
-      description: "An id the caller doesn't own deletes nothing and answers `{ ok: false }` with 200."
+      description: |
+        An id the caller doesn't own deletes nothing and answers `{ ok: false }` with 200.
+        A cloud run still working on the session is cancelled before its
+        workspace is removed (in the background, after the answer).
       responses:
         "200":
           description: Whether a session was deleted.
@@ -2467,7 +2470,11 @@ components:
           description: Required for `runner = server`.
           required: [url]
           properties:
-            url: { type: string, maxLength: 2048, pattern: "^https?://" }
+            url:
+              type: string
+              maxLength: 2048
+              pattern: "^https?://"
+              description: "`https://github.com/<owner>/<name>` (optionally `.git`); cloud runs check out github.com repositories only (400 otherwise)."
             branch: { type: string, description: "Start from (or with `existingBranch`, work on) this branch." }
             existingBranch: { type: boolean }
     CloudRepo:

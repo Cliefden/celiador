@@ -2,8 +2,8 @@ import { installationToken, openPullRequest, updatePullRequestBody, type PullReq
 import { hasProvenLink } from "../github/access";
 import { cloudRunnerAvailable, cloudRunsEnabled, hasActiveServerRun, runServerRun } from "../runner/manager";
 import type { IServerRunOutcome } from "../runner/run";
-import { git, gitAddAll, workspaceDir } from "../runner/workspace";
-import { addWorktree, fetchBranch, hasCheckout } from "../runner/worktrees";
+import { git, gitAddAll, removeWorkspace, workspaceDir } from "../runner/workspace";
+import { addWorktree, fetchBranch, hasCheckout, releaseMirror, removeWorktree } from "../runner/worktrees";
 import { sessionStores } from "../sessions/instance";
 import { publishSessionEvent } from "../sessions/publish";
 import { postFailedComment } from "./comments";
@@ -202,8 +202,18 @@ async function runTurn(userId: string, taskId: string, sessionId: string, prompt
     fail(userId, store, taskId, message);
     return;
   }
+  if (!sessionStores.for(userId).get(sessionId)) {
+    // The session was deleted while the checkout ran (#80): no run in it; undo the checkout.
+    await removeWorktree(userId, task.repo.url, dir);
+    await removeWorkspace(userId, sessionId);
+    await releaseMirror(userId, task.repo.url);
+    const updated = store.update(taskId, { state: "cancelled" });
+    if (updated) publishTaskChange(userId, updated);
+    dispatchTasks(userId);
+    return;
+  }
 
-  const outcome = await runServerRun({ userId, sessionId, repo: { url: task.repo.url, branch: task.branch }, prompt, workspaceReady: true });
+  const outcome = await runServerRun({ userId, sessionId, repo: { url: task.repo.url, branch: task.branch }, prompt });
   task = store.get(taskId);
   if (!task) return;
   if (!outcome.ok) {

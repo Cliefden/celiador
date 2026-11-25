@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sessionStores } from "../sessions/instance";
-import { git, runsRoot } from "./workspace";
-import { mirrorsRoot, withMirror } from "./worktrees";
+import { runsRoot } from "./workspace";
+import { mirrorsRoot, sweepMirrors } from "./worktrees";
 
 /**
  * How long a run's workspace outlives its session's last activity. Sessions are
@@ -24,8 +24,10 @@ const sessionIsLive: RunLiveness = (userId, runId) => {
  * the run on purpose — the phone browses its files, follow-ups continue in it —
  * so only directories whose session is gone (deleted, reaped) or idle past the
  * TTL are removed. A fresh process has no in-flight runs, so nothing here is
- * being written. Afterwards each of the user's mirrors forgets the worktrees
- * that went away (`git worktree prune`). Best-effort; returns what it removed.
+ * being written. Afterwards each user's mirrors are swept (worktrees.ts
+ * sweepMirrors): worktrees that went away are pruned, leftover temporary packs
+ * dropped, and mirrors no workspace uses any more removed. Best-effort; returns
+ * what it removed.
  */
 export async function reapOrphanRuns(isLive: RunLiveness = sessionIsLive): Promise<string[]> {
   const removed: string[] = [];
@@ -48,17 +50,13 @@ export async function reapOrphanRuns(isLive: RunLiveness = sessionIsLive): Promi
       removedHere++;
     }
     if (removedHere === runs.length) await fs.promises.rmdir(userDir).catch(() => undefined);
-    if (removedHere > 0) await pruneMirrors(user.name);
+  }
+  // Every user with mirrors, including those whose last run directory just went:
+  // prune, drop leftover temporary packs, remove mirrors no workspace uses (#80).
+  const mirrorUsers = await fs.promises.readdir(mirrorsRoot(), { withFileTypes: true }).catch(() => []);
+  for (const user of mirrorUsers) {
+    if (!user.isDirectory()) continue;
+    for (const m of await sweepMirrors(user.name)) removed.push(`mirror ${user.name}/${path.basename(m)}`);
   }
   return removed;
-}
-
-async function pruneMirrors(userId: string): Promise<void> {
-  const dir = path.join(mirrorsRoot(), userId);
-  const mirrors = await fs.promises.readdir(dir).catch(() => [] as string[]);
-  for (const m of mirrors) {
-    if (!m.endsWith(".git")) continue;
-    const mirror = path.join(dir, m);
-    await withMirror(mirror, () => git(mirror, ["worktree", "prune"])).catch(() => undefined);
-  }
 }

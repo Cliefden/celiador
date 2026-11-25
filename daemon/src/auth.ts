@@ -102,6 +102,9 @@ export function verifySupabaseJwt(token: string): AuthResult | null {
   // back marked `runner`, and only the agent gateway accepts those (requireUser
   // and authorizeAgent refuse them everywhere else).
   if (payload.role !== "authenticated") return null;
+  // A runner token is good only while its run is: it must be one this process
+  // minted and hasn't revoked yet (#80). See mintRunnerToken.
+  if (payload.celiador_runner === true && !(typeof payload.jti === "string" && liveRunnerTokens.has(payload.jti))) return null;
 
   return {
     userId: payload.sub,
@@ -124,11 +127,21 @@ export function verifySupabaseJwt(token: string): AuthResult | null {
  * touch profile/chats or delete the account. requireUser refuses it with 403;
  * authorizeAgent accepts it only when the route opts in (the gateway). Signed
  * with the same SUPABASE_JWT_SECRET; returns null when that isn't configured.
+ *
+ * Celiador edit (#80): a runner token is also tied to its run. Each carries a
+ * `jti` that this process records as live until the run ends and the caller
+ * revokes it (revokeRunnerToken; the sandbox agent does, in its `finally`).
+ * verifySupabaseJwt refuses a runner token whose jti isn't live — revoked, or
+ * minted by an earlier daemon process — so a token leaked from a container
+ * can't keep spending the user's quota after the run, however long its `exp`.
  */
 export function mintRunnerToken(userId: string, runId: string, ttlSeconds = 7200): string | null {
   const secret = process.env.SUPABASE_JWT_SECRET;
   if (!secret) return null;
   const now = Math.floor(Date.now() / 1000);
+  for (const [id, exp] of liveRunnerTokens) if (exp < now) liveRunnerTokens.delete(id); // expired anyway
+  const jti = crypto.randomUUID();
+  liveRunnerTokens.set(jti, now + ttlSeconds);
   const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
   const aud = process.env.SUPABASE_JWT_AUD || "authenticated";
   const header = { alg: "HS256", typ: "JWT" };
@@ -139,12 +152,22 @@ export function mintRunnerToken(userId: string, runId: string, ttlSeconds = 7200
     iss: "celiador-daemon",
     celiador_runner: true,
     celiador_run: runId,
+    jti,
     iat: now,
     exp: now + ttlSeconds,
   };
   const input = `${b64(header)}.${b64(payload)}`;
   const sig = crypto.createHmac("sha256", secret).update(input).digest("base64url");
   return `${input}.${sig}`;
+}
+
+/** jti → exp of every runner token whose run hasn't ended (in memory: a restart ends every run). */
+const liveRunnerTokens = new Map<string, number>();
+
+/** End a runner token (its run is over): from now on the daemon refuses it everywhere. */
+export function revokeRunnerToken(token: string): void {
+  const jti = b64urlJson(token.split(".")[1] ?? "")?.jti;
+  if (typeof jti === "string") liveRunnerTokens.delete(jti);
 }
 
 /**
