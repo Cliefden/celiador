@@ -1,0 +1,30 @@
+# Known vulnerabilities the OSV scan (supply-chain.yml, #159) lets through, each
+# with the reason it is not fixed. The scan fails on anything not listed here.
+# Baseline 2026-11-25 (hono and @hono/node-server were lifted in-range in the
+# same change); every entry expires on 2027-01-25, by when it is fixed or its
+# reason checked again.
+
+[[IgnoredVulns]]
+id = "GHSA-rmxm-3fg6-px4f"
+ignoreUntil = 2027-01-25T00:00:00Z
+reason = "@hono/node-server 1.19.19 (daemon/package-lock.json): not used that way. The flaw is in serveStatic, which the daemon does not mount (it uses serve and getConnInfo only); fixed only in the 2.x major."
+
+[[IgnoredVulns]]
+id = "GHSA-qx2v-qp2m-jg93"
+ignoreUntil = 2027-01-25T00:00:00Z
+reason = "postcss bundled inside next 15 (web/package-lock.json): build-time only, and only ever given the site's own CSS. The site never processes CSS from outside, at build or at runtime. Fixed only with the next 16 major; drop with that upgrade."
+
+[[IgnoredVulns]]
+id = "GHSA-6g55-p6wh-862q"
+ignoreUntil = 2027-01-25T00:00:00Z
+reason = "postcss bundled inside next 15 (web/package-lock.json): the sourceMappingURL it follows would have to be in the site's own CSS, at build time; nothing from outside reaches it. Fixed only with the next 16 major."
+
+[[IgnoredVulns]]
+id = "GHSA-fxqj-rqcc-2cmp"
+ignoreUntil = 2027-01-25T00:00:00Z
+reason = "postcss bundled inside next 15 (web/package-lock.json): same as GHSA-6g55-p6wh-862q, its incomplete fix. Build-time only, own CSS only. Fixed only with the next 16 major."
+
+[[IgnoredVulns]]
+id = "GHSA-r28c-9q8g-f849"
+ignoreUntil = 2027-01-25T00:00:00Z
+reason = "postcss bundled inside next 15 (web/package-lock.json): source-map auto-loading on the site's own CSS at build time; nothing from outside reaches it. Fixed only with the next 16 major."

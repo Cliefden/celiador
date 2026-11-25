@@ -1,0 +1,70 @@
+# Supply-chain checks (#159), after Celindor's.
+#
+# osv: known vulnerabilities in the npm lockfiles (daemon, web, packages/client),
+# from osv.dev. The iOS app's Package.resolved is not scanned. The few left
+# unfixed are listed in osv-scanner.toml, each with its reason and an expiry,
+# so only new ones fail. It reads only the lockfiles, so it runs when one of
+# them (or its config) changes, and weekly for advisories published since.
+# Drafts run nothing (`wb pr` opens drafts; `gh pr ready` starts the checks).
+#
+# Dependabot keeps the Actions current (.github/dependabot.yml).
+name: Supply chain
+
+on:
+  pull_request:
+    # ready_for_review: a draft marked ready runs its checks.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - daemon/package-lock.json
+      - web/package-lock.json
+      - packages/client/package-lock.json
+      - osv-scanner.toml
+      - .github/workflows/supply-chain.yml
+  push:
+    branches: [main]
+    paths:
+      - daemon/package-lock.json
+      - web/package-lock.json
+      - packages/client/package-lock.json
+      - osv-scanner.toml
+      - .github/workflows/supply-chain.yml
+  schedule:
+    # Mondays 06:17 UTC: new advisories appear without any change of ours.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OSV_SCANNER_VERSION: v2.7.0
+  # osv-scanner_SHA256SUMS of that release, for osv-scanner_linux_amd64.
+  OSV_SCANNER_SHA256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+
+jobs:
+  osv:
+    name: osv
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install osv-scanner (checksum verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+      - name: Scan the lockfiles
+        run: |
+          "$RUNNER_TEMP/osv-scanner" scan source --config osv-scanner.toml \
+            -L daemon/package-lock.json \
+            -L web/package-lock.json \
+            -L packages/client/package-lock.json
