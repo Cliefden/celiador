@@ -2,17 +2,16 @@ name: CI
 
 # Validate the daemon (daemon/): typecheck + the offline smoke test (gateway +
 # session relay + server runner, no network / no real key). Runs on pull
-# requests and pushes to other branches that touch the daemon; the Deploy
-# workflow calls it for every push to main and every release tag, so nothing
-# reaches an environment unchecked. The site builds in its own deploy; the iOS
-# app in ios.yml.
+# requests that touch the daemon once they are ready for review — a draft runs
+# nothing (`wb pr` opens drafts; `gh pr ready` starts the checks), and a merge
+# train's PR runs it once for every PR on the train. The Deploy workflow calls
+# it for every push to main and every release tag, so nothing reaches an
+# environment unchecked. The site builds in its own deploy; the iOS app in
+# ios.yml.
 on:
   pull_request:
-    paths:
-      - daemon/**
-      - .github/workflows/ci.yml
-  push:
-    branches-ignore: [main]
+    # ready_for_review: a draft marked ready runs its checks.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - daemon/**
       - .github/workflows/ci.yml
@@ -25,8 +24,8 @@ on:
         type: boolean
         default: true
 
-# Standalone (pull_request / push to a branch): one run per PR or branch, and a
-# newer push cancels the older run.
+# Standalone (pull_request): one run per PR, and a newer push cancels the older
+# run.
 #
 # Called from deploy.yml: never cancelled, and in a group of its own. Inside a
 # called workflow the `github` context is the CALLER's — github.event_name is
@@ -48,6 +47,9 @@ defaults:
 jobs:
   check:
     name: typecheck + smoke
+    # A draft runs nothing. Called from deploy.yml, event_name is the caller's
+    # (push / workflow_dispatch), so a deploy's CI always runs.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -38,7 +38,9 @@ cd ios && xcodegen generate && open Celiador.xcodeproj
 ```
 
 Or, with `wb` (github.com/Cliefden/workbench), `wb start <issue>` gives an
-issue its own worktree with both services running.
+issue its own worktree and `wb dev` runs both services from it. Every local
+command, the worktree flow and what worktrees share:
+[`BUILDING.md`](BUILDING.md).
 
 ## History
 

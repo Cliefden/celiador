@@ -13,10 +13,12 @@
 #   1. clean main, equal to origin/main
 #   2. the daemon (daemon/package.json) and the app (ios/project.yml
 #      MARKETING_VERSION) agree on the current version; the new version is
-#      greater and its tag does not exist yet
+#      greater and its tag does not exist yet; the changelog fragments are valid
 #   3. bump daemon/package.json + package-lock.json (npm version, no git tag)
 #      and every MARKETING_VERSION in ios/project.yml
-#   4. roll CHANGELOG.md: "## [Unreleased]" becomes "## [X.Y.Z] - <date>"
+#   4. roll CHANGELOG.md (scripts/changelog-roll.mjs): the fragments in
+#      changes/unreleased/ plus anything under "## [Unreleased]" become
+#      "## [X.Y.Z] - <date>", and the fragments are deleted (changes/README.md)
 #   5. commit "Release vX.Y.Z" and create an annotated tag
 #
 # It never pushes. Then, in two stages:
@@ -61,6 +63,7 @@ ios_versions="$(sed -n 's/^ *MARKETING_VERSION: *"\([^"]*\)".*/\1/p' ios/project
   die "ios/project.yml targets disagree on MARKETING_VERSION: $(printf '%s ' $ios_versions)"
 [[ "$ios_versions" == "$current" ]] ||
   die "ios/project.yml says $ios_versions but daemon/package.json says $current — align them first (one version for the train)"
+node scripts/changelog-roll.mjs --check >/dev/null || die "fix the changelog fragments above first"
 
 case "$target" in
   major) next="$((major + 1)).0.0" ;;
@@ -88,22 +91,11 @@ sed -i '' "s/^\( *MARKETING_VERSION: *\)\"$current\"/\1\"$next\"/" ios/project.y
   die "failed to set MARKETING_VERSION to $next in ios/project.yml"
 
 # ── 4. changelog ─────────────────────────────────────────────────────────────
-node -e '
-  const fs = require("fs");
-  const [version, date] = process.argv.slice(1);
-  let log = fs.readFileSync("CHANGELOG.md", "utf8");
-  const start = log.indexOf("## [Unreleased]");
-  if (start < 0) throw new Error("CHANGELOG.md has no ## [Unreleased] section");
-  const bodyStart = start + "## [Unreleased]".length;
-  const next = log.indexOf("\n## [", bodyStart);
-  let body = (next < 0 ? log.slice(bodyStart) : log.slice(bodyStart, next)).trim();
-  if (!body) body = "- No changes; released with the train.";
-  const section = `## [Unreleased]\n\n## [${version}] - ${date}\n\n${body}\n`;
-  log = log.slice(0, start) + section + (next < 0 ? "" : log.slice(next));
-  fs.writeFileSync("CHANGELOG.md", log);' "$next" "$(date +%Y-%m-%d)"
+node scripts/changelog-roll.mjs "$next" "$(date +%Y-%m-%d)"
 
 # ── 5. commit and tag ────────────────────────────────────────────────────────
 git add daemon/package.json daemon/package-lock.json ios/project.yml CHANGELOG.md
+git add -A changes   # the fragments the roll deleted (changes/ always has its README)
 git commit --quiet -m "Release $tag"
 git tag -a "$tag" -m "$tag"
 
