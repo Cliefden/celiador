@@ -1,8 +1,9 @@
 # Changelog
 
 User-visible changes to Celiador — the daemon, the iPhone app and the site share
-one release train (`RELEASING.md`). Record changes under **Unreleased** as they
-merge; `scripts/release.sh` rolls the section into a version on release.
+one release train (`RELEASING.md`). Don't edit this file for a change: add a
+fragment to `changes/unreleased/` (`changes/README.md`); `scripts/release.sh`
+gathers them into the new version's section on release.
 
 ## [Unreleased]
 

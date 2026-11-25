@@ -1,0 +1,30 @@
+name: Changelog
+
+# Checks the changelog fragments (changes/README.md): every file in
+# changes/unreleased/ is named <issue#>-<slug>.md and starts with a
+# "### Title (#NNN)" heading listing its issue. Plain Node, no install. Runs on
+# pull requests once they are ready for review: a draft runs nothing (`wb pr`
+# opens drafts; `gh pr ready` starts the checks).
+on:
+  pull_request:
+    # ready_for_review: a draft marked ready runs its checks.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - changes/**
+      - scripts/changelog-roll.mjs
+      - .github/workflows/changelog.yml
+
+concurrency:
+  group: changelog-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fragments:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/changelog-roll.mjs --check

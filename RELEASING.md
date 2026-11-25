@@ -16,8 +16,11 @@ renamed, a changed meaning, a new required request field) is a **MINOR** bump;
 additive changes and fixes are **PATCH** releases. Going to 1.0.0 is a
 deliberate decision.
 
-Record user-visible changes under `## [Unreleased]` in `CHANGELOG.md` as they
-merge. A release that touches nothing user-visible still rolls the section.
+Record a user-visible change in its own file,
+`changes/unreleased/<issue#>-<slug>.md`, in the same pull request
+(`changes/README.md`), not in `CHANGELOG.md`: parallel pull requests then never
+conflict over the changelog. The release gathers them. A release that touches
+nothing user-visible still rolls the section.
 
 ## Cutting a release
 
@@ -25,10 +28,13 @@ merge. A release that touches nothing user-visible still rolls the section.
 scripts/release.sh patch        # or minor | major | an exact 0.3.0
 ```
 
-The script refuses unless `main` is clean and equal to `origin/main` and the
-tag does not exist yet, and the daemon and the app agree on the current version.
-It bumps `daemon/package.json` + `package-lock.json` and every
-`MARKETING_VERSION` in `ios/project.yml`, rolls `CHANGELOG.md`, commits
+The script refuses unless `main` is clean and equal to `origin/main`, the
+tag does not exist yet, the daemon and the app agree on the current version,
+and the changelog fragments are valid. It bumps `daemon/package.json` +
+`package-lock.json` and every `MARKETING_VERSION` in `ios/project.yml`, rolls
+the fragments (highest issue first) and anything under `## [Unreleased]` into
+the new version's section of `CHANGELOG.md` and deletes them
+(`scripts/changelog-roll.mjs`), commits
 `Release vX.Y.Z` and creates an annotated tag. It **never pushes**. Then, in
 two stages:
 
@@ -87,6 +93,7 @@ Migrations only go forward, so rolling back code leaves the schema as it is.
 | `deploy.yml` (Deploy daemon) | `main` pushes touching `daemon/`, `vX.Y.Z` tags, manual runs | CI, then rsync `daemon/` to `~/envs/<env>/daemon`, `npm ci`, `BUILD_INFO`, migrate, restart `celiador-daemon@<env>`, and a health gate: `/api/health` through Caddy must report this `env` and this `commit`. Mails the result. |
 | `web-deploy.yml` (Deploy web) | `main` pushes touching `web/`, `vX.Y.Z` tags, manual runs | `next build`, rsync `web/` + `.next` to `~/envs/<env>/web`, `npm ci`, restart `celiador-web@<env>`, check the page through the public host. Mails the result. |
 | `ios.yml` (Build iOS) | `main` pushes touching `ios/`, `vX.Y.Z` tags, manual runs | On a macOS runner: XcodeGen, icon banner, `xcodebuild archive` of the channel's scheme with **manual** signing (a CI-only Apple Distribution certificate from the repository secrets and the channel's two App Store profiles, fetched with the App Store Connect API key), then `-exportArchive` with `destination=upload` to App Store Connect (TestFlight). `main` → the Dev app, tag → the Test build, manual `prod` → the App Store build behind the `prod` reviewer. Mails the result. `ios/TESTFLIGHT.md`. |
+| `changelog.yml` (Changelog) | pull requests touching `changes/` (not drafts) | `node scripts/changelog-roll.mjs --check`: every fragment is `<issue#>-<slug>.md` and starts with `### Title (#NNN)` |
 | `editor-test-build.yml` (Editor test build) | `vX.Y.Z` tags, manual runs (with a tag) | Sends a `repository_dispatch` (`celiador-release`, `{tag}`) to `Cliefden/celiador-editor`, whose *Release (macOS)* builds its `main` as the test channel and publishes it to test.celiador.ai. Needs the repository secret `EDITOR_DISPATCH_TOKEN` (fine-grained, `celiador-editor` only, *Contents: read and write*); without it, it warns and succeeds. |
 
 Secrets stay on the box (`~/envs/<env>/daemon/.env`, written by
