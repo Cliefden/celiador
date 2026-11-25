@@ -48,9 +48,24 @@ jobs:
 
       - run: npm ci
 
-      # Regenerates from openapi.yaml and fails when src/schema.ts differs,
-      # then typechecks the generated file.
+      # Regenerates from openapi.yaml and fails when src/schema.ts or
+      # swift/CeliadorAPI.swift differs, then typechecks the TypeScript.
       - run: npm run check
+
+  swift:
+    name: Swift types compile and decode
+    # ubuntu-24.04 images ship the Swift toolchain (swiftc on PATH); no macOS
+    # runner needed for a stdlib-only file.
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: packages/client
+    steps:
+      - uses: actions/checkout@v4
+
+      # Typechecks swift/CeliadorAPI.swift in Swift 5 and 6 modes (warnings as
+      # errors), then decodes sample payloads, unknown enum values and kinds included.
+      - run: scripts/swift-test.sh
 
   breaking:
     name: no breaking API changes

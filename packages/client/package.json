@@ -2,7 +2,7 @@
   "name": "@celiador/client",
   "version": "0.1.0",
   "private": true,
-  "description": "The Celiador daemon's client contract: the OpenAPI spec and the TypeScript types generated from it.",
+  "description": "The Celiador daemon's client contract: the OpenAPI spec and the TypeScript and Swift types generated from it.",
   "license": "Apache-2.0",
   "type": "module",
   "types": "./src/schema.ts",
@@ -14,18 +14,21 @@
   },
   "files": [
     "openapi.yaml",
-    "src"
+    "src",
+    "swift"
   ],
   "scripts": {
-    "generate": "openapi-typescript openapi.yaml --output src/schema.ts",
+    "generate": "openapi-typescript openapi.yaml --output src/schema.ts && node scripts/generate-swift.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "openapi-typescript openapi.yaml --output src/schema.ts --check && tsc --noEmit"
+    "check": "openapi-typescript openapi.yaml --output src/schema.ts --check && node scripts/generate-swift.mjs --check && tsc --noEmit",
+    "test:swift": "scripts/swift-test.sh"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
     "openapi-typescript": "7.13.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "yaml": "2.9.1"
   }
 }
