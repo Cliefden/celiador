@@ -1,0 +1,6 @@
+# Daemon routes under /api that are deliberately NOT in openapi.yaml, one per
+# line as "METHOD /api/path   # why" (path parameters as :name or {name}).
+# Checked by `npm run check:api-coverage` in daemon/: an entry that is
+# documented later, or no longer served, fails the check.
+#
+# Empty: every route the daemon serves is in the contract.

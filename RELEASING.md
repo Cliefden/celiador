@@ -14,7 +14,9 @@ Below 1.0.0 the usual 0.x convention applies: a **breaking** client-facing
 change (`daemon/docs/CLIENT_INTEGRATION.md` — an endpoint, field or event removed or
 renamed, a changed meaning, a new required request field) is a **MINOR** bump;
 additive changes and fixes are **PATCH** releases. Going to 1.0.0 is a
-deliberate decision.
+deliberate decision. `scripts/release.sh` enforces the API half of this: when
+`packages/client/openapi.yaml` has a breaking change since the last tag
+(oasdiff), it refuses a PATCH bump (`packages/client/README.md`).
 
 Record user-visible changes under `## [Unreleased]` in `CHANGELOG.md` as they
 merge. A release that touches nothing user-visible still rolls the section.

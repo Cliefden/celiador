@@ -13,7 +13,8 @@
 #   1. clean main, equal to origin/main
 #   2. the daemon (daemon/package.json) and the app (ios/project.yml
 #      MARKETING_VERSION) agree on the current version; the new version is
-#      greater and its tag does not exist yet
+#      greater and its tag does not exist yet; a breaking API change since the
+#      last tag (packages/client/openapi.yaml) needs a MINOR bump below 1.0
 #   3. bump daemon/package.json + package-lock.json (npm version, no git tag)
 #      and every MARKETING_VERSION in ios/project.yml
 #   4. roll CHANGELOG.md: "## [Unreleased]" becomes "## [X.Y.Z] - <date>"
@@ -79,6 +80,32 @@ tag="v$next"
 git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag $tag already exists locally"
 if [[ "$local_only" == false ]] && git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
   die "tag $tag already exists on origin"
+fi
+
+# ── 2b. the API contract: a breaking change needs the right bump ─────────────
+# Below 1.0 a breaking client-facing change is a MINOR bump, from 1.0 a MAJOR
+# one (RELEASING.md). Compared with the last release tag's
+# packages/client/openapi.yaml (oasdiff; packages/client/README.md).
+last_tag="v$current"
+if git rev-parse -q --verify "refs/tags/$last_tag" >/dev/null; then
+  set +e
+  packages/client/scripts/breaking-since.sh "$last_tag"
+  api_status=$?
+  set -e
+  [[ $api_status -le 1 ]] || die "couldn't check the API for breaking changes since $last_tag"
+  if [[ $api_status -eq 1 ]]; then
+    next_major="${next%%.*}" next_minor="$(cut -d. -f2 <<<"$next")"
+    if (( major == 0 )); then
+      [[ "$next_major" != 0 || "$next_minor" != "$minor" ]] ||
+        die "the API has breaking changes since $last_tag (above): release a MINOR version (scripts/release.sh minor), not $next"
+    else
+      [[ "$next_major" != "$major" ]] ||
+        die "the API has breaking changes since $last_tag (above): release a MAJOR version, not $next"
+    fi
+    echo "release: breaking API changes since $last_tag, released as $next (CHANGELOG.md must say what clients need to do)."
+  fi
+else
+  echo "release: no tag $last_tag here; skipping the API breaking-change check."
 fi
 
 # ── 3. bump ──────────────────────────────────────────────────────────────────
