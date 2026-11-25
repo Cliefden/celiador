@@ -4,9 +4,9 @@ This repository is the **release train**: a `vX.Y.Z` tag is a Celiador release
 and names what the test and prod environments run (`ENVIRONMENTS.md`). One
 version covers the daemon (`daemon/package.json`) and the iOS app
 (`ios/project.yml`, `MARKETING_VERSION`); the site has no version of its own and
-ships with the tag. The editor has VS Code's version and follows the same
-triggers in its own repo: `main` → dev channel, a release tag → test channel,
-manual → prod.
+ships with the tag. The editor has VS Code's version and its own repo, with
+matching channels: a nightly build of its `main` → dev, a release tag here →
+a test build of its `main` (`editor-test-build.yml` below), manual → prod.
 
 ## What the number means
 
@@ -34,7 +34,8 @@ two stages:
 
 ```bash
 git push origin main      # daemon → dev; the Dev app builds — wait for green
-git push origin vX.Y.Z    # daemon + web → test; the iOS Test build → TestFlight
+git push origin vX.Y.Z    # daemon + web → test; the iOS Test build → TestFlight;
+                          # the editor's test build (Celiador Test, labelled vX.Y.Z)
 ```
 
 Never `--follow-tags`: both deploys would run at once on the same box. The tag
@@ -85,6 +86,7 @@ Migrations only go forward, so rolling back code leaves the schema as it is.
 | `deploy.yml` (Deploy daemon) | `main` pushes touching `daemon/`, `vX.Y.Z` tags, manual runs | CI, then rsync `daemon/` to `~/envs/<env>/daemon`, `npm ci`, `BUILD_INFO`, migrate, restart `celiador-daemon@<env>`, and a health gate: `/api/health` through Caddy must report this `env` and this `commit`. Mails the result. |
 | `web-deploy.yml` (Deploy web) | `main` pushes touching `web/`, `vX.Y.Z` tags, manual runs | `next build`, rsync `web/` + `.next` to `~/envs/<env>/web`, `npm ci`, restart `celiador-web@<env>`, check the page through the public host. Mails the result. |
 | `ios.yml` (Build iOS) | `main` pushes touching `ios/`, `vX.Y.Z` tags, manual runs | On a macOS runner: XcodeGen, icon banner, `xcodebuild archive` of the channel's scheme with **manual** signing (a CI-only Apple Distribution certificate from the repository secrets and the channel's two App Store profiles, fetched with the App Store Connect API key), then `-exportArchive` with `destination=upload` to App Store Connect (TestFlight). `main` → the Dev app, tag → the Test build, manual `prod` → the App Store build behind the `prod` reviewer. Mails the result. `ios/TESTFLIGHT.md`. |
+| `editor-test-build.yml` (Editor test build) | `vX.Y.Z` tags, manual runs (with a tag) | Sends a `repository_dispatch` (`celiador-release`, `{tag}`) to `Cliefden/celiador-editor`, whose *Release (macOS)* builds its `main` as the test channel and publishes it to test.celiador.ai. Needs the repository secret `EDITOR_DISPATCH_TOKEN` (fine-grained, `celiador-editor` only, *Contents: read and write*); without it, it warns and succeeds. |
 
 Secrets stay on the box (`~/envs/<env>/daemon/.env`, written by
 `daemon/deploy/provision-env.sh`); the workflow never writes them. This differs from
