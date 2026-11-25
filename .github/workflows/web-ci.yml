@@ -1,17 +1,14 @@
 name: Web CI
 
-# Checks the marketing site (web/) on pull requests and on pushes to branches
-# other than main that touch it: install from the lockfile, lint, typecheck and
-# a production build. Deploys (web-deploy.yml) build again on their own; this
-# catches a broken site before it is merged.
+# Checks the marketing site (web/) on pull requests that touch it, once they
+# are ready for review (a draft runs nothing): install from the lockfile, lint,
+# typecheck and a production build. Deploys (web-deploy.yml) build again on
+# their own; this catches a broken site before it is merged.
 
 on:
   pull_request:
-    paths:
-      - web/**
-      - .github/workflows/web-ci.yml
-  push:
-    branches-ignore: [main]
+    # ready_for_review: a draft marked ready runs its checks.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - web/**
       - .github/workflows/web-ci.yml
@@ -20,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  # A newer push to the same PR or branch supersedes the running check.
+  # A newer push to the same PR supersedes the running check.
   group: web-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
@@ -31,6 +28,7 @@ defaults:
 jobs:
   check:
     name: lint + typecheck + build
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

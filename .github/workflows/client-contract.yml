@@ -2,17 +2,14 @@ name: Client contract
 
 # The daemon's client contract (packages/client): the OpenAPI spec and the
 # TypeScript types generated from it. Checks that the committed types match
-# the spec, that they compile, and — on pull requests — that the spec only
-# changed additively against the base branch (released clients can't be
-# updated in lockstep; see packages/client/README.md).
+# the spec, that they compile, and that the spec only changed additively
+# against the base branch (released clients can't be updated in lockstep; see
+# packages/client/README.md). On pull requests once they are ready for review:
+# a draft runs nothing.
 on:
   pull_request:
-    paths:
-      - packages/client/**
-      - daemon/src/**
-      - .github/workflows/client-contract.yml
-  push:
-    branches-ignore: [main]
+    # ready_for_review: a draft marked ready runs its checks.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - packages/client/**
       - daemon/src/**
@@ -33,6 +30,7 @@ env:
 jobs:
   types:
     name: generated types up to date
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,7 +52,7 @@ jobs:
 
   breaking:
     name: no breaking API changes
-    if: github.event_name == 'pull_request'
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
