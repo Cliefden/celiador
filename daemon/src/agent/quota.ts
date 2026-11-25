@@ -25,7 +25,8 @@ import { costUsd, round6, type TokenCounts } from "./pricing";
  * has run), so the last request of the day can overshoot by one turn. Daily usage
  * persists to <CELIADOR_HOME>/data/quota/usage.json so a restart doesn't reset
  * budgets; the per-minute window and concurrency are in-memory only. Finished days
- * are kept (HISTORY_DAYS) in data/quota/history.json for GET /api/admin/usage.
+ * are kept (HISTORY_DAYS) in data/quota/history.json for GET /api/admin/usage and
+ * the caller's own month + recent days on GET /api/me.
  */
 
 export interface DayUsage {
@@ -45,7 +46,7 @@ interface UsageFile {
   users: Record<string, Partial<DayUsage>>;
 }
 
-/** Finished days kept for the admin usage view. */
+/** Finished days kept for the admin usage view and the account's own history. */
 const HISTORY_DAYS = 90;
 
 function limit(name: string, fallback: number): number {
@@ -124,6 +125,7 @@ class AgentQuota {
   private lastMinuteSweep = 0;
   private active = new Map<string, number>();
   private saveTimer: NodeJS.Timeout | null = null;
+  private historyCache: { mtimeMs: number; days: UsageFile[] } | null = null;
 
   constructor() {
     this.usage = { day: today(), users: {} };
@@ -154,10 +156,18 @@ class AgentQuota {
     return u;
   }
 
+  /**
+   * The finished days, parsed. Cached against the file's mtime: `/api/me` reads
+   * the caller's history on every poll, and the file only changes at rollover.
+   */
   private readHistory(): UsageFile[] {
     try {
+      const mtimeMs = fs.statSync(this.historyFile).mtimeMs;
+      if (this.historyCache?.mtimeMs === mtimeMs) return this.historyCache.days;
       const h = JSON.parse(fs.readFileSync(this.historyFile, "utf8")) as UsageFile[];
-      return Array.isArray(h) ? h : [];
+      const days = Array.isArray(h) ? h : [];
+      this.historyCache = { mtimeMs, days };
+      return days;
     } catch {
       return [];
     }
@@ -174,6 +184,7 @@ class AgentQuota {
       const tmp = `${this.historyFile}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(history.slice(-HISTORY_DAYS)));
       fs.renameSync(tmp, this.historyFile);
+      this.historyCache = null;
     } catch (err) {
       console.error("[quota] history save failed:", err instanceof Error ? err.message : err);
     }
@@ -255,11 +266,6 @@ class AgentQuota {
   }
 
   /**
-   * Read-only view of a user's current daily usage, the active limits, and when
-   * the daily counters reset (next UTC midnight). Pure: unlike {@link acquire},
-   * it never mutates counters or inserts a user entry — safe for a `/api/me` poll.
-   */
-  /**
    * Drop per-minute windows with nothing in the last minute (at most once a
    * minute, or now with `force` — a test seam), so every user who ever made a
    * request doesn't keep an entry.
@@ -277,12 +283,46 @@ class AgentQuota {
     return this.minute.size;
   }
 
+  /**
+   * Read-only view of a user's current daily usage, the active limits, and when
+   * the daily counters reset (next UTC midnight). Pure: unlike {@link acquire},
+   * it never mutates counters or inserts a user entry — safe for a `/api/me` poll.
+   */
   snapshot(userId: string): { usage: DayUsage; limits: UserLimits; resetsAt: string } {
     this.rollover();
     const d = this.usage.day;
     const used = normalize(this.usage.users[userId]);
     const resetsAt = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString();
     return { usage: used, limits: userLimits(), resetsAt };
+  }
+
+  /**
+   * The caller's own usage beyond today, read from the same store the admin
+   * view reports (scoped to one account, nothing about anyone else):
+   *   - `period`: this calendar month (UTC) so far, today included, summed;
+   *   - `history`: the last `days` UTC days, newest first, today included, with
+   *     zeros for days the account made no request (so a chart needs no gaps).
+   * Pure, like {@link snapshot}. History keeps HISTORY_DAYS, so a month always fits.
+   */
+  ownUsage(userId: string, days: number): { period: { from: string; to: string; usage: DayUsage }; history: { day: string; usage: DayUsage }[] } {
+    this.rollover();
+    const to = this.usage.day;
+    const byDay = new Map<string, DayUsage>();
+    for (const h of this.readHistory()) {
+      const u = h?.users?.[userId];
+      if (u && typeof h.day === "string") byDay.set(h.day, normalize(u));
+    }
+    byDay.set(to, normalize(this.usage.users[userId]));
+
+    const from = `${to.slice(0, 7)}-01`;
+    const period = { from, to, usage: sum(Object.fromEntries([...byDay].filter(([d]) => d >= from && d <= to))) };
+
+    const start = Date.parse(`${to}T00:00:00Z`);
+    const history = Array.from({ length: Math.max(1, days) }, (_, i) => {
+      const day = new Date(start - i * 86_400_000).toISOString().slice(0, 10);
+      return { day, usage: byDay.get(day) ?? empty() };
+    });
+    return { period, history };
   }
 
   /** Charge one request's tokens (as reported by the upstream stream) to the user's day. Returns the request's cost. */

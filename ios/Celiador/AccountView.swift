@@ -71,15 +71,40 @@ struct AccountView: View {
 
             if let me {
                 Section {
-                    UsageMeter(label: "Requests", used: me.usage.requests, limit: me.limits.dailyRequests)
-                    UsageMeter(label: "Input tokens", used: me.usage.inputTokens, limit: me.limits.dailyInput)
-                    UsageMeter(label: "Output tokens", used: me.usage.outputTokens, limit: me.limits.dailyOutput)
+                    if let limit = me.limits.dailyUsd {
+                        UsageMeter(label: "Agent spend", used: me.usage.costUsd ?? 0, limit: limit, format: RunUsage.formatCost)
+                    }
+                    UsageMeter(label: "Requests", used: Double(me.usage.requests), limit: Double(me.limits.dailyRequests), format: UsageMeter.compact)
+                    // Token caps are off by default (the budget is in dollars): a meter
+                    // only when one is set, otherwise the plain count.
+                    if me.limits.dailyInput > 0 || me.limits.dailyOutput > 0 {
+                        UsageMeter(label: "Input tokens", used: Double(me.usage.inputTokens), limit: Double(me.limits.dailyInput), format: UsageMeter.compact)
+                        UsageMeter(label: "Output tokens", used: Double(me.usage.outputTokens), limit: Double(me.limits.dailyOutput), format: UsageMeter.compact)
+                    } else {
+                        LabeledContent("Tokens", value: Self.tokens(me.usage))
+                    }
                 } header: {
                     Text("Today's usage")
                 } footer: {
                     Text(resetsFooter)
                 }
             .listRowBackground(Theme.panel)
+
+                if let period = me.period {
+                    Section {
+                        LabeledContent("Agent spend", value: RunUsage.formatCost(period.usage.costUsd ?? 0))
+                        LabeledContent("Requests", value: UsageMeter.compact(Double(period.usage.requests)))
+                        LabeledContent("Tokens", value: Self.tokens(period.usage))
+                        if let history = me.history, !history.isEmpty {
+                            UsageHistoryChart(days: history, dailyBudget: me.limits.dailyUsd ?? 0)
+                        }
+                    } header: {
+                        Text(Self.periodTitle(period))
+                    } footer: {
+                        Text(Self.periodFooter(period, historyDays: me.history?.count ?? 0))
+                    }
+            .listRowBackground(Theme.panel)
+                }
 
                 if let tasks = me.tasks {
                     Section {
@@ -157,18 +182,47 @@ struct AccountView: View {
         return "Daily usage resets in \(text). A limit of 0 means unlimited."
     }
 
+    /// "2.1M in · 142k out".
+    private static func tokens(_ usage: AgentUsage) -> String {
+        "\(UsageMeter.compact(Double(usage.inputTokens))) in · \(UsageMeter.compact(Double(usage.outputTokens))) out"
+    }
+
+    private static let utcDay: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// "2026-11-01" → "Nov 1" (template "MMMd"), or "November" ("MMMM"): the day as
+    /// the daemon counts it (UTC), in the user's locale.
+    static func dayLabel(_ day: String, template: String = "MMMd") -> String {
+        guard let date = utcDay.date(from: day) else { return day }
+        let f = DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.setLocalizedDateFormatFromTemplate(template)
+        return f.string(from: date)
+    }
+
+    /// "November so far".
+    private static func periodTitle(_ period: UsagePeriod) -> String {
+        "\(dayLabel(period.from, template: "MMMM")) so far"
+    }
+
+    private static func periodFooter(_ period: UsagePeriod, historyDays: Int) -> String {
+        var text = "Your own usage since \(dayLabel(period.from)), in UTC days. The limits above are per day."
+        if historyDays > 0 { text += " The bars are your agent spend for each of the last \(historyDays) days." }
+        return text
+    }
+
     private func load() async {
         #if DEBUG
         if DemoData.isActive {
             profile = DemoData.profile
             name = DemoData.profile.displayName ?? ""
-            me = Me(
-                userId: "u1", email: DemoData.profile.email, plan: DemoData.profile.plan,
-                usage: AgentUsage(requests: 128, inputTokens: 2_100_000, outputTokens: 142_000),
-                limits: AgentLimits(rpm: 30, concurrency: 2, dailyRequests: 500, dailyInput: 5_000_000, dailyOutput: 300_000),
-                resetsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7 * 3600)),
-                tasks: AgentTaskSummary(running: 1, prOpen: 2, mergedLast7Days: 5, concurrency: 3, costUsdLast7Days: 4.12)
-            )
+            me = DemoData.me
             return
         }
         #endif
@@ -223,28 +277,32 @@ struct AccountView: View {
 /// fill turns amber past 80% so a user sees a cap approaching before it bites.
 private struct UsageMeter: View {
     let label: String
-    let used: Int
-    let limit: Int
+    let used: Double
+    let limit: Double
+    /// How a figure reads: a count (`compact`) or dollars (`RunUsage.formatCost`).
+    let format: (Double) -> String
 
-    private var fraction: Double { limit > 0 ? min(1, Double(used) / Double(limit)) : 0 }
-    private var fillColor: Color { fraction >= 0.8 ? Theme.attention : Theme.accent }
+    private var fraction: Double { limit > 0 ? min(1, used / limit) : 0 }
+    private var fillColor: Color { fraction >= 1 ? Theme.red : fraction >= 0.8 ? Theme.attention : Theme.accent }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(label)
                 Spacer()
-                Text(limit > 0 ? "\(Self.compact(used)) / \(Self.compact(limit))" : "\(Self.compact(used)) · unlimited")
+                Text(limit > 0 ? "\(format(used)) / \(format(limit))" : "\(format(used)) · unlimited")
                     .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
             }
             ProgressView(value: fraction)
                 .tint(fillColor)
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
     /// 1_234 → "1,234", 45_000 → "45k", 2_100_000 → "2.1M".
-    static func compact(_ n: Int) -> String {
+    static func compact(_ value: Double) -> String {
+        let n = Int(value.rounded())
         switch n {
         case 1_000_000...:
             return String(format: "%.1fM", Double(n) / 1_000_000).replacingOccurrences(of: ".0M", with: "M")
@@ -253,5 +311,57 @@ private struct UsageMeter: View {
         default:
             return n.formatted(.number.grouping(.automatic))
         }
+    }
+}
+
+/// The last days' agent spend as small bars, oldest left, today right. Scaled to
+/// the daily budget (a dashed line at the top) unless a day went past it; a day at
+/// or over the budget is amber. No bars at all when nothing was spent.
+private struct UsageHistoryChart: View {
+    /// Newest first, as the daemon sends them.
+    let days: [UsageDay]
+    let dailyBudget: Double
+
+    private var ordered: [UsageDay] { days.reversed() }
+    private var peak: Double { max(dailyBudget, days.map { $0.usage.costUsd ?? 0 }.max() ?? 0) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(ordered) { day in
+                    let cost = day.usage.costUsd ?? 0
+                    let over = dailyBudget > 0 && cost >= dailyBudget
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(over ? Theme.attention : (day.id == days.first?.id ? Theme.accentBright : Theme.accent))
+                        .frame(height: peak > 0 && cost > 0 ? max(2, 56 * cost / peak) : 1)
+                        .opacity(cost > 0 ? 1 : 0.35)
+                        .frame(maxWidth: .infinity, alignment: .bottom)
+                }
+            }
+            .frame(height: 56, alignment: .bottom)
+            .overlay(alignment: .top) {
+                if dailyBudget > 0 {
+                    Rectangle()
+                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .foregroundStyle(Theme.faint)
+                        .frame(height: 1)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .offset(y: 56 - 56 * dailyBudget / max(peak, 0.000_001))
+                }
+            }
+            HStack {
+                Text(ordered.first.map { AccountView.dayLabel($0.day) } ?? "")
+                Spacer()
+                if dailyBudget > 0 { Text("Budget \(RunUsage.formatCost(dailyBudget))/day") }
+                Spacer()
+                Text("Today")
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent spend, last \(days.count) days")
+        .accessibilityValue(days.map { "\(AccountView.dayLabel($0.day)): \(RunUsage.formatCost($0.usage.costUsd ?? 0))" }.joined(separator: ", "))
     }
 }
