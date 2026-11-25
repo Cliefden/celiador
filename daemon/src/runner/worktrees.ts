@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ROOT } from "../config";
-import { git } from "./workspace";
+import { git, locationFile, MIRROR_CONFIG, mirrorsRoot, worktreeLocation, writeWorktreeLocation, type IWorktreeLocation } from "./workspace";
+
+export { mirrorsRoot };
 
 /**
  * Cloud checkouts as git worktrees. Each user gets one cached bare mirror per
@@ -22,10 +23,6 @@ import { git } from "./workspace";
  */
 
 const NETWORK_TIMEOUT_MS = 180_000;
-
-export function mirrorsRoot(): string {
-  return path.join(ROOT, "data", "repos");
-}
 
 /** The user's mirror of a repository, keyed by the normalised URL (case-insensitive, no .git / trailing slash). */
 export function mirrorDir(userId: string, url: string): string {
@@ -65,8 +62,9 @@ async function fetchMirror(dir: string, remote: string, secret?: string): Promis
   if (!fs.existsSync(path.join(dir, "HEAD"))) {
     await fs.promises.mkdir(dir, { recursive: true });
     await git(dir, ["init", "-q", "--bare"]);
-    // Reflogs in the worktrees, as a normal clone has (a bare repo turns them off).
-    await git(dir, ["config", "core.logAllRefUpdates", "true"]);
+    // The mirror's config is daemon-owned, byte for byte (workspace.ts enforces it
+    // before every host git command): reflogs on, as a normal clone has (a bare repo turns them off).
+    await fs.promises.writeFile(path.join(dir, "config"), MIRROR_CONFIG);
   }
   await git(dir, ["fetch", "-q", "--prune", "--no-tags", remote, "+refs/heads/*:refs/remotes/origin/*"], { timeout: NETWORK_TIMEOUT_MS, secret });
   const def = await remoteDefaultBranch(dir, remote, secret);
@@ -132,7 +130,10 @@ export async function addWorktree(p: IWorktreeParams): Promise<IWorktree> {
       throw new Error(`branch "${base}" doesn't exist on the remote`);
     }
     await fs.promises.rm(p.dir, { recursive: true, force: true });
+    await fs.promises.rm(locationFile(p.dir), { force: true });
     await fs.promises.mkdir(path.dirname(p.dir), { recursive: true });
+    // A previous worktree at this path whose metadata outlived it would make git pick another id.
+    await git(mirror, ["worktree", "prune"]).catch(() => undefined);
     try {
       await git(mirror, ["worktree", "add", "-q", "--no-track", "-B", p.branch, p.dir, start]);
     } catch (err) {
@@ -140,6 +141,10 @@ export async function addWorktree(p: IWorktreeParams): Promise<IWorktree> {
       if (/already (checked out|used by worktree)/i.test(msg)) throw new Error(`branch "${p.branch}" is already in use by another cloud session`);
       throw err;
     }
+    // Record where the worktree's git data is, now, before any agent has touched
+    // the tree: every later host-side git command uses this record, never the
+    // workspace's (agent-writable) `.git` file.
+    writeWorktreeLocation(p.dir, freshWorktreeLocation(mirror, p.dir));
     const headSha = (await git(p.dir, ["rev-parse", "HEAD"])).trim();
     return { remoteSha, base, headSha };
   });
@@ -174,28 +179,41 @@ export function hasCheckout(dir: string): boolean {
 }
 
 /**
- * The absolute git dir shared by a worktree (its mirror), or undefined when
- * `dir` is a plain clone. The sandbox mounts it at the same path, or git inside
- * the container couldn't find the worktree's objects.
+ * The metadata dir `git worktree add` just made for `dir`, read from the fresh
+ * `.git` file (no agent has run yet) and checked against the mirror's layout.
  */
-export async function worktreeCommonDir(dir: string): Promise<string | undefined> {
-  const dotGit = path.join(dir, ".git");
-  const stat = await fs.promises.stat(dotGit).catch(() => undefined);
-  if (!stat?.isFile()) return undefined;
-  const out = (await git(dir, ["rev-parse", "--git-common-dir"])).trim();
-  return out ? path.resolve(dir, out) : undefined;
+function freshWorktreeLocation(mirror: string, dir: string): IWorktreeLocation {
+  const raw = fs.readFileSync(path.join(dir, ".git"), "utf8");
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(raw);
+  // Real paths on both sides (git writes the resolved path; /tmp → /private/tmp on macOS).
+  const gitDir = m?.[1] ? fs.realpathSync(path.resolve(dir, m[1])) : "";
+  const commonDir = fs.realpathSync(mirror);
+  if (path.dirname(gitDir) !== path.join(commonDir, "worktrees")) throw new Error(`unexpected worktree layout for ${dir}`);
+  return { gitDir, commonDir };
+}
+
+/**
+ * Where a workspace's git data is (its own metadata dir and the mirror), as the
+ * daemon recorded it when it made the worktree; undefined for anything else.
+ * The sandbox mounts these, so it must never come from the agent-writable `.git` file.
+ */
+export function worktreeMounts(dir: string): IWorktreeLocation | undefined {
+  return worktreeLocation(dir);
 }
 
 /**
  * Detach a run's worktree from its mirror and drop the run's local branch.
  * Best-effort; used when a session is deleted (the directory itself goes with
- * removeWorkspace, and `worktree prune` would catch it later anyway).
+ * removeWorkspace). The worktree's metadata dir is removed directly, from the
+ * daemon's record — not with `git worktree remove`, which would read the
+ * agent's tree and `.git` file.
  */
 export async function removeWorktree(userId: string, url: string, dir: string, branch?: string): Promise<void> {
   const mirror = mirrorDir(userId, url);
   if (!fs.existsSync(mirror)) return;
   await withMirror(mirror, async () => {
-    await git(mirror, ["worktree", "remove", "--force", dir]).catch(() => undefined);
+    const loc = worktreeLocation(dir);
+    if (loc && loc.commonDir === fs.realpathSync(mirror)) await fs.promises.rm(loc.gitDir, { recursive: true, force: true });
     await git(mirror, ["worktree", "prune"]).catch(() => undefined);
     if (branch) await git(mirror, ["branch", "-q", "-D", branch]).catch(() => undefined);
   }).catch(() => undefined);
