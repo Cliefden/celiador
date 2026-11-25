@@ -6,17 +6,34 @@ key and the DB connection — clients never hold either.
 
 ## The daemon API surface (all live in prod)
 
+The exact request and response shapes, status codes and SSE event payloads are
+in the OpenAPI spec, `packages/client/openapi.yaml` (generated TypeScript types
+next to it). This table is the map; the spec is the contract. Changes to either
+are additive only — released clients can't be updated in lockstep
+(`packages/client/README.md`).
+
 | Area | Endpoint | Who | Notes |
 |---|---|---|---|
-| Health/boot | `GET /api/health`, `GET /api/config` | any | config → authMode + Supabase client cfg + `signIn {password, magicLink, github}` — hide the sign-in buttons whose flag is `false`; the field is absent on an older daemon or when GoTrue is unreachable (show them all) |
+| Health/boot | `GET /api/health`, `GET /api/config`, `GET /api/limits` | any (no auth) | limits → the per-user limits in force + `prices` / `modelPrices` (see "Cost per run") | config → authMode + Supabase client cfg + `signIn {password, magicLink, github}` — hide the sign-in buttons whose flag is `false`; the field is absent on an older daemon or when GoTrue is unreachable (show them all) |
 | Agent | `POST /api/agent/messages` | editor | Claude proxy, SSE. Server-owned system prompt + tools; client sends `messages` only; per-user quota (429 + Retry-After). Refusals (401/403/429/503) use Anthropic's error envelope `{type:"error", error:{type, message}, request_id:null}` — same on `/api/anthropic/v1/*` |
-| Relay | `POST /api/sessions`, `GET /:id/events`, `GET /:id/commands`, `POST /:id/events`, `POST /:id/{message,approvals/:rid,answers/:rid,cancel}` | editor=runner, phone=watcher | live, ephemeral |
+| Gateway | `POST /api/anthropic/v1/messages`, `GET /api/anthropic/v1/models` | editor's native agent host (Claude SDK) | Anthropic-compatible; same quota and error envelope as `/api/agent/messages` |
+| Inline completion | `POST /api/complete` | editor | non-streaming `{ prefix, suffix, language? }` → the text to insert (may be empty); prefix keeps its last 4000 chars, suffix its first 1000; rate limited per user |
+| Relay | `GET /api/sessions`, `POST /api/sessions`, `GET\|DELETE /:id`, `GET /:id/events`, `GET /:id/commands`, `POST /:id/events`, `POST /:id/{message,approvals/:rid,answers/:rid,cancel}` | editor=runner, phone=watcher | live, ephemeral |
+| Workspace files | `GET /api/sessions/:id/files?path=`, `GET\|PUT /api/sessions/:id/file?path=` | phone | served from the daemon's checkout for a cloud session, round-tripped to the editor for an editor session (409 editor offline, 504 editor timeout); binary files → 415; writes capped at 2,000,000 characters |
+| Review (git) | `GET /api/sessions/:id/git/{status,diff}`, `POST /api/sessions/:id/git/{commit,revert,push,pr,merge}` | phone | same shapes for editor and cloud sessions; see "Cloud sessions" |
+| Presence | `PUT /api/presence/workspaces` (editor heartbeat), `GET /api/presence/workspaces` (phone), `GET /api/presence/commands` (editor, SSE), `POST /api/presence/requests` (phone) | editor + phone | which repos are open in the user's editors (entries age out ~90 s after the last heartbeat); the phone starts a run in an open editor; the editor's control stream also carries queued tasks |
 | Profile | `GET /api/profile`, `PATCH /api/profile` | both | durable |
 | Chat history | `GET /api/chats`, `GET /api/chats/:id`, `PATCH/DELETE /api/chats/:id` | both | durable; rows written by the relay persister |
-| Push | `POST/DELETE /api/push/register`, `POST /api/push/activity` | phone | APNs |
+| Me | `GET /api/me` | both | account summary: plan, usage against limits, `tasks` metrics |
+| Push | `POST/DELETE /api/push/register`, `POST /api/push/activity`, `POST /api/push/test` | phone | APNs; `test` sends a test alert to the caller's devices |
 | Account | `DELETE /api/account` | phone (editor later) | permanent account deletion (App Store 5.1.1(v)) |
-| Tasks | `GET /api/tasks` (+ `/stream` SSE `task` events), `POST /api/tasks`, `POST /:id/{cancel,status,merge,followup}` | phone + editor | the agent queue; see "Agents UI" below |
+| Tasks | `GET /api/tasks` (+ `/stream` SSE `task` events), `POST /api/tasks`, `POST\|DELETE /api/tasks/repos`, `POST /:id/{cancel,status,merge,followup}` | phone + editor | the agent queue; see "Agents UI" below. `GET` answers `{ tasks, concurrency, repos, repoLinks }` |
+| GitHub | `GET\|DELETE /api/github/account`, `POST /api/github/account/connect` | phone + editor | see "Connecting GitHub" |
 | Deep links | `GET /api/open/task/:id`, `GET /api/open/queue` | browser (no auth) | bounce pages → `celiador://task/<id>`, `celiador://queue` |
+| Editor updates | `GET /api/update/:platform/:quality/:commit`, `GET /api/releases[/latest/:platform/:quality[/:kind]\|/:file]` | editor's updater, site (no auth) | 204 = up to date; `celiador-editor/docs/RELEASING.md` |
+| Extension control | `GET /api/extensions/control` | editor (no auth) | `product.json` `extensionsGallery.controlUrl`: Open VSX's malicious list + Celiador's own warnings |
+| Waitlist | `POST /api/waitlist`, `GET\|POST /api/waitlist/{confirm,unsubscribe}` | site, mail links (no auth) | sign-up with double opt-in; confirm/unsubscribe are HTML pages (unsubscribe also RFC 8058 one-click) |
+| Operator | `GET /api/admin/usage`, `GET\|DELETE /api/admin/waitlist`, `/api/github/app/*`, `POST /api/github/webhook` | operator / GitHub | not for clients |
 
 ## Agents UI (tasks)
 
@@ -276,7 +293,19 @@ live transcript + approve/instruct/cancel, Live Activity + widget). Remaining:
   expect periodic `ping` comments.
 - **Errors**: endpoints return `{ error }` with a proper status; `503
   {"error":"database not configured"}` means the daemon has no DB (won't happen in
-  prod, but handle it).
+  prod, but handle it). Known exceptions, kept for released clients:
+  - the agent routes (`/api/agent/messages`, `/api/anthropic/v1/*`) use
+    Anthropic's error envelope (see the table);
+  - `DELETE /api/sessions/:id` and `DELETE /api/chats/:id` answer `200 { ok: false }`
+    for an id that doesn't exist, not 404;
+  - the 404 text varies ("not found", "Not found", "Unknown endpoint") — match on
+    the status, never the text.
+- **Shapes**: profile and chat rows are snake_case (they are database rows);
+  everything else is camelCase. `runner` means `"editor" | "server"` on a session
+  and `"mac" | "cloud"` on a task. `POST /api/tasks` answers 201 for a new task and
+  200 with `deduped: true` for an existing open one. Unknown values are `null` in
+  some responses (`branch` in `git/status` and `git/push`) and left out in others:
+  treat both as absent.
 
 ## Suggested order of work
 
