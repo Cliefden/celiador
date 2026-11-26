@@ -107,7 +107,7 @@ enum Telemetry {
         case queue, agents, explorer, activity
         case session, changes, commit, pullRequest
         case newRun, newRunCompose, newTask, watchedRepos
-        case account, settings, codeFile, chatTranscript
+        case account, settings, codeFile, chatTranscript, github
     }
 
     /// The pairing funnel, in order. Each fires at most once per install.
@@ -117,7 +117,7 @@ enum Telemetry {
 
     /// `domain` values for `error`.
     enum ErrorDomain: String {
-        case config, relay, sessions, run, tasks, git, files, push, liveActivity, history, profile, account
+        case config, relay, sessions, run, tasks, git, files, push, liveActivity, history, profile, account, github
     }
 
     // MARK: - Buckets

@@ -74,6 +74,31 @@ struct CloudRepo: Codable, Identifiable, Hashable {
     var cloudReady: Bool { app && verified != false }
 }
 
+/// GET /api/github/account: the App is set up on this daemon; your GitHub account is connected.
+struct GitHubAccount: Codable, Equatable {
+    let app: Bool
+    let connected: Bool
+    var login: String? = nil
+}
+
+/// POST /api/github/account/connect: links to open in a browser (one-time, 10 minutes).
+struct GitHubConnectLinks: Codable {
+    let authorizeUrl: String
+    let installUrl: String
+}
+
+/// GET /api/github/account/repos: a repo you can write to through the Celiador App.
+struct GitHubRepo: Codable, Identifiable, Hashable {
+    let url: String
+    let owner: String
+    let name: String
+    let `private`: Bool
+    var defaultBranch: String? = nil
+    var linked: Bool
+    var id: String { url }
+    var label: String { "\(owner)/\(name)" }
+}
+
 extension Session {
     enum CodingKeys: String, CodingKey {
         case id, title, origin, runner, state, runnerConnected, lastSeq, createdAt, updatedAt, usage, repo

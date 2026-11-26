@@ -436,6 +436,7 @@ private struct NewTaskSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var repos: [RepoChoice] = []
     @State private var loaded = false
+    @State private var showGitHub = false
     @State private var repo: String = ""
     @State private var title = ""
     @State private var details = ""
@@ -451,12 +452,15 @@ private struct NewTaskSheet: View {
                     if !loaded {
                         ProgressView().frame(maxWidth: .infinity)
                     } else if repos.isEmpty {
-                        Text("No repos yet. Add one in Celiador with Connect GitHub, or open it there, and it shows up here.")
-                            .font(.footnote).foregroundStyle(.secondary)
+                        Button { showGitHub = true } label: {
+                            Label("Connect GitHub and pick a repo", systemImage: "plus.circle.fill")
+                        }
                     } else {
                         Picker("Repo", selection: $repo) {
                             ForEach(repos) { r in Text(r.label).tag(r.url) }
                         }
+                        Button("Add another repo") { showGitHub = true }
+                            .font(.subheadline)
                     }
                 } header: {
                     Text("Repository")
@@ -483,15 +487,20 @@ private struct NewTaskSheet: View {
                     }
                 }
             }
-            .task {
-                async let cloud = Api.shared.cloudRepos()
-                let editor = (try? await Api.shared.editorWorkspaces()) ?? []
-                if !editor.isEmpty { Telemetry.onboarding(.editorPaired) }
-                repos = RepoChoice.merge(cloud: (try? await cloud) ?? [], editor: editor)
-                loaded = true
-                if repo.isEmpty { repo = repos.first?.url ?? "" }
+            .task { await loadRepos() }
+            .sheet(isPresented: $showGitHub, onDismiss: { Task { await loadRepos() } }) {
+                GitHubSheet()
             }
         }
+    }
+
+    private func loadRepos() async {
+        async let cloud = Api.shared.cloudRepos()
+        let editor = (try? await Api.shared.editorWorkspaces()) ?? []
+        if !editor.isEmpty { Telemetry.onboarding(.editorPaired) }
+        repos = RepoChoice.merge(cloud: (try? await cloud) ?? [], editor: editor)
+        loaded = true
+        if repo.isEmpty || !repos.contains(where: { $0.url == repo }) { repo = repos.first?.url ?? "" }
     }
 
     private func create() {
@@ -518,6 +527,7 @@ private struct WatchedReposSheet: View {
     @Binding var watched: [String]
     @Environment(\.dismiss) private var dismiss
     @State private var repos: [RepoChoice] = []
+    @State private var showGitHub = false
     @State private var error: String?
 
     private func isWatched(_ url: String) -> Bool {
@@ -529,15 +539,15 @@ private struct WatchedReposSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    if repos.isEmpty {
-                        Text("Your repos show up here once you add them in Celiador with Connect GitHub, or open them there.").font(.footnote).foregroundStyle(.secondary)
-                    }
                     ForEach(repos) { r in
                         Toggle(r.label, isOn: Binding(
                             get: { isWatched(r.url) },
                             set: { on in Task { await set(r.url, on) } }
                         ))
                         .tint(Theme.accent)
+                    }
+                    Button { showGitHub = true } label: {
+                        Label(repos.isEmpty ? "Connect GitHub and pick a repo" : "Add another repo", systemImage: "plus.circle.fill")
                     }
                 } footer: {
                     Text("Label an issue `celiador`, or comment `@celiador` as a collaborator, and the agent picks it up. Needs the repo's Celiador webhook.")
@@ -549,12 +559,20 @@ private struct WatchedReposSheet: View {
             .navigationTitle("Watched repos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .task {
-                async let cloud = Api.shared.cloudRepos()
-                let editor = (try? await Api.shared.editorWorkspaces()) ?? []
-                repos = RepoChoice.merge(cloud: (try? await cloud) ?? [], editor: editor)
+            .task { await loadRepos() }
+            .sheet(isPresented: $showGitHub, onDismiss: { Task { await loadRepos() } }) {
+                GitHubSheet()
             }
         }
+    }
+
+    private func loadRepos() async {
+        async let cloud = Api.shared.cloudRepos()
+        let editor = (try? await Api.shared.editorWorkspaces()) ?? []
+        let linked = (try? await cloud) ?? []
+        repos = RepoChoice.merge(cloud: linked, editor: editor)
+        // Repos added from GitHub are linked, which is what "watched" means here.
+        for r in linked where !isWatched(r.url) { watched.append(r.url) }
     }
 
     private func set(_ url: String, _ on: Bool) async {

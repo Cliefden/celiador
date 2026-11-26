@@ -515,6 +515,30 @@ final class Api {
         return try await request(Resp.self, path: "api/sessions/cloud/repos").repos
     }
 
+    // MARK: - GitHub connection (phone-side onboarding)
+
+    /// Whether the daemon has the GitHub App and you've connected your GitHub account.
+    func githubAccount() async throws -> GitHubAccount {
+        try await request(GitHubAccount.self, path: "api/github/account")
+    }
+
+    /// One-time github.com links (10 minutes) to open in a browser: authorize only,
+    /// or install the Celiador App on more repos (and authorize) in one go.
+    func githubConnectLinks() async throws -> GitHubConnectLinks {
+        try await request(GitHubConnectLinks.self, path: "api/github/account/connect", method: "POST")
+    }
+
+    /// Repos your GitHub account can write to through the Celiador App, linked ones marked.
+    /// 409 when GitHub isn't connected (or the connection expired).
+    func githubRepos() async throws -> [GitHubRepo] {
+        struct Resp: Decodable { let repos: [GitHubRepo] }
+        return try await request(Resp.self, path: "api/github/account/repos").repos
+    }
+
+    func disconnectGitHub() async throws {
+        _ = try await request(OkEnvelope.self, path: "api/github/account", method: "DELETE")
+    }
+
     /// One of your repos' branches, default branch first (needs the GitHub App).
     func cloudBranches(remoteUrl: String) async throws -> [String] {
         struct Resp: Decodable { let branches: [String] }

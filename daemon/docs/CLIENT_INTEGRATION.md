@@ -165,7 +165,12 @@ own GitHub account can write to. Clients connect the account once:
    `{ error, needs: "write-access" }` (GitHub says this account can't write to it).
    Other repos still link without one (`verified: false`, with `message`).
    `GET /api/tasks` also carries `repoLinks`.
-4. `DELETE /api/github/account` disconnects (every proof goes).
+4. `GET /api/github/account/repos` → `{ login, repos: [{ url, owner, name, private,
+   defaultBranch?, linked }] }`: the repos the connected account can write to through
+   the App's installations, for a picker (the iOS app's Settings → GitHub). Add one with
+   `POST /api/tasks/repos`. 409 `{ error, needs: "github-connect" }` when GitHub isn't
+   connected or the connection expired; 503 when GitHub can't be reached.
+5. `DELETE /api/github/account` disconnects (every proof goes).
 
 A queued task on a repo without a proven link stays queued for an editor with
 `error: "waiting for an editor: cloud runs need this repo in your repos, verified

@@ -31,6 +31,9 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 2)
                 }
+                NavigationLink { GitHubView().trackScreen(.github) } label: {
+                    Label("GitHub and your repos", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
             } header: {
                 Text("Account")
             }
@@ -80,7 +83,7 @@ struct SettingsView: View {
                 Text("About")
             } footer: {
                 Label {
-                    Text("Your code stays on your machine. Agents run locally; the daemon only relays what you send and never trains on your code.")
+                    Text("Agents run in Celiador on your computer, or in an isolated cloud runner with no network access. Celiador never trains on your code.")
                 } icon: {
                     Image(systemName: "lock.shield").foregroundStyle(Theme.accent)
                 }
