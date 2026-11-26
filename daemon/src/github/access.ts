@@ -253,6 +253,81 @@ export async function verifyRepoAccess(userId: string, repo: Pick<TaskRepo, "own
 
 const ghUrl = (repo: Pick<TaskRepo, "owner" | "name">) => `https://github.com/${repo.owner}/${repo.name}`;
 
+/** A repo the connected user can write to through one of the App's installations. */
+export interface GitHubRepoChoice {
+  readonly url: string;
+  readonly owner: string;
+  readonly name: string;
+  readonly private: boolean;
+  readonly defaultBranch?: string;
+  /** Already one of this user's repos (linked). */
+  readonly linked: boolean;
+}
+
+/** Installation pages read per installation (100 repos each). */
+const MAX_REPO_PAGES = 5;
+
+/**
+ * The repos the phone (or any client) can offer to add: everything the user's
+ * GitHub account can write to through the Celiador App's installations, as
+ * GitHub's user-to-server token sees it (`/user/installations` →
+ * `/user/installations/:id/repositories`, with the user's own permission on each).
+ * Linking one still goes through {@link linkRepo}, which re-checks access.
+ */
+export async function listGitHubRepos(userId: string): Promise<
+  | { ok: true; login: string; repos: GitHubRepoChoice[] }
+  | { ok: false; reason: "no-app" | "not-connected" | "reconnect" | "unavailable"; message: string }
+> {
+  const fail = (reason: "no-app" | "reconnect" | "unavailable") => ({ ok: false as const, reason, message: refusal(reason, { owner: "", name: "" }).message });
+  if (!githubApp()) return fail("no-app");
+  const identity = githubIdentity(userId);
+  if (!identity) return { ok: false, reason: "not-connected", message: "connect your GitHub account in Celiador to pick your repos" };
+
+  let token = await userToken(userId);
+  if (!token) return fail("reconnect");
+  const call = async (pathname: string) => {
+    let res = await userApi(token!, pathname);
+    if (res?.status === 401) {
+      const fresh = await userToken(userId, true);
+      if (!fresh) return "reconnect" as const;
+      token = fresh;
+      res = await userApi(token, pathname);
+      if (res?.status === 401) return "reconnect" as const;
+    }
+    if (!res || res.status !== 200) return "unavailable" as const;
+    return res.json;
+  };
+
+  const installs = await call("/user/installations?per_page=100");
+  if (installs === "reconnect" || installs === "unavailable") return fail(installs);
+  const ids: number[] = Array.isArray(installs?.installations) ? installs.installations.map((i: any) => i?.id).filter((id: unknown): id is number => typeof id === "number") : [];
+
+  const seen = new Map<string, GitHubRepoChoice>();
+  for (const id of ids) {
+    for (let page = 1; page <= MAX_REPO_PAGES; page++) {
+      const res = await call(`/user/installations/${id}/repositories?per_page=100&page=${page}`);
+      if (res === "reconnect" || res === "unavailable") return fail(res);
+      const list: any[] = Array.isArray(res?.repositories) ? res.repositories : [];
+      for (const r of list) {
+        const owner = r?.owner?.login, name = r?.name, perms = r?.permissions ?? {};
+        if (typeof owner !== "string" || typeof name !== "string") continue;
+        if (perms.admin !== true && perms.maintain !== true && perms.push !== true) continue;
+        const url = ghUrl({ owner, name });
+        const link = taskStores.links.get(url);
+        seen.set(url.toLowerCase(), {
+          url, owner, name,
+          private: r.private === true,
+          ...(typeof r.default_branch === "string" ? { defaultBranch: r.default_branch } : {}),
+          linked: !!link && link.userId === userId,
+        });
+      }
+      if (list.length < 100) break;
+    }
+  }
+  const repos = [...seen.values()].sort((a, b) => `${a.owner}/${a.name}`.localeCompare(`${b.owner}/${b.name}`, undefined, { sensitivity: "base" }));
+  return { ok: true, login: identity.login, repos };
+}
+
 /** Whether the user's link to the repo carries a proof (sync; may be due for a re-check). */
 export function hasProvenLink(userId: string, url: string): boolean {
   const link = taskStores.links.get(url);
@@ -390,6 +465,15 @@ export function githubAccountRoutes(): Hono<AppEnv> {
     const authorizeUrl = `${GITHUB_WEB}/login/oauth/authorize?client_id=${encodeURIComponent(gh.clientId)}&redirect_uri=${encodeURIComponent(redirect)}&state=${state}`;
     const installUrl = `${gh.htmlUrl}/installations/new?state=${state}`;
     return c.json({ authorizeUrl, installUrl, expiresIn: Math.floor(FLOW_TTL_MS / 1000) });
+  });
+
+  // The repos the user can add (write access through the App), for a picker; linking is `POST /api/tasks/repos`.
+  app.get("/repos", async (c) => {
+    const r = await listGitHubRepos(c.get("user").userId);
+    if (r.ok) return c.json({ login: r.login, repos: r.repos });
+    // 409 + needs: the client should (re)connect GitHub; 503: try later / not set up here.
+    if (r.reason === "not-connected" || r.reason === "reconnect") return c.json({ error: r.message, needs: "github-connect" }, 409);
+    return c.json({ error: r.message }, 503);
   });
 
   app.delete("/", async (c) => {

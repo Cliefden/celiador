@@ -33,7 +33,7 @@ struct QueueView: View {
                 EmptyStateView(
                     icon: "tray",
                     title: "Nothing queued",
-                    message: "Label a GitHub issue `celiador` on a watched repo, or start a task here. Each runs on your Mac in its own worktree and ends in a pull request.",
+                    message: "Tell the agent what to change on one of your repos. It works on its own branch and comes back with a pull request you can merge from here.",
                     actionTitle: "Start a task",
                     action: { showNew = true }
                 )
@@ -379,44 +379,98 @@ private extension View {
     }
 }
 
-/// Start a task by hand on a repo the editor has open.
+/// A repo a task can be queued on: one of your linked repos (the cloud can run it
+/// when the GitHub App is on it), one an editor has open (runs there), or both.
+private struct RepoChoice: Identifiable, Hashable {
+    let url: String
+    let label: String
+    var openInEditor: Bool
+    var cloudReady: Bool
+    var id: String { url }
+
+    /// Where a task on this repo will run, in plain words.
+    var runsWhere: String {
+        switch (openInEditor, cloudReady) {
+        case (true, true): return "Runs in Celiador on your computer while it has the repo open, otherwise in the cloud. Ends in a pull request."
+        case (true, false): return "Runs in Celiador on your computer, where the repo is open. Ends in a pull request."
+        case (false, true): return "Runs in the cloud, no computer needed. Ends in a pull request you can merge from here."
+        case (false, false): return "Waits until Celiador on a computer opens this repo. Install the Celiador GitHub App on it to run it in the cloud instead."
+        }
+    }
+
+    /// Linked repos and editor workspaces as one list, matched by URL (case and `.git` ignored).
+    static func merge(cloud: [CloudRepo], editor: [EditorWorkspace]) -> [RepoChoice] {
+        func key(_ url: String) -> String {
+            var k = url.lowercased()
+            while k.hasSuffix("/") { k.removeLast() }
+            if k.hasSuffix(".git") { k.removeLast(4) }
+            return k
+        }
+        var byKey: [String: RepoChoice] = [:]
+        var order: [String] = []
+        for repo in cloud {
+            let k = key(repo.url)
+            if byKey[k] == nil { order.append(k) }
+            byKey[k] = RepoChoice(url: repo.url, label: repo.label, openInEditor: false, cloudReady: repo.cloudReady)
+        }
+        for ws in editor where ws.remoteUrl.lowercased().hasPrefix("https://github.com/") {
+            let k = key(ws.remoteUrl)
+            if byKey[k] != nil {
+                byKey[k]?.openInEditor = true
+            } else {
+                order.append(k)
+                byKey[k] = RepoChoice(url: ws.remoteUrl, label: RepoRecents.shortLabel(ws.remoteUrl), openInEditor: true, cloudReady: false)
+            }
+        }
+        // Runnable now first (open in an editor or cloud-ready), then the rest; by name within each.
+        return order.compactMap { byKey[$0] }.sorted {
+            let a = $0.openInEditor || $0.cloudReady, b = $1.openInEditor || $1.cloudReady
+            return a != b ? a : $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+    }
+}
+
+/// Start a task by hand on one of your repos (cloud) or one an editor has open.
 private struct NewTaskSheet: View {
     var onCreated: (String) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var repos: [EditorWorkspace] = []
+    @State private var repos: [RepoChoice] = []
+    @State private var loaded = false
+    @State private var showGitHub = false
     @State private var repo: String = ""
     @State private var title = ""
     @State private var details = ""
     @State private var sending = false
     @State private var error: String?
 
+    private var picked: RepoChoice? { repos.first { $0.url == repo } }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    if repos.isEmpty {
-                        Text("Open the repo in Celiador on your Mac first.").font(.footnote).foregroundStyle(.secondary)
+                    if !loaded {
+                        ProgressView().frame(maxWidth: .infinity)
+                    } else if repos.isEmpty {
+                        Button { showGitHub = true } label: {
+                            Label("Connect GitHub and pick a repo", systemImage: "plus.circle.fill")
+                        }
                     } else {
                         Picker("Repo", selection: $repo) {
-                            ForEach(repos) { ws in Text(ws.name).tag(ws.remoteUrl) }
+                            ForEach(repos) { r in Text(r.label).tag(r.url) }
                         }
+                        Button("Add another repo") { showGitHub = true }
+                            .font(.subheadline)
                     }
                 } header: {
                     Text("Repository")
                 } footer: {
-                    // Say where the list comes from even when it is not empty: the
-                    // repo you want is missing because no Mac has it open, not lost.
-                    Text("Repos open in Celiador on your Mac. Missing one? Open it there and it shows up here.")
+                    if let picked { Text(picked.runsWhere) }
                 }
                 .listRowBackground(Theme.panel)
                 Section("Task") {
                     TextField("What should change?", text: $title, axis: .vertical).lineLimit(1...3)
                     TextField("Details (optional)", text: $details, axis: .vertical).lineLimit(3...8)
-                }
-                .listRowBackground(Theme.panel)
-                Section {
-                    Text("Runs on your Mac in its own worktree and branch, and ends in a pull request.")
-                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Theme.panel)
                 if let error { Text(error).font(.footnote).foregroundStyle(Theme.red) }
@@ -433,13 +487,20 @@ private struct NewTaskSheet: View {
                     }
                 }
             }
-            .task {
-                let all = (try? await Api.shared.editorWorkspaces()) ?? []
-                if !all.isEmpty { Telemetry.onboarding(.editorPaired) }
-                repos = all.filter { $0.remoteUrl.lowercased().hasPrefix("https://github.com/") }
-                if repo.isEmpty { repo = repos.first?.remoteUrl ?? "" }
+            .task { await loadRepos() }
+            .sheet(isPresented: $showGitHub, onDismiss: { Task { await loadRepos() } }) {
+                GitHubSheet()
             }
         }
+    }
+
+    private func loadRepos() async {
+        async let cloud = Api.shared.cloudRepos()
+        let editor = (try? await Api.shared.editorWorkspaces()) ?? []
+        if !editor.isEmpty { Telemetry.onboarding(.editorPaired) }
+        repos = RepoChoice.merge(cloud: (try? await cloud) ?? [], editor: editor)
+        loaded = true
+        if repo.isEmpty || !repos.contains(where: { $0.url == repo }) { repo = repos.first?.url ?? "" }
     }
 
     private func create() {
@@ -465,7 +526,8 @@ private struct NewTaskSheet: View {
 private struct WatchedReposSheet: View {
     @Binding var watched: [String]
     @Environment(\.dismiss) private var dismiss
-    @State private var repos: [EditorWorkspace] = []
+    @State private var repos: [RepoChoice] = []
+    @State private var showGitHub = false
     @State private var error: String?
 
     private func isWatched(_ url: String) -> Bool {
@@ -477,15 +539,15 @@ private struct WatchedReposSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    if repos.isEmpty {
-                        Text("Repos open in Celiador on your Mac show up here.").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    ForEach(repos) { ws in
-                        Toggle(ws.name, isOn: Binding(
-                            get: { isWatched(ws.remoteUrl) },
-                            set: { on in Task { await set(ws.remoteUrl, on) } }
+                    ForEach(repos) { r in
+                        Toggle(r.label, isOn: Binding(
+                            get: { isWatched(r.url) },
+                            set: { on in Task { await set(r.url, on) } }
                         ))
                         .tint(Theme.accent)
+                    }
+                    Button { showGitHub = true } label: {
+                        Label(repos.isEmpty ? "Connect GitHub and pick a repo" : "Add another repo", systemImage: "plus.circle.fill")
                     }
                 } footer: {
                     Text("Label an issue `celiador`, or comment `@celiador` as a collaborator, and the agent picks it up. Needs the repo's Celiador webhook.")
@@ -497,10 +559,20 @@ private struct WatchedReposSheet: View {
             .navigationTitle("Watched repos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .task {
-                repos = ((try? await Api.shared.editorWorkspaces()) ?? []).filter { $0.remoteUrl.lowercased().hasPrefix("https://github.com/") }
+            .task { await loadRepos() }
+            .sheet(isPresented: $showGitHub, onDismiss: { Task { await loadRepos() } }) {
+                GitHubSheet()
             }
         }
+    }
+
+    private func loadRepos() async {
+        async let cloud = Api.shared.cloudRepos()
+        let editor = (try? await Api.shared.editorWorkspaces()) ?? []
+        let linked = (try? await cloud) ?? []
+        repos = RepoChoice.merge(cloud: linked, editor: editor)
+        // Repos added from GitHub are linked, which is what "watched" means here.
+        for r in linked where !isWatched(r.url) { watched.append(r.url) }
     }
 
     private func set(_ url: String, _ on: Bool) async {

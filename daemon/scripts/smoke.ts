@@ -65,7 +65,12 @@ async function main(): Promise<void> {
 			const u = ghUsers.get(tok);
 			if (!u) return json(401, { message: "Bad credentials" });
 			if (p === "/user") return json(200, { id: u.id, login: u.login });
-			const m = /^\/repos\/([^/]+)\/([^/]+)$/.exec(p);
+			// One installation that covers every repo this user can reach.
+			if (p.startsWith("/user/installations?")) return json(200, { total_count: 1, installations: [{ id: 77 }] });
+			if (p.startsWith("/user/installations/77/repositories?")) {
+				return json(200, { repositories: Object.entries(u.repos).map(([full, r]) => ({ id: r.id, name: full.split("/")[1], owner: { login: full.split("/")[0] }, private: true, default_branch: "main", permissions: r.permissions })) });
+			}
+			const m =/^\/repos\/([^/]+)\/([^/]+)$/.exec(p);
 			const r = m ? u.repos[`${m[1]}/${m[2]}`.toLowerCase()] : undefined;
 			return r ? json(200, { id: r.id, full_name: `${m![1]}/${m![2]}`, private: true, permissions: r.permissions }) : json(404, { message: "Not Found" });
 		}
@@ -1035,6 +1040,20 @@ async function main(): Promise<void> {
 	const migH = { "content-type": "application/json", authorization: `Bearer ${userToken("migrating-user")}` };
 	const migrated = await connect(migH, "ghu_migrator");
 	ok("connecting GitHub re-verifies existing links: 1 of 1 verified, token works", /1 of your 1 linked repository is verified/.test(migrated.page) && (await installationToken({ userId: "migrating-user" }, { owner: "victimorg", name: "legacy" })) === "ghs_victim", migrated.page.slice(-300));
+
+	// The repo picker (phone "Add a repo"): writable repos through the App, linked ones marked.
+	const GR = "http://localhost/api/github/account/repos";
+	ok("repo picker needs a signed-in user → 401", (await app.request(GR)).status === 401);
+	const notConn = await app.request(GR, { headers: { authorization: `Bearer ${userToken("never-connected")}` } });
+	ok("repo picker without GitHub connected → 409 needs github-connect", notConn.status === 409 && ((await notConn.json()) as { needs?: string }).needs === "github-connect");
+	ghUsers.get("ghu_migrator")!.repos["migratorco/readonly"] = { id: 9003, permissions: { pull: true } };
+	ghUsers.get("ghu_migrator")!.repos["migratorco/tool"] = { id: 9004, permissions: { push: true } };
+	const picker = (await (await app.request(GR, { headers: migH })).json()) as { login?: string; repos?: Array<{ url: string; linked: boolean; defaultBranch?: string }> };
+	ok("repo picker lists writable repos only, linked ones marked", picker.login === "migrator"
+		&& JSON.stringify(picker.repos?.map((r) => [r.url, r.linked])) === JSON.stringify([["https://github.com/migratorco/tool", false], ["https://github.com/victimorg/legacy", true]])
+		&& picker.repos?.[0]?.defaultBranch === "main", JSON.stringify(picker));
+	delete ghUsers.get("ghu_migrator")!.repos["migratorco/readonly"];
+	delete ghUsers.get("ghu_migrator")!.repos["migratorco/tool"];
 
 	// The proof is re-checked with GitHub at the TTL: lost access drops it.
 	process.env.CELIADOR_GITHUB_VERIFY_TTL_MS = "0";
