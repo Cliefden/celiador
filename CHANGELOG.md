@@ -1,8 +1,9 @@
 # Changelog
 
 User-visible changes to Celiador — the daemon, the iPhone app and the site share
-one release train (`RELEASING.md`). Record changes under **Unreleased** as they
-merge; `scripts/release.sh` rolls the section into a version on release.
+one release train (`RELEASING.md`). Don't edit this file for a change: add a
+fragment to `changes/unreleased/` (`changes/README.md`); `scripts/release.sh`
+gathers them into the new version's section on release.
 
 ## [Unreleased]
 
@@ -14,6 +15,12 @@ merge; `scripts/release.sh` rolls the section into a version on release.
   only; cached repo mirrors are removed once no session uses them and are
   capped per user (`CELIADOR_MIRROR_QUOTA_MB`). A cloud run's model token stops
   working when the run ends.
+- **Your usage against your limits.** The iPhone app's Account screen now shows
+  today's agent spend against the daily dollar budget (plus requests, and token
+  caps when set) as progress bars, this month's running total, and a 14-day bar
+  chart of your daily spend. The daemon's `GET /api/me` gains `period` (this UTC
+  month so far) and `history` (the last 14 days) with the caller's own figures
+  only; both are new optional fields (#66).
 
 ## [0.3.0] - 2026-11-24
 

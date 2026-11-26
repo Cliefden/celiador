@@ -22,7 +22,7 @@
 #        IOS_DIST_P12_BASE64, IOS_DIST_P12_PASSWORD   the certificate
 #   4. Deletes the local key material.
 #
-#   ios/scripts/ci-signing-setup.sh [--repo Cliefden/celiador] [--profile celiador] [--key-id R73AU5822H]
+#   ios/scripts/ci-signing-setup.sh [--repo Cliefden/celiador] [--profile celiador] [--key-id 42NFC5B774]
 #
 # Nothing is printed that would have to be kept secret.
 
@@ -30,7 +30,7 @@ set -euo pipefail
 
 repo="Cliefden/celiador"
 profile="celiador"
-key_id="R73AU5822H"
+key_id="42NFC5B774"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) repo="$2"; shift 2 ;;

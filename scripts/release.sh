@@ -13,10 +13,14 @@
 #   1. clean main, equal to origin/main
 #   2. the daemon (daemon/package.json) and the app (ios/project.yml
 #      MARKETING_VERSION) agree on the current version; the new version is
-#      greater and its tag does not exist yet
+#      greater and its tag does not exist yet; the changelog fragments are valid;
+#      a breaking API change since the last tag (packages/client/openapi.yaml)
+#      needs a MINOR bump below 1.0
 #   3. bump daemon/package.json + package-lock.json (npm version, no git tag)
 #      and every MARKETING_VERSION in ios/project.yml
-#   4. roll CHANGELOG.md: "## [Unreleased]" becomes "## [X.Y.Z] - <date>"
+#   4. roll CHANGELOG.md (scripts/changelog-roll.mjs): the fragments in
+#      changes/unreleased/ plus anything under "## [Unreleased]" become
+#      "## [X.Y.Z] - <date>", and the fragments are deleted (changes/README.md)
 #   5. commit "Release vX.Y.Z" and create an annotated tag
 #
 # It never pushes. Then, in two stages:
@@ -61,6 +65,7 @@ ios_versions="$(sed -n 's/^ *MARKETING_VERSION: *"\([^"]*\)".*/\1/p' ios/project
   die "ios/project.yml targets disagree on MARKETING_VERSION: $(printf '%s ' $ios_versions)"
 [[ "$ios_versions" == "$current" ]] ||
   die "ios/project.yml says $ios_versions but daemon/package.json says $current — align them first (one version for the train)"
+node scripts/changelog-roll.mjs --check >/dev/null || die "fix the changelog fragments above first"
 
 case "$target" in
   major) next="$((major + 1)).0.0" ;;
@@ -81,6 +86,32 @@ if [[ "$local_only" == false ]] && git ls-remote --exit-code --tags origin "refs
   die "tag $tag already exists on origin"
 fi
 
+# ── 2b. the API contract: a breaking change needs the right bump ─────────────
+# Below 1.0 a breaking client-facing change is a MINOR bump, from 1.0 a MAJOR
+# one (RELEASING.md). Compared with the last release tag's
+# packages/client/openapi.yaml (oasdiff; packages/client/README.md).
+last_tag="v$current"
+if git rev-parse -q --verify "refs/tags/$last_tag" >/dev/null; then
+  set +e
+  packages/client/scripts/breaking-since.sh "$last_tag"
+  api_status=$?
+  set -e
+  [[ $api_status -le 1 ]] || die "couldn't check the API for breaking changes since $last_tag"
+  if [[ $api_status -eq 1 ]]; then
+    next_major="${next%%.*}" next_minor="$(cut -d. -f2 <<<"$next")"
+    if (( major == 0 )); then
+      [[ "$next_major" != 0 || "$next_minor" != "$minor" ]] ||
+        die "the API has breaking changes since $last_tag (above): release a MINOR version (scripts/release.sh minor), not $next"
+    else
+      [[ "$next_major" != "$major" ]] ||
+        die "the API has breaking changes since $last_tag (above): release a MAJOR version, not $next"
+    fi
+    echo "release: breaking API changes since $last_tag, released as $next (CHANGELOG.md must say what clients need to do)."
+  fi
+else
+  echo "release: no tag $last_tag here; skipping the API breaking-change check."
+fi
+
 # ── 3. bump ──────────────────────────────────────────────────────────────────
 npm --prefix daemon version --no-git-tag-version --allow-same-version "$next" >/dev/null
 sed -i '' "s/^\( *MARKETING_VERSION: *\)\"$current\"/\1\"$next\"/" ios/project.yml
@@ -88,22 +119,11 @@ sed -i '' "s/^\( *MARKETING_VERSION: *\)\"$current\"/\1\"$next\"/" ios/project.y
   die "failed to set MARKETING_VERSION to $next in ios/project.yml"
 
 # ── 4. changelog ─────────────────────────────────────────────────────────────
-node -e '
-  const fs = require("fs");
-  const [version, date] = process.argv.slice(1);
-  let log = fs.readFileSync("CHANGELOG.md", "utf8");
-  const start = log.indexOf("## [Unreleased]");
-  if (start < 0) throw new Error("CHANGELOG.md has no ## [Unreleased] section");
-  const bodyStart = start + "## [Unreleased]".length;
-  const next = log.indexOf("\n## [", bodyStart);
-  let body = (next < 0 ? log.slice(bodyStart) : log.slice(bodyStart, next)).trim();
-  if (!body) body = "- No changes; released with the train.";
-  const section = `## [Unreleased]\n\n## [${version}] - ${date}\n\n${body}\n`;
-  log = log.slice(0, start) + section + (next < 0 ? "" : log.slice(next));
-  fs.writeFileSync("CHANGELOG.md", log);' "$next" "$(date +%Y-%m-%d)"
+node scripts/changelog-roll.mjs "$next" "$(date +%Y-%m-%d)"
 
 # ── 5. commit and tag ────────────────────────────────────────────────────────
 git add daemon/package.json daemon/package-lock.json ios/project.yml CHANGELOG.md
+git add -A changes   # the fragments the roll deleted (changes/ always has its README)
 git commit --quiet -m "Release $tag"
 git tag -a "$tag" -m "$tag"
 

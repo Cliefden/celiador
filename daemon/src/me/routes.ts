@@ -6,6 +6,9 @@ import { getProfile } from "../db/repo";
 import { agentQuota } from "../agent/quota";
 import { taskConcurrency, taskStores } from "../tasks/dispatch";
 
+/** Days of the caller's own usage `/api/me` returns in `history` (today included). */
+const ME_HISTORY_DAYS = 14;
+
 /**
  * The one number the plan steers by, per user: agent pull requests merged in
  * the last seven days — plus what is open or running now, and what those runs
@@ -28,7 +31,7 @@ function taskSummary(userId: string): { running: number; prOpen: number; mergedL
 /**
  * `GET /api/me` — the signed-in account summary the editor/iOS account panel reads:
  * identity, plan, and the caller's current daily agent usage against the active
- * quota. Usage is tracked server-side by {@link agentQuota} (the only place the
+ * quota, plus their own month-to-date total and recent days. Usage is tracked server-side by {@link agentQuota} (the only place the
  * paid key is metered); this is the one read-back of it. Profile is best-effort —
  * absent in token/none auth mode (no DB) and for a Supabase user with no row yet —
  * so the panel always renders, usage included.
@@ -44,6 +47,7 @@ export function meRoutes(): Hono<AppEnv> {
     const user = c.get("user");
     const profile = dbEnabled() ? await getProfile(user.userId).catch(() => null) : null;
     const { usage, limits, resetsAt } = agentQuota.snapshot(user.userId);
+    const { period, history } = agentQuota.ownUsage(user.userId, ME_HISTORY_DAYS);
     return c.json({
       userId: user.userId,
       email: profile?.email ?? user.email ?? null,
@@ -53,6 +57,10 @@ export function meRoutes(): Hono<AppEnv> {
       usage,
       limits,
       resetsAt,
+      // This calendar month (UTC) so far, and the last ME_HISTORY_DAYS days —
+      // the caller's own figures only (the admin view has everyone's).
+      period,
+      history,
       tasks: taskSummary(user.userId),
     });
   });
