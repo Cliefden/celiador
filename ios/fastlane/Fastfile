@@ -1,7 +1,7 @@
 # Celiador for iPhone — fastlane
 #
 # Auth is the shared App Store Connect API key (no Apple ID password, no 2FA):
-#   ~/.appstoreconnect/private_keys/AuthKey_R73AU5822H.p8
+#   ~/.appstoreconnect/private_keys/AuthKey_42NFC5B774.p8
 # Secrets that must not be committed (demo account, review phone) live in
 # fastlane/.env (gitignored; see fastlane/.env.example).
 #
@@ -18,7 +18,7 @@
 default_platform(:ios)
 
 APP_ID = "6819707590"
-KEY_ID = "R73AU5822H"
+KEY_ID = "42NFC5B774"
 ISSUER_ID = "69a6de70-4abf-47e3-e053-5b8c7c11a4d1"
 KEY_PATH = File.expand_path("~/.appstoreconnect/private_keys/AuthKey_#{KEY_ID}.p8")
 

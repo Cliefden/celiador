@@ -1,7 +1,8 @@
 name: Client contract
 
 # The daemon's client contract (packages/client): the OpenAPI spec and the
-# TypeScript types generated from it (packages/client/README.md). Checks:
+# TypeScript types generated from it (packages/client/README.md). Pull requests
+# are checked once they are ready for review (a draft runs nothing). Checks:
 #   - types:    the committed types match the spec and compile;
 #   - coverage: every route the daemon serves under /api is in the spec (or in
 #               packages/client/routes-allowlist.txt), and the spec describes
@@ -16,19 +17,17 @@ name: Client contract
 # oasdiff is pinned in packages/client/scripts/breaking-since.sh.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # ready_for_review: a draft marked ready runs its checks;
+    # labeled/unlabeled: adding or removing api-breaking re-runs them.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
     paths:
       - packages/client/**
       - daemon/src/**
       - .github/workflows/client-contract.yml
   push:
-    branches-ignore: [main]
-    # Path filters never apply to tags: every release tag is checked.
+    # Tags only (branch pushes are covered by their pull request). Path
+    # filters never apply to tags: every release tag is checked.
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
-    paths:
-      - packages/client/**
-      - daemon/src/**
-      - .github/workflows/client-contract.yml
 
 concurrency:
   group: client-contract-${{ github.event.pull_request.number || github.ref }}
@@ -40,14 +39,15 @@ permissions:
 jobs:
   types:
     name: generated types up to date
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/client
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -61,15 +61,15 @@ jobs:
 
   coverage:
     name: every daemon route is in the contract
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: daemon
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -81,10 +81,10 @@ jobs:
 
   breaking:
     name: no breaking API changes
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -111,7 +111,7 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
