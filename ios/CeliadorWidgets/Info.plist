@@ -16,6 +16,8 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CELIADOR_URL_SCHEME</key>
 	<string>$(URL_SCHEME)</string>
+	<key>CELIADOR_APP_GROUP</key>
+	<string>$(APP_GROUP)</string>
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>

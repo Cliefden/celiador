@@ -1,0 +1,16 @@
+# Keeps the GitHub Actions the workflows use current (#159): one grouped PR a
+# week. npm updates stay deliberate; known vulnerabilities in the lockfiles are
+# caught by the OSV scan (supply-chain.yml) instead. Same as Celindor's.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
