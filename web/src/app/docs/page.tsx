@@ -68,8 +68,9 @@ export default async function DocsPage() {
           <p>
             Runners: the Celiador editor (below), or VS Code and Cursor with the{" "}
             <a href="https://open-vsx.org/extension/celiador/celiador-remote" className="text-brand hover:underline">Celiador Remote</a>{" "}
-            extension. Cloud runs for when your Mac is off are being built and will need the Celiador GitHub
-            App on the repository. Routine commands run on their own; a risky command or a question waits for
+            extension. When no runner of yours has the repository open, the run happens in the cloud: a
+            sandboxed run on our server, which needs the Celiador GitHub App on the repository and the
+            repository linked with your GitHub account. Routine commands run on their own; a risky command or a question waits for
             you under <strong className="text-white">Needs you</strong>, with Allow and Deny. The{" "}
             <Link href="/start" className="text-brand hover:underline">start guide</Link> walks through the
             GitHub App, the phone and the first issue.
@@ -148,16 +149,16 @@ export default async function DocsPage() {
             agent&apos;s questions, cancel, browse and edit files of the session, discard files, and approve
             and merge the pull request, without touching the laptop. &ldquo;From your editor&rdquo; lists the
             repositories your Mac has open, so a run can also start from the phone on the local working
-            copy; no cloning, no tokens. Distribution is through TestFlight
+            copy; no cloning, no tokens. A run can also start in the cloud on a linked GitHub repository,
+            on a new branch or directly on an existing one, with no computer involved. The app is in beta
+            on TestFlight
             {site.testflightUrl ? (
               <>
                 : <a href={site.testflightUrl} className="text-brand hover:underline" target="_blank" rel="noreferrer">join here</a>.
               </>
             ) : (
               <>
-                , by invite from the <Link href="/contact" className="text-brand hover:underline">contact page</Link>{" "}
-                until the public link is here; it will be on the{" "}
-                <Link href="/download" className="text-brand hover:underline">download page</Link> too.
+                ; ask for an invite from the <Link href="/contact" className="text-brand hover:underline">contact page</Link>.
               </>
             )}
           </p>
