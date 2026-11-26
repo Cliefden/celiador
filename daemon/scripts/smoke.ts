@@ -1545,6 +1545,28 @@ async function main(): Promise<void> {
 	type MeUsage = { usage?: { requests: number; inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number; costUsd: number }; limits?: { dailyUsd?: number } };
 	const bMe = (await (await app.request("http://localhost/api/me", { headers: budgetH })).json()) as MeUsage;
 	ok("GET /api/me → today's usage carries the cache split and its dollar cost", bMe.usage?.inputTokens === 1104 && bMe.usage.cacheReadTokens === 1000 && bMe.usage.cacheWriteTokens === 100 && bMe.usage.costUsd === turnUsd && bMe.limits?.dailyUsd === 10, JSON.stringify(bMe));
+
+	// Own usage beyond today (#66): finished days come from the admin history file, scoped to the caller.
+	{
+		const dayOf = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
+		const todayStr = dayOf(0), yesterday = dayOf(1), longAgo = dayOf(40);
+		const histFile = path.join(HOME, "data", "quota", "history.json");
+		fs.mkdirSync(path.dirname(histFile), { recursive: true });
+		fs.writeFileSync(histFile, JSON.stringify([
+			{ day: longAgo, users: { "budget-user": { requests: 50, inputTokens: 5000, outputTokens: 500, costUsd: 5 } } },
+			{ day: yesterday, users: { "budget-user": { requests: 2, inputTokens: 100, outputTokens: 10, costUsd: 0.25 }, "someone-else": { requests: 99, inputTokens: 9, outputTokens: 9, costUsd: 9 } } },
+		]));
+		type OwnMe = MeUsage & { period?: { from: string; to: string; usage: { requests: number; costUsd: number; cacheReadTokens: number } }; history?: { day: string; usage: { requests: number; costUsd: number } }[] };
+		const oMe = (await (await app.request("http://localhost/api/me", { headers: budgetH })).json()) as OwnMe;
+		const sameMonth = yesterday.slice(0, 7) === todayStr.slice(0, 7);
+		const wantReq = bMe.usage!.requests + (sameMonth ? 2 : 0);
+		const wantUsd = Math.round((turnUsd + (sameMonth ? 0.25 : 0)) * 1_000_000) / 1_000_000;
+		ok("GET /api/me → period is this UTC month so far, the caller's days only", oMe.period?.from === `${todayStr.slice(0, 7)}-01` && oMe.period.to === todayStr && oMe.period.usage.requests === wantReq && oMe.period.usage.costUsd === wantUsd && oMe.period.usage.cacheReadTokens === 1000, JSON.stringify(oMe.period));
+		const h = oMe.history ?? [];
+		ok("GET /api/me → history: 14 days newest first, today live, gaps zero, nobody else's usage", h.length === 14 && h[0]?.day === todayStr && h[0].usage.requests === bMe.usage!.requests && h[1]?.day === yesterday && h[1].usage.requests === 2 && h[1].usage.costUsd === 0.25 && h[2]?.usage.requests === 0 && !h.some((d) => d.day === longAgo), JSON.stringify(h.slice(0, 3)));
+		const otherMe = (await (await app.request("http://localhost/api/me", { headers: userH })).json()) as OwnMe;
+		ok("GET /api/me → another account sees none of it", otherMe.history?.[1]?.usage.requests === 0 && (otherMe.period?.usage.costUsd ?? -1) < 9, JSON.stringify(otherMe.history?.slice(0, 2)));
+	}
 	process.env.CELIADOR_AGENT_DAILY_USD = String(turnUsd); // the budget is now exactly spent
 	const overBudget = await app.request(GW, { method: "POST", headers: budgetH, body: gwBodyPlain });
 	await overBudget.text();

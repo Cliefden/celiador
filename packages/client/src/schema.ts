@@ -872,7 +872,7 @@ export interface paths {
         };
         /**
          * Account summary
-         * @description Identity, plan, today's agent usage against the limits, and the task summary.
+         * @description Identity, plan, today's agent usage against the limits, the caller's own month-to-date usage and last 14 days, and the task summary.
          */
         get: operations["getMe"];
         put?: never;
@@ -2257,6 +2257,26 @@ export interface components {
             limits: components["schemas"]["UserLimits"];
             /** Format: date-time */
             resetsAt: string;
+            /** @description The caller's own usage this calendar month (UTC) so far, today included. The limits are daily; this is the running total to set them against. Absent from older daemons. */
+            period?: {
+                /**
+                 * Format: date
+                 * @description First day of the month (UTC), inclusive.
+                 */
+                from: string;
+                /**
+                 * Format: date
+                 * @description Today (UTC), inclusive.
+                 */
+                to: string;
+                usage: components["schemas"]["DayUsage"];
+            };
+            /** @description The caller's own usage for the last 14 UTC days, newest first, today included; days without a request are zeros. Absent from older daemons. */
+            history?: {
+                /** Format: date */
+                day: string;
+                usage: components["schemas"]["DayUsage"];
+            }[];
             tasks: {
                 running: number;
                 prOpen: number;

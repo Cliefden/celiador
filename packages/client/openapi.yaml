@@ -1419,7 +1419,7 @@ paths:
       tags: [account]
       operationId: getMe
       summary: Account summary
-      description: Identity, plan, today's agent usage against the limits, and the task summary.
+      description: Identity, plan, today's agent usage against the limits, the caller's own month-to-date usage and last 14 days, and the task summary.
       responses:
         "200":
           description: The summary.
@@ -3212,6 +3212,28 @@ components:
         usage: { $ref: "#/components/schemas/DayUsage" }
         limits: { $ref: "#/components/schemas/UserLimits" }
         resetsAt: { type: string, format: date-time }
+        period:
+          type: object
+          description: >-
+            The caller's own usage this calendar month (UTC) so far, today included.
+            The limits are daily; this is the running total to set them against.
+            Absent from older daemons.
+          required: [from, to, usage]
+          properties:
+            from: { type: string, format: date, description: "First day of the month (UTC), inclusive." }
+            to: { type: string, format: date, description: "Today (UTC), inclusive." }
+            usage: { $ref: "#/components/schemas/DayUsage" }
+        history:
+          type: array
+          description: >-
+            The caller's own usage for the last 14 UTC days, newest first, today included;
+            days without a request are zeros. Absent from older daemons.
+          items:
+            type: object
+            required: [day, usage]
+            properties:
+              day: { type: string, format: date }
+              usage: { $ref: "#/components/schemas/DayUsage" }
         tasks:
           type: object
           required: [running, prOpen, mergedLast7Days, costUsdLast7Days, concurrency]

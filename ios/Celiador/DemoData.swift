@@ -13,6 +13,29 @@ enum DemoData {
 
     static let profile = Profile(id: "u1", email: "demo@celiador.ai", displayName: "Stefan", plan: "pro")
 
+    /// The account summary: today's usage against the default limits, the month so
+    /// far and 14 days of spend (one day over the $10 budget, two idle days).
+    static var me: Me {
+        let spend: [Double] = [3.42, 6.10, 0, 2.75, 11.20, 4.05, 1.30, 0, 7.85, 5.50, 2.20, 8.90, 3.15, 4.60]
+        let day = { (ago: Int) in String(ISO8601DateFormatter().string(from: Date().addingTimeInterval(Double(-ago) * 86_400)).prefix(10)) }
+        let history = spend.enumerated().map { i, usd in
+            UsageDay(day: day(i), usage: AgentUsage(requests: Int(usd * 14), inputTokens: Int(usd * 600_000), outputTokens: Int(usd * 40_000), costUsd: usd))
+        }
+        let today = day(0)
+        return Me(
+            userId: "u1", email: profile.email, plan: profile.plan,
+            usage: history[0].usage,
+            limits: AgentLimits(rpm: 30, concurrency: 2, dailyRequests: 500, dailyInput: 0, dailyOutput: 0, dailyUsd: 10),
+            resetsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7 * 3600)),
+            tasks: AgentTaskSummary(running: 1, prOpen: 2, mergedLast7Days: 5, concurrency: 3, costUsdLast7Days: 4.12),
+            period: UsagePeriod(
+                from: String(today.prefix(8)) + "01", to: today,
+                usage: AgentUsage(requests: 912, inputTokens: 39_400_000, outputTokens: 2_610_000, costUsd: 65.82)
+            ),
+            history: history
+        )
+    }
+
     static let diffs: [DiffFile] = [
         DiffFile(id: 1, path: "src/auth/middleware.ts", patch: """
         @@ -12,7 +12,9 @@ export function requireAuth(req, res, next) {

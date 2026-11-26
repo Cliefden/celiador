@@ -310,6 +310,24 @@ struct Me: Codable {
     let resetsAt: String
     /// Agent task counts (absent on an older daemon).
     let tasks: AgentTaskSummary?
+    /// This calendar month (UTC) so far, today included (absent on an older daemon).
+    var period: UsagePeriod? = nil
+    /// The last 14 UTC days, newest first, zeros on idle days (absent on an older daemon).
+    var history: [UsageDay]? = nil
+}
+
+/// The account's own usage summed over a span of UTC days (`from`/`to` inclusive, YYYY-MM-DD).
+struct UsagePeriod: Codable {
+    let from: String
+    let to: String
+    let usage: AgentUsage
+}
+
+/// One UTC day (YYYY-MM-DD) of the account's own usage.
+struct UsageDay: Codable, Identifiable {
+    let day: String
+    let usage: AgentUsage
+    var id: String { day }
 }
 
 /// The account's agent tasks: what runs now, what waits for review, and the
@@ -330,6 +348,8 @@ struct AgentUsage: Codable {
     let requests: Int
     let inputTokens: Int
     let outputTokens: Int
+    /// What those tokens cost, USD, at the daemon's rate card (absent on an older daemon).
+    var costUsd: Double? = nil
 }
 
 /// Active per-user daily limits. A `0` means that limit is disabled (unlimited).
@@ -339,6 +359,8 @@ struct AgentLimits: Codable {
     let dailyRequests: Int
     let dailyInput: Int
     let dailyOutput: Int
+    /// The daily agent budget in USD — the limit that usually bites (absent on an older daemon).
+    var dailyUsd: Double? = nil
 }
 
 /// A durable past conversation (public.chats). A chat is a persisted session.

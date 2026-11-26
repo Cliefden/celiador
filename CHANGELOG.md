@@ -7,6 +7,13 @@ gathers them into the new version's section on release.
 
 ## [Unreleased]
 
+- **Your usage against your limits.** The iPhone app's Account screen now shows
+  today's agent spend against the daily dollar budget (plus requests, and token
+  caps when set) as progress bars, this month's running total, and a 14-day bar
+  chart of your daily spend. The daemon's `GET /api/me` gains `period` (this UTC
+  month so far) and `history` (the last 14 days) with the caller's own figures
+  only; both are new optional fields (#66).
+
 ## [0.3.0] - 2026-11-24
 
 - **Cloud sessions on GitHub repos, from the phone.** New Run → pick one of
