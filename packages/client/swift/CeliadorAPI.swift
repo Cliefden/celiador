@@ -3095,6 +3095,10 @@ public enum CeliadorAPI {
         public var usage: CeliadorAPI.DayUsage
         public var limits: CeliadorAPI.UserLimits
         public var resetsAt: String
+        /// The caller's own usage this calendar month (UTC) so far, today included. The limits are daily; this is the running total to set them against. Absent from older daemons.
+        public var period: CeliadorAPI.Me.Period?
+        /// The caller's own usage for the last 14 UTC days, newest first, today included; days without a request are zeros. Absent from older daemons.
+        public var history: [CeliadorAPI.Me.HistoryItem]?
         public var tasks: CeliadorAPI.Me.Tasks
 
         public init(
@@ -3104,6 +3108,8 @@ public enum CeliadorAPI {
             usage: CeliadorAPI.DayUsage,
             limits: CeliadorAPI.UserLimits,
             resetsAt: String,
+            period: CeliadorAPI.Me.Period? = nil,
+            history: [CeliadorAPI.Me.HistoryItem]? = nil,
             tasks: CeliadorAPI.Me.Tasks
         ) {
             self.userId = userId
@@ -3112,7 +3118,41 @@ public enum CeliadorAPI {
             self.usage = usage
             self.limits = limits
             self.resetsAt = resetsAt
+            self.period = period
+            self.history = history
             self.tasks = tasks
+        }
+
+        /// The caller's own usage this calendar month (UTC) so far, today included. The limits are daily; this is the running total to set them against. Absent from older daemons.
+        public struct Period: Codable, Sendable, Equatable {
+            /// First day of the month (UTC), inclusive.
+            public var from: String
+            /// Today (UTC), inclusive.
+            public var to: String
+            public var usage: CeliadorAPI.DayUsage
+
+            public init(
+                from: String,
+                to: String,
+                usage: CeliadorAPI.DayUsage
+            ) {
+                self.from = from
+                self.to = to
+                self.usage = usage
+            }
+        }
+
+        public struct HistoryItem: Codable, Sendable, Equatable {
+            public var day: String
+            public var usage: CeliadorAPI.DayUsage
+
+            public init(
+                day: String,
+                usage: CeliadorAPI.DayUsage
+            ) {
+                self.day = day
+                self.usage = usage
+            }
         }
 
         public struct Tasks: Codable, Sendable, Equatable {
