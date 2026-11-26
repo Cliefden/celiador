@@ -198,4 +198,5 @@ ships code by hand (the Actions workflow does the same on push/tag). `tsx` is a
 runtime dependency (the unit runs `npm run start` → `tsx src/main.ts`), so
 `npm ci --omit=dev` works. Schema changes are `db/migrations/*.sql`, applied
 forward-only by `npm run migrate`. Releases: `RELEASING.md` (`scripts/release.sh`,
-the two-stage push, `.github/workflows/deploy.yml`); changes go in `CHANGELOG.md`.
+the two-stage push, `.github/workflows/deploy.yml`); changes go in a fragment
+under `changes/unreleased/` (`changes/README.md`).

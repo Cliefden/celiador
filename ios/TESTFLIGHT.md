@@ -80,7 +80,7 @@ the export step names, and sets:
 
 | Secret | What |
 |---|---|
-| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY` | the App Store Connect API key (`R73AU5822H`, "Fastlane", App Manager — the one `asc --profile celiador` and `fastlane/` use; the `.p8` from `~/.appstoreconnect/private_keys/`) |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY` | the App Store Connect API key (`42NFC5B774`, "Fastlane 2026-11", App Manager — the one `asc --profile celiador` and `fastlane/` use; the `.p8` from `~/.appstoreconnect/private_keys/`) |
 | `IOS_DIST_P12_BASE64`, `IOS_DIST_P12_PASSWORD` | the CI certificate + key |
 
 Re-running the script rotates everything (then revoke the previous CI

@@ -1,18 +1,16 @@
 name: iOS CI
 
-# Compiles the iPhone app (ios/) on pull requests and on pushes to branches
-# other than main that touch it: XcodeGen generates the project and xcodebuild
+# Compiles the iPhone app (ios/) on pull requests that touch it, once they are
+# ready for review (a draft runs nothing — a macOS runner is the dearest
+# minute there is): XcodeGen generates the project and xcodebuild
 # builds the app and its widgets for the simulator, unsigned. No secrets, no
 # signing, no upload: that is ios.yml, on main and release tags. When the app
 # gets a test target (#101), add an `xcodebuild test` step here.
 
 on:
   pull_request:
-    paths:
-      - ios/**
-      - .github/workflows/ios-ci.yml
-  push:
-    branches-ignore: [main]
+    # ready_for_review: a draft marked ready runs its checks.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ios/**
       - .github/workflows/ios-ci.yml
@@ -21,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  # A newer push to the same PR or branch supersedes the running check.
+  # A newer push to the same PR supersedes the running check.
   group: ios-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
@@ -36,6 +34,7 @@ defaults:
 jobs:
   build:
     name: xcodegen + unsigned simulator build
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: macos-26
     timeout-minutes: 45
     steps:
