@@ -9,8 +9,6 @@ export interface IStartServerRunParams {
   readonly prompt: string;
   /** Continue the agent's previous conversation (a follow-up turn in the same workspace). */
   readonly continueConversation?: boolean;
-  /** See IServerRunOptions.workspaceReady. */
-  readonly workspaceReady?: boolean;
 }
 
 /** Live server runs, keyed by session id (one run per session), with their cancel switch. */
@@ -79,4 +77,9 @@ export function cancelServerRun(sessionId: string): boolean {
   if (!entry) return false;
   entry.abort.abort();
   return true;
+}
+
+/** Resolves once the session's server run (if any) has ended — cancelled or not. */
+export async function serverRunEnded(sessionId: string): Promise<void> {
+  await active.get(sessionId)?.run.catch(() => undefined);
 }

@@ -1,7 +1,6 @@
 import { publishSessionEvent } from "../sessions/publish";
 import type { SessionEventInput } from "../sessions/types";
 import { computeDiffs, workspaceDir } from "./workspace";
-import { addWorktree } from "./worktrees";
 import { placeholderAgent, type RunnerAgent } from "./agent";
 
 export interface IServerRunOptions {
@@ -18,11 +17,6 @@ export interface IServerRunOptions {
   readonly signal?: AbortSignal;
   /** Publisher override (defaults to the real relay). Injected for tests. */
   readonly publish?: (event: SessionEventInput) => void;
-  /**
-   * The caller has already put a checkout in the run's workspace (a cloud task's
-   * prepared branch, or a follow-up turn in a retained workspace): skip the clone.
-   */
-  readonly workspaceReady?: boolean;
 }
 
 /** How a server run ended, for the caller that has to act on it (tasks/cloud.ts). */
@@ -31,7 +25,10 @@ export type IServerRunOutcome =
   | { readonly ok: false; readonly cancelled: boolean; readonly error: string };
 
 /**
- * Execute one server run end to end: clone → agent → diff → relay, then clean up.
+ * Execute one server run: agent → diff → relay, in the run's workspace. The
+ * caller has already put the checkout there (a git worktree, runner/worktrees.ts):
+ * cloud sessions (sessions/cloudSession.ts) and cloud tasks (tasks/cloud.ts)
+ * prepare it themselves, after checking whether the user may use the GitHub App.
  * Narrates progress to the session relay (state/activity/tool/diff/done/error) so a
  * watcher (phone) sees it live, exactly like an editor runner. Never throws — a
  * failure is reported as an `error` event and in the returned outcome, which also
@@ -54,20 +51,6 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<IServer
 
   try {
     publish({ kind: "state", state: "running" });
-    if (!opts.workspaceReady) {
-      publish({ kind: "activity", text: `Checking out ${opts.repo.url}…` });
-      // Anonymous (public repos): callers that may use the GitHub App's token —
-      // cloud sessions on a linked repo, cloud tasks — prepare the worktree
-      // themselves (workspaceReady) after checking the user may use it.
-      await addWorktree({
-        userId: opts.userId,
-        url: opts.repo.url,
-        dir,
-        branch: opts.repo.workBranch ?? `celiador/run-${opts.sessionId.slice(0, 8)}`,
-        base: opts.repo.branch,
-      });
-    }
-
     publish({ kind: "activity", text: "Running the agent…" });
     await agent({ workspaceDir: dir, prompt: opts.prompt, publish, userId: opts.userId, runId: opts.sessionId, continueConversation: opts.continueConversation, signal: opts.signal ?? new AbortController().signal });
 
@@ -89,11 +72,7 @@ export async function executeServerRun(opts: IServerRunOptions): Promise<IServer
       publish({ kind: "state", state: "cancelled" });
       return { ok: false, cancelled: true, error: "cancelled" };
     }
-    const raw = err instanceof Error ? err.message : String(err);
-    // An anonymous clone of a private repo makes git try to prompt for credentials.
-    const message = /could not read Username/i.test(raw)
-      ? "Cloning failed — this repo looks private. Private repos need the Celiador GitHub App installed and the repo added to your repos."
-      : raw;
+    const message = err instanceof Error ? err.message : String(err);
     publish({ kind: "error", message });
     publish({ kind: "state", state: "error" });
     return { ok: false, cancelled: false, error: message };

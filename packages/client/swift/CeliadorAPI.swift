@@ -984,6 +984,7 @@ public enum CeliadorAPI {
 
         /// Required for `runner = server`.
         public struct Repo: Codable, Sendable, Equatable {
+            /// `https://github.com/<owner>/<name>` (optionally `.git`); cloud runs check out github.com repositories only (400 otherwise).
             public var url: String
             /// Start from (or with `existingBranch`, work on) this branch.
             public var branch: String?

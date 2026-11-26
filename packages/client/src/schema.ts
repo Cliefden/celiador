@@ -249,6 +249,8 @@ export interface paths {
         /**
          * Delete a session
          * @description An id the caller doesn't own deletes nothing and answers `{ ok: false }` with 200.
+         *     A cloud run still working on the session is cancelled before its
+         *     workspace is removed (in the background, after the answer).
          */
         delete: operations["deleteSession"];
         options?: never;
@@ -1582,6 +1584,7 @@ export interface components {
             prompt?: string;
             /** @description Required for `runner = server`. */
             repo?: {
+                /** @description `https://github.com/<owner>/<name>` (optionally `.git`); cloud runs check out github.com repositories only (400 otherwise). */
                 url: string;
                 /** @description Start from (or with `existingBranch`, work on) this branch. */
                 branch?: string;

@@ -9,7 +9,7 @@ import { isSessionId } from "./store";
 import { sessionBus } from "./bus";
 import { publishSessionEvent } from "./publish";
 import { cancelServerRun, cloudRunsEnabled } from "../runner/manager";
-import { cloudBranches, cloudGit, cloudRepos, cloudSessionFollowUp, removeCloudSession, repoAccess, startCloudSession, validBranch } from "./cloudSession";
+import { cloudBranches, cloudGit, cloudRepos, cloudSessionFollowUp, parseGitHub, removeCloudSession, repoAccess, startCloudSession, validBranch } from "./cloudSession";
 import { taskStores } from "../tasks/dispatch";
 import { publishTaskChange } from "../tasks/events";
 import { workspaceDir } from "../runner/workspace";
@@ -139,8 +139,9 @@ export function sessionRoutes(): Hono<AppEnv> {
     // a repo and a prompt. Validate before creating the session so a bad request
     // doesn't leave an orphaned, never-started session lying around.
     const repoUrl = isServer ? (repo?.url as unknown) : undefined;
-    if (isServer && (typeof repoUrl !== "string" || !/^https?:\/\//.test(repoUrl) || repoUrl.length > 2048 || !str(prompt) || !prompt.trim())) {
-      return c.json({ error: "a server run needs repo.url (http/https) and a prompt" }, 400);
+    // Cloud runs fetch github.com repositories only (#80): the daemon never fetches an arbitrary host.
+    if (isServer && (typeof repoUrl !== "string" || repoUrl.length > 2048 || !parseGitHub(repoUrl) || !str(prompt) || !prompt.trim())) {
+      return c.json({ error: "a server run needs repo.url (https://github.com/<owner>/<name>) and a prompt" }, 400);
     }
     const repoBranch = isServer && repo?.branch !== undefined && repo.branch !== null && repo.branch !== "" ? repo.branch : undefined;
     if (repoBranch !== undefined && !validBranch(repoBranch)) return c.json({ error: "bad repo.branch" }, 400);
@@ -214,8 +215,8 @@ export function sessionRoutes(): Hono<AppEnv> {
     // Only the caller's own sessions: an unknown id deletes (and removes) nothing.
     if (!session) return c.json({ ok: false });
     const ok = stores.for(userId).delete(session.id);
-    // Reclaim the server-run workspace we kept around for file browsing (and its worktree).
-    void removeCloudSession(userId, session, session.id);
+    // Stop its cloud run (if any), then reclaim the workspace kept for file browsing, its worktree and an unused mirror.
+    void removeCloudSession(userId, session, session.id).catch((err) => console.error("[runner] session cleanup failed:", err instanceof Error ? err.message : err));
     return c.json({ ok });
   });
 
