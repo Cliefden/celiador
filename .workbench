@@ -1,9 +1,11 @@
-# Read by `wb` (github.com/Cliefden/workbench) — worktrees, board, dev stack.
+# Read by `wb` (github.com/Cliefden/workbench) — worktrees, board, merge
+# trains, dev stack. The manual is workbench's WORKTREES.md.
 WB_PROJECT="Celiador"
 
 wb_setup() {
   npm --prefix daemon install
   npm --prefix web install
+  npm --prefix packages/client install
   # The .xcodeproj is generated, per worktree.
   if command -v xcodegen >/dev/null; then
     (cd ios && xcodegen generate)
@@ -13,8 +15,24 @@ wb_setup() {
 }
 
 # Forward-only migrations: `wb status` / `wb map` warn when two worktrees (or a
-# worktree and main) take the same migration number.
+# worktree and main) take the same migration number; `wb train build` leaves
+# the second one out.
 WB_MIGRATIONS="daemon/db/migrations"
+
+# `wb issue` offers these area labels and guesses one from the text.
+WB_AREAS=(
+  "daemon=daemon|api|server|gateway|relay|webhook|runner|sandbox|quota|apns|push|supabase|auth|deploy"
+  "ios=ios|iphone|ipad|app|swift|swiftui|widget|widgets|live activity|testflight|xcode|watch"
+  "web=web|site|website|celiador\.ai|next|nextjs|page|landing|seo"
+)
+
+# Generated from packages/client/openapi.yaml: a merge train that conflicts
+# only here makes them again instead of leaving the PR out.
+WB_GENERATED="packages/client/src/schema.ts"
+wb_regen() {
+  npm --prefix packages/client ci --silent
+  npm --prefix packages/client run generate --silent
+}
 
 WB_SERVICES="daemon web"
 WB_daemon_DIR="daemon"
