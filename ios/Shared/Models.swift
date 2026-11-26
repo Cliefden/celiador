@@ -63,10 +63,15 @@ struct CloudRepo: Codable, Identifiable, Hashable {
     let name: String
     /// The Celiador GitHub App is installed (private fetch, push, PR, merge).
     let app: Bool
+    /// The link is proven with your GitHub account; without it the App's token is
+    /// never used, so a queued task can't fall back to the cloud. Optional: older daemons omit it.
+    var verified: Bool? = nil
     var defaultBranch: String? = nil
     var `private`: Bool? = nil
     var id: String { url }
     var label: String { "\(owner)/\(name)" }
+    /// A queued task on this repo can run on the daemon when no editor has it open.
+    var cloudReady: Bool { app && verified != false }
 }
 
 extension Session {

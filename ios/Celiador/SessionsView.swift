@@ -56,7 +56,7 @@ struct SessionsView: View {
             EmptyStateView(
                 icon: "sparkles",
                 title: "No runs yet",
-                message: "Kick off a task in the Celiador editor, or start one in the cloud. It shows up here so you can watch it work and approve changes from your phone.",
+                message: "Start a run here and it works in the cloud, or kick one off in the Celiador editor. Either way you watch it work and approve changes from your phone.",
                 actionTitle: "Start a cloud run",
                 action: { showNewRun = true }
             )
