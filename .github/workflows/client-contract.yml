@@ -1,19 +1,33 @@
 name: Client contract
 
 # The daemon's client contract (packages/client): the OpenAPI spec and the
-# TypeScript types generated from it. Checks that the committed types match
-# the spec, that they compile, and that the spec only changed additively
-# against the base branch (released clients can't be updated in lockstep; see
-# packages/client/README.md). On pull requests once they are ready for review:
-# a draft runs nothing.
+# TypeScript types generated from it (packages/client/README.md). Pull requests
+# are checked once they are ready for review (a draft runs nothing). Checks:
+#   - types:    the committed types match the spec and compile;
+#   - coverage: every route the daemon serves under /api is in the spec (or in
+#               packages/client/routes-allowlist.txt), and the spec describes
+#               nothing the daemon doesn't serve;
+#   - breaking: on pull requests, the spec only changed additively against the
+#               base branch — released clients can't be updated in lockstep. A
+#               deliberate break passes with the `api-breaking` label, and
+#               scripts/release.sh then refuses anything but a MINOR bump
+#               (below 1.0);
+#   - release:  on a vX.Y.Z tag, the same rule against the previous tag, as a
+#               backstop for a release cut without release.sh.
+# oasdiff is pinned in packages/client/scripts/breaking-since.sh.
 on:
   pull_request:
-    # ready_for_review: a draft marked ready runs its checks.
-    types: [opened, synchronize, reopened, ready_for_review]
+    # ready_for_review: a draft marked ready runs its checks;
+    # labeled/unlabeled: adding or removing api-breaking re-runs them.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
     paths:
       - packages/client/**
       - daemon/src/**
       - .github/workflows/client-contract.yml
+  push:
+    # Tags only (branch pushes are covered by their pull request). Path
+    # filters never apply to tags: every release tag is checked.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 concurrency:
   group: client-contract-${{ github.event.pull_request.number || github.ref }}
@@ -21,11 +35,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  # Pinned: the release and the sha256 of its linux_amd64 archive (checksums.txt).
-  OASDIFF_VERSION: 1.36.0
-  OASDIFF_SHA256: dba65661f6d0f178a3e4884c309f19527a849388bb9df0e81545db76dbb697d6
 
 jobs:
   types:
@@ -50,38 +59,82 @@ jobs:
       # then typechecks the generated file.
       - run: npm run check
 
+  coverage:
+    name: every daemon route is in the contract
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: daemon
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: daemon/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run check:api-coverage
+
   breaking:
     name: no breaking API changes
-    if: ${{ !github.event.pull_request.draft }}
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Spec on the base branch
-        id: base
+      - name: Breaking changes against the base branch
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          ALLOWED: ${{ contains(github.event.pull_request.labels.*.name, 'api-breaking') }}
         run: |
-          if git cat-file -e "origin/${BASE_REF}:packages/client/openapi.yaml" 2>/dev/null; then
-            git show "origin/${BASE_REF}:packages/client/openapi.yaml" > "$RUNNER_TEMP/base-openapi.yaml"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No spec on ${BASE_REF} yet; nothing to compare."
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+          set +e
+          packages/client/scripts/breaking-since.sh "origin/$BASE_REF"
+          status=$?
+          set -e
+          if [ "$status" -eq 1 ] && [ "$ALLOWED" = true ]; then
+            echo "::warning::Breaking API changes, allowed by the api-breaking label. The next release must be a MINOR bump (below 1.0), and CHANGELOG.md must say what clients need to do."
+            exit 0
           fi
+          if [ "$status" -eq 1 ]; then
+            echo "::error::Breaking API changes (above). Make the change additive (packages/client/README.md), or label the PR api-breaking if it is deliberate."
+          fi
+          exit "$status"
 
-      - name: Install oasdiff
-        if: steps.base.outputs.exists == 'true'
-        run: |
-          archive="oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
-          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/$archive"
-          echo "${OASDIFF_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/oasdiff"
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/oasdiff" oasdiff
+  release:
+    name: release tag bumps right for its API changes
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Breaking changes
-        if: steps.base.outputs.exists == 'true'
+      - name: Against the previous release tag
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          "$RUNNER_TEMP/oasdiff/oasdiff" breaking "$RUNNER_TEMP/base-openapi.yaml" packages/client/openapi.yaml --fail-on ERR
+          set -euo pipefail
+          prev="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)"
+          if [ -z "$prev" ]; then
+            echo "No earlier release tag; nothing to compare."
+            exit 0
+          fi
+          set +e
+          packages/client/scripts/breaking-since.sh "$prev"
+          status=$?
+          set -e
+          [ "$status" -le 1 ] || exit "$status"
+          [ "$status" -eq 0 ] && exit 0
+          IFS=. read -r pmaj pmin _ <<<"${prev#v}"
+          IFS=. read -r tmaj tmin _ <<<"${TAG#v}"
+          if { [ "$pmaj" = 0 ] && [ "$tmaj" = 0 ] && [ "$tmin" = "$pmin" ]; } || { [ "$pmaj" != 0 ] && [ "$tmaj" = "$pmaj" ]; }; then
+            echo "::error::$TAG has breaking API changes since $prev but isn't a MINOR (below 1.0) / MAJOR bump."
+            exit 1
+          fi
+          echo "Breaking API changes since $prev, released as $TAG: bumped correctly."
